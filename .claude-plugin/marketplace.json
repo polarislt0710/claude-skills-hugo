@@ -12,49 +12,50 @@
       "description": "Matt Pocock's engineering & productivity skills",
       "author": {"name": "Matt Pocock"},
       "category": "engineering",
-      "source": {
-        "source": "url",
-        "url": "https://github.com/smll-ai/mattpocock-skills.git"
-      }
+      "source": {"source": "url", "url": "https://github.com/smll-ai/mattpocock-skills.git"}
     },
     {
       "name": "super-personas",
       "description": "6 cognitive engineering personas (architect, debugger, reviewer, security-auditor, performance-engineer, refactor-engineer)",
-      "author": {"name": "Hugo Chan (curated)"},
+      "author": {"name": "Hugo Chan"},
       "category": "engineering",
       "source": {
-        "source": "local",
-        "path": "./local-plugins/super-personas"
+        "source": "git-subdir",
+        "url": "file:///Users/hugo/.claude/local-marketplace",
+        "path": "local-plugins/super-personas"
       }
     },
     {
       "name": "ai-prompts",
       "description": "AI generation prompt builders (image, single-shot video, multi-shot video)",
-      "author": {"name": "Hugo Chan (curated)"},
+      "author": {"name": "Hugo Chan"},
       "category": "creative",
       "source": {
-        "source": "local",
-        "path": "./local-plugins/ai-prompts"
+        "source": "git-subdir",
+        "url": "file:///Users/hugo/.claude/local-marketplace",
+        "path": "local-plugins/ai-prompts"
       }
     },
     {
       "name": "marketing",
-      "description": "Marketing skills (copywriting, content templates, growth, conversion, SEO)",
-      "author": {"name": "Hugo Chan (curated)"},
+      "description": "Marketing skills (copywriting, content-templates, growth-strategies, conversion, SEO)",
+      "author": {"name": "Hugo Chan"},
       "category": "productivity",
       "source": {
-        "source": "local",
-        "path": "./local-plugins/marketing"
+        "source": "git-subdir",
+        "url": "file:///Users/hugo/.claude/local-marketplace",
+        "path": "local-plugins/marketing"
       }
     },
     {
       "name": "design",
       "description": "20 professional design rules (typography, color, layout, components)",
-      "author": {"name": "Hugo Chan (curated)"},
+      "author": {"name": "Hugo Chan"},
       "category": "design",
       "source": {
-        "source": "local",
-        "path": "./local-plugins/design"
+        "source": "git-subdir",
+        "url": "file:///Users/hugo/.claude/local-marketplace",
+        "path": "local-plugins/design"
       }
     }
   ]
