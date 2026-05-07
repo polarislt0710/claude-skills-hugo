@@ -34,26 +34,39 @@ Use the `Agent` tool, `subagent_type: "general-purpose"`, with this prompt templ
 ```
 You are <PERSONA_NAME> for the design jam on topic: <TOPIC>.
 
-Output structured Markdown using PROPER HEADERS (### will render as styled section blocks in the dashboard). Format EXACTLY like this:
+Output structured Markdown using PROPER HEADERS (### will render as styled section blocks in the dashboard). Format EXACTLY like this template, but with RICH CONTENT.
 
-### 身份 Identity
-1-line who you are in this system.
+**LANGUAGE RULES — VERY IMPORTANT**:
+- For **non-technical personas** (校長, 老師, 學生, 家長, 班主任, etc.): use **plain everyday Cantonese / spoken language**. NO jargon. NO English mixed in unless absolutely standard (e.g. "AI"). Talk like a normal person on a phone call.
+- For **technical personas** (研發者, 工程師, CTO, 架構師): you can use technical terms, but **always explain in parens** when first used. e.g. "PostgreSQL RLS（即係資料庫識自動分隔每間學校嘅資料）"
+- AVOID empty buzzwords: "scale", "ROI", "synergy", "leverage", "stakeholder alignment", "perception", "visibility" — replace with concrete plain phrases.
+- Specific > abstract: "我哋 5 個老師，3 個凌晨先收工" >>> "teacher burnout"
 
-### 需求 Needs
-- 3-5 bulleted things you want from the system, ranked
-- Use **bold** for key terms
+**DEPTH RULES**:
+- Each section needs **3-5 bullets**
+- Each bullet is **1-2 sentences with a concrete example or specific number**, NOT just 3 words
+- Total per persona: aim for **300-500 字** of substantive content
 
-### 痛點 Pain points
-- 3-5 frustrations you face today
-- Be specific and concrete
+### 身份
+2-3 sentences describing who you are, your daily life in this system, who you answer to and who answers to you. Specific role + tenure + scope.
 
-### 反對 Concerns
-- 2-3 things you would push back on / refuse
-- Why this matters to you
+### 需求
+- 3-5 bullets, each 1-2 sentences explaining what you need from this system AND why (the underlying motivation)
+- Mix concrete numbers + qualitative needs
+- Bold the **most important phrase** in each bullet
 
-### 期望 Expectations
-- 2-3 success criteria you would evaluate the system on
-- Quantify when possible
+### 痛點
+- 3-5 bullets, each describing a specific frustration today with a real example
+- Show how the pain manifests in your daily life
+- Bold the **emotionally loaded phrase** (e.g. "凌晨 12 點先收工" not "long hours")
+
+### 反對
+- 2-4 bullets explaining things you'd refuse to accept and **why this is a deal-breaker** for you (not just dislike — a hard "no")
+- Explain the consequence of imposing it on you
+
+### 期望
+- 2-4 bullets defining success: how would you EVALUATE if this system worked, in measurable / observable terms (not corporate KPI speak — "我可以準時返屋企食飯" beats "improved work-life balance metrics")
+- Include a timeline or milestone if applicable
 
 Be specific to your role. Do not generalize. Use plain language a non-engineer would use.
 Return ONLY the 5 bullets, no preamble.
