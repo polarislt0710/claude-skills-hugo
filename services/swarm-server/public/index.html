@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>🌀 Swarm Dashboard</title>
 <script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@13.0.3/marked.min.js"></script>
 <script src="/socket.io/socket.io.js"></script>
 <style>
   :root {
@@ -18,6 +19,8 @@
     --text-muted: #9a8d75;
     --accent: #d97757;
     --accent-soft: #f4e3d8;
+    --green: #5d8e6d;
+    --green-soft: #e8f3eb;
     --shadow-sm: 0 1px 3px rgba(45, 36, 24, 0.06), 0 1px 2px rgba(45, 36, 24, 0.04);
     --shadow-md: 0 4px 12px rgba(45, 36, 24, 0.08), 0 2px 4px rgba(45, 36, 24, 0.04);
     --shadow-lg: 0 12px 32px rgba(45, 36, 24, 0.10), 0 4px 8px rgba(45, 36, 24, 0.06);
@@ -26,11 +29,10 @@
   html, body { height: 100%; overflow: hidden; }
   body {
     background: var(--bg-base);
-    background-image:
-      radial-gradient(circle at 1px 1px, rgba(45, 36, 24, 0.06) 1px, transparent 0);
+    background-image: radial-gradient(circle at 1px 1px, rgba(45, 36, 24, 0.06) 1px, transparent 0);
     background-size: 24px 24px;
     color: var(--text-primary);
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", system-ui, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Helvetica Neue", system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
     font-feature-settings: "ss01", "cv01";
   }
@@ -70,8 +72,8 @@
   }
   #status.running { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
   #status.running::before { background: var(--accent); animation: pulse-dot 1.4s ease-in-out infinite; }
-  #status.complete { color: #5d8e6d; border-color: #c5dfca; background: #e8f3eb; }
-  #status.complete::before { background: #5d8e6d; }
+  #status.complete { color: var(--green); border-color: #c5dfca; background: var(--green-soft); }
+  #status.complete::before { background: var(--green); }
   @keyframes pulse-dot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(1.6); } }
 
   /* === LEFT: PHASE TRACKER === */
@@ -86,61 +88,37 @@
     z-index: 8;
     display: flex; flex-direction: column;
   }
-  #phase-tracker h2 {
-    font-size: 14px; font-weight: 600;
-    color: var(--text-primary);
-    margin-bottom: 4px;
-  }
-  #phase-tracker .subtitle {
-    font-size: 11px; color: var(--text-muted);
-    margin-bottom: 22px; line-height: 1.5;
-  }
+  #phase-tracker h2 { font-size: 14px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; }
+  #phase-tracker .subtitle { font-size: 11px; color: var(--text-muted); margin-bottom: 22px; line-height: 1.5; }
   .phase-item {
     display: flex; gap: 12px; padding: 14px 0;
     border-bottom: 1px solid var(--border);
-    opacity: 0.5;
-    transition: opacity 0.3s ease;
+    opacity: 0.5; transition: opacity 0.3s ease;
   }
   .phase-item:last-of-type { border-bottom: none; }
   .phase-item.active { opacity: 1; }
   .phase-item.complete { opacity: 0.85; }
   .phase-num {
-    flex-shrink: 0;
-    width: 30px; height: 30px;
-    border-radius: 8px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
+    flex-shrink: 0; width: 30px; height: 30px;
+    border-radius: 8px; background: var(--bg-elevated); border: 1px solid var(--border);
     display: flex; align-items: center; justify-content: center;
-    font-size: 12px; font-weight: 600;
-    color: var(--text-secondary);
+    font-size: 12px; font-weight: 600; color: var(--text-secondary);
     font-feature-settings: "tnum";
   }
-  .phase-item.active .phase-num {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: white;
-    box-shadow: 0 2px 6px rgba(217, 119, 87, 0.4);
-  }
-  .phase-item.complete .phase-num {
-    background: #5d8e6d;
-    border-color: #5d8e6d;
-    color: white;
-  }
+  .phase-item.active .phase-num { background: var(--accent); border-color: var(--accent); color: white; box-shadow: 0 2px 6px rgba(217, 119, 87, 0.4); }
+  .phase-item.complete .phase-num { background: var(--green); border-color: var(--green); color: white; }
   .phase-content { flex: 1; min-width: 0; }
   .phase-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin-bottom: 2px; }
   .phase-desc { font-size: 11px; color: var(--text-muted); line-height: 1.45; }
-
   #phase-tracker .footer {
     margin-top: auto; padding-top: 18px;
     border-top: 1px solid var(--border);
-    font-size: 11px; color: var(--text-muted);
-    line-height: 1.5;
+    font-size: 11px; color: var(--text-muted); line-height: 1.6;
   }
 
   /* === GRAPH === */
   #graph {
-    position: absolute; top: 80px; bottom: 16px;
-    left: 252px; right: 16px;
+    position: absolute; top: 80px; bottom: 16px; left: 252px; right: 16px;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: 14px;
@@ -149,21 +127,66 @@
   }
   #graph::before {
     content: ''; position: absolute; inset: 0;
-    background-image:
-      radial-gradient(circle at 1px 1px, rgba(45, 36, 24, 0.04) 1px, transparent 0);
+    background-image: radial-gradient(circle at 1px 1px, rgba(45, 36, 24, 0.04) 1px, transparent 0);
     background-size: 32px 32px;
     pointer-events: none;
+  }
+
+  /* === HOVER TOOLTIP === */
+  #hover-tooltip {
+    position: fixed;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-lg);
+    padding: 16px 18px;
+    width: 320px;
+    max-height: 360px;
+    overflow-y: auto;
+    z-index: 11;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.18s ease, transform 0.18s ease;
+  }
+  #hover-tooltip.visible { opacity: 1; transform: translateY(0); }
+  #hover-tooltip .tt-name {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 15px; font-weight: 700; color: var(--text-primary);
+    margin-bottom: 10px;
+  }
+  #hover-tooltip .tt-avatar {
+    width: 32px; height: 32px;
+    background: var(--accent-soft);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+  }
+  #hover-tooltip .tt-avatar svg, #hover-tooltip .tt-avatar img { width: 100%; height: 100%; }
+  #hover-tooltip .tt-content {
+    font-size: 12px; line-height: 1.6;
+    color: var(--text-secondary);
+  }
+  #hover-tooltip .tt-content h3 { font-size: 12px; color: var(--accent); font-weight: 700; margin: 8px 0 4px; }
+  #hover-tooltip .tt-content ul { padding-left: 18px; }
+  #hover-tooltip .tt-content li { margin-bottom: 2px; }
+  #hover-tooltip .tt-content strong { color: var(--text-primary); }
+  #hover-tooltip .tt-hint {
+    margin-top: 12px; padding-top: 10px;
+    border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--text-muted);
+    text-align: center;
   }
 
   /* === DETAIL PANEL === */
   #detail-panel {
     position: fixed; right: 16px; top: 80px; bottom: 16px;
-    width: 420px; max-width: 90vw;
+    width: 460px; max-width: 90vw;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: 14px;
     box-shadow: var(--shadow-lg);
-    padding: 26px 28px;
+    padding: 28px 30px;
     overflow-y: auto;
     transform: translateX(calc(100% + 32px));
     transition: transform 0.4s cubic-bezier(.2, .9, .35, 1);
@@ -185,24 +208,70 @@
     transition: all 0.2s ease;
   }
   #detail-close:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
-  #detail-avatar {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 44px; height: 44px;
-    border-radius: 12px;
-    font-size: 22px;
-    margin-bottom: 12px;
+  #detail-avatar-wrapper {
+    width: 56px; height: 56px;
+    border-radius: 14px;
     background: var(--accent-soft);
-    color: var(--accent);
+    border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 14px;
+    overflow: hidden;
+  }
+  #detail-avatar-wrapper svg, #detail-avatar-wrapper img { width: 90%; height: 90%; }
+  #detail-title { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 4px; padding-right: 36px; line-height: 1.2; }
+  #detail-subtitle { font-size: 11px; color: var(--text-muted); margin-bottom: 20px; text-transform: uppercase; letter-spacing: 0.08em; font-weight: 600; }
+  #detail-content {
+    font-size: 14px; line-height: 1.75;
+    color: var(--text-primary);
+  }
+  /* Markdown styling inside detail panel */
+  #detail-content h1, #detail-content h2 {
+    font-size: 18px; font-weight: 700; margin: 22px 0 10px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  #detail-content h3 {
+    font-size: 14px; font-weight: 700; color: var(--accent);
+    margin: 22px 0 10px;
+    padding: 10px 14px;
+    background: var(--accent-soft);
+    border-radius: 8px;
+    border-left: 3px solid var(--accent);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  #detail-content h3:first-child { margin-top: 0; }
+  #detail-content h4 { font-size: 13px; font-weight: 600; margin: 14px 0 6px; color: var(--text-secondary); }
+  #detail-content p { margin: 8px 0; }
+  #detail-content strong { color: var(--accent); font-weight: 700; }
+  #detail-content em { color: var(--text-secondary); font-style: italic; }
+  #detail-content ul, #detail-content ol { padding-left: 22px; margin: 10px 0; }
+  #detail-content li { margin: 4px 0; }
+  #detail-content code {
+    background: var(--bg-elevated);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: "SF Mono", Menlo, monospace;
     border: 1px solid var(--border);
   }
-  #detail-title { font-size: 22px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 4px; padding-right: 36px; }
-  #detail-subtitle { font-size: 11px; color: var(--text-muted); margin-bottom: 22px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
-  #detail-content {
-    font-size: 14px; line-height: 1.7;
-    color: var(--text-primary);
-    white-space: pre-wrap; word-wrap: break-word;
+  #detail-content pre {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    overflow-x: auto;
+    margin: 10px 0;
   }
-  #detail-content strong { color: var(--accent); font-weight: 600; }
+  #detail-content pre code { border: none; background: transparent; padding: 0; }
+  #detail-content blockquote {
+    border-left: 3px solid var(--border-strong);
+    padding-left: 14px; margin: 10px 0;
+    color: var(--text-secondary); font-style: italic;
+  }
+  #detail-content table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px; }
+  #detail-content th, #detail-content td { padding: 8px 10px; border: 1px solid var(--border); text-align: left; }
+  #detail-content th { background: var(--bg-elevated); font-weight: 600; }
 
   /* === EMPTY STATE === */
   #empty-state {
@@ -216,9 +285,7 @@
   #empty-state .big {
     font-size: 56px;
     width: 96px; height: 96px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 22px;
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 22px;
     display: flex; align-items: center; justify-content: center;
     box-shadow: var(--shadow-md);
     color: var(--accent);
@@ -241,7 +308,6 @@
 <aside id="phase-tracker">
   <h2>議程進度</h2>
   <div class="subtitle">Multi-persona stakeholder jam workflow</div>
-
   <div class="phase-item" data-phase="phase-1">
     <div class="phase-num">01</div>
     <div class="phase-content">
@@ -249,7 +315,6 @@
       <div class="phase-desc">N 個 persona 並行思考，獨立提出視角</div>
     </div>
   </div>
-
   <div class="phase-item" data-phase="phase-2">
     <div class="phase-num">02</div>
     <div class="phase-content">
@@ -257,7 +322,6 @@
       <div class="phase-desc">兩兩 persona 互相 critique，意見碰撞</div>
     </div>
   </div>
-
   <div class="phase-item" data-phase="complete">
     <div class="phase-num">03</div>
     <div class="phase-content">
@@ -265,13 +329,13 @@
       <div class="phase-desc">共識 / 爭議 / Action items 三段輸出</div>
     </div>
   </div>
-
   <div class="footer">
     <strong style="color: var(--text-secondary);">How to read</strong><br>
-    • Each node = a stakeholder<br>
-    • Dashed edges = potential ties<br>
-    • Coloured edges = active critique<br>
-    • Click any node for details
+    • Each card = a stakeholder<br>
+    • Hover card = quick preview<br>
+    • Click card = detailed panel<br>
+    • Coloured edge = active critique<br>
+    • Drag any card to rearrange
   </div>
 </aside>
 
@@ -283,9 +347,18 @@
   </div>
 </div>
 
+<div id="hover-tooltip">
+  <div class="tt-name">
+    <div class="tt-avatar"></div>
+    <span class="tt-text"></span>
+  </div>
+  <div class="tt-content"></div>
+  <div class="tt-hint">Click for full detail →</div>
+</div>
+
 <div id="detail-panel">
   <button id="detail-close">×</button>
-  <div id="detail-avatar">👤</div>
+  <div id="detail-avatar-wrapper"></div>
   <div id="detail-title"></div>
   <div id="detail-subtitle"></div>
   <div id="detail-content"></div>
@@ -293,24 +366,93 @@
 
 <script>
 (function() {
-  // Warm muted persona palette - magazine aesthetic
   const COLORS = ['#d97757', '#6a9f8a', '#8b7ab8', '#5b8db8', '#c89b3f', '#a87878', '#6e8a4e', '#b06e8c'];
   const SOFT = ['#f4e3d8', '#dde8e2', '#e2dde9', '#d8e2ed', '#ede2c8', '#ecdcdc', '#dde5d2', '#ede0e6'];
-  const AVATARS = {
-    '校長': '👔', '老師': '👩‍🏫', '科主任': '📚', '學生': '🎓', '研發者': '💻',
-    '家長': '👨‍👩‍👧', '產品': '🎯', '研發': '⚙️', '設計': '🎨', '運營': '📊',
-    '客戶成功': '🤝', '財務': '💰', '法務': '⚖️', '營銷': '📢', '質檢': '🔍',
-    '默認': '👤'
-  };
 
-  function avatarFor(name) {
-    if (AVATARS[name]) return AVATARS[name];
-    for (const [k, v] of Object.entries(AVATARS)) {
-      if (name.includes(k)) return v;
+  // === DiceBear avatar fetcher (cached) ===
+  const AVATAR_CACHE = {};
+  async function preloadAvatar(name) {
+    if (AVATAR_CACHE[name] !== undefined) return AVATAR_CACHE[name];
+    try {
+      const url = `https://api.dicebear.com/9.x/personas/svg?seed=${encodeURIComponent(name)}&backgroundType=transparent&size=80`;
+      const res = await fetch(url);
+      const txt = await res.text();
+      // Extract inner SVG content (strip outer <svg>)
+      const match = txt.match(/<svg[^>]*>([\s\S]*?)<\/svg>/);
+      AVATAR_CACHE[name] = match ? match[1] : '';
+    } catch (e) {
+      AVATAR_CACHE[name] = '';
     }
-    return AVATARS['默認'];
+    return AVATAR_CACHE[name];
   }
 
+  function avatarSvgFor(name) {
+    const inner = AVATAR_CACHE[name] || '';
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80">${inner}</svg>`;
+  }
+
+  // === Generate composite card SVG (used as vis-network node image) ===
+  function generateCardSvg(name, idx, status) {
+    const c = COLORS[idx % COLORS.length];
+    const soft = SOFT[idx % SOFT.length];
+    const isComplete = status === '已提交';
+    const avatarInner = AVATAR_CACHE[name] || '';
+    const progressW = isComplete ? 152 : 8;
+
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120" viewBox="0 0 200 120">
+      <defs>
+        <filter id="sh${idx}" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur in="SourceAlpha" stdDeviation="3"/>
+          <feOffset dx="0" dy="4" result="o"/>
+          <feFlood flood-color="rgba(45,36,24,0.10)"/>
+          <feComposite in2="o" operator="in"/>
+          <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+      </defs>
+      <rect x="6" y="6" width="188" height="108" rx="14" fill="white" stroke="${c}" stroke-width="1.5" filter="url(#sh${idx})"/>
+      <rect x="16" y="16" width="48" height="48" rx="11" fill="${soft}" stroke="${c}" stroke-width="0.8" stroke-opacity="0.4"/>
+      <svg x="16" y="16" width="48" height="48" viewBox="0 0 80 80">${avatarInner}</svg>
+      <text x="74" y="36" font-family="-apple-system, system-ui" font-size="17" font-weight="700" fill="#2d2418">${escapeXml(name)}</text>
+      <text x="74" y="55" font-family="-apple-system, system-ui" font-size="11" font-weight="600" fill="${isComplete ? '#5d8e6d' : '#9a8d75'}" letter-spacing="0.5">${isComplete ? '✓ 已提交' : '⏳ 等待中'}</text>
+      <rect x="16" y="86" width="168" height="6" rx="3" fill="#e8e0cf"/>
+      <rect x="16" y="86" width="${progressW}" height="6" rx="3" fill="${c}"/>
+    </svg>`;
+  }
+
+  function escapeXml(s) {
+    return String(s).replace(/[<>&'"]/g, ch => ({'<':'&lt;','>':'&gt;','&':'&amp;',"'":'&apos;','"':'&quot;'}[ch]));
+  }
+
+  function svgToDataUri(svg) {
+    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+  }
+
+  // === Synthesis card SVG (gold accent) ===
+  function generateSynthesisCardSvg() {
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="220" height="120" viewBox="0 0 220 120">
+      <defs>
+        <filter id="goldShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur in="SourceAlpha" stdDeviation="5"/>
+          <feOffset dx="0" dy="4" result="o"/>
+          <feFlood flood-color="rgba(200, 155, 63, 0.4)"/>
+          <feComposite in2="o" operator="in"/>
+          <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        <linearGradient id="goldGrad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#fff8e8"/>
+          <stop offset="100%" stop-color="#fdedc4"/>
+        </linearGradient>
+      </defs>
+      <rect x="6" y="6" width="208" height="108" rx="14" fill="url(#goldGrad)" stroke="#c89b3f" stroke-width="2" filter="url(#goldShadow)"/>
+      <text x="22" y="44" font-family="-apple-system" font-size="34" fill="#c89b3f">⭐</text>
+      <text x="68" y="40" font-family="-apple-system, system-ui" font-size="18" font-weight="700" fill="#2d2418">收斂決策</text>
+      <text x="68" y="58" font-family="-apple-system, system-ui" font-size="11" font-weight="600" fill="#8a6d2c" letter-spacing="0.5">FINAL CONSENSUS</text>
+      <rect x="22" y="84" width="176" height="6" rx="3" fill="rgba(200, 155, 63, 0.25)"/>
+      <rect x="22" y="84" width="176" height="6" rx="3" fill="#c89b3f"/>
+    </svg>`;
+  }
+
+  // === vis-network setup ===
   const nodes = new vis.DataSet();
   const edges = new vis.DataSet();
 
@@ -319,21 +461,10 @@
     { nodes, edges },
     {
       nodes: {
-        shape: 'box',
-        font: {
-          color: '#2d2418', size: 13, face: '-apple-system, system-ui',
-          multi: 'html', vadjust: 0
-        },
-        borderWidth: 1.5,
-        shadow: { enabled: true, color: 'rgba(45, 36, 24, 0.10)', size: 16, x: 0, y: 4 },
-        margin: { top: 14, right: 18, bottom: 14, left: 18 },
-        widthConstraint: { minimum: 130, maximum: 180 },
-        chosen: {
-          node: function(values) {
-            values.shadowSize = 22;
-            values.borderWidth = 2.5;
-          }
-        }
+        shape: 'image',
+        size: 50,
+        shapeProperties: { useImageSize: false, useBorderWithImage: false },
+        font: { color: '#2d2418', size: 0 }
       },
       edges: {
         color: { color: 'rgba(154, 141, 117, 0.4)', highlight: '#d97757' },
@@ -345,9 +476,9 @@
       physics: {
         enabled: true,
         forceAtlas2Based: {
-          gravitationalConstant: -90,
-          centralGravity: 0.014,
-          springLength: 240,
+          gravitationalConstant: -120,
+          centralGravity: 0.012,
+          springLength: 280,
           springConstant: 0.05,
           damping: 0.6
         },
@@ -356,61 +487,63 @@
         timestep: 0.35,
         stabilization: { iterations: 220 }
       },
-      interaction: {
-        hover: true,
-        tooltipDelay: 250,
-        zoomView: true,
-        dragView: true
-      }
+      interaction: { hover: true, tooltipDelay: 99999, zoomView: true, dragView: true }
     }
   );
 
   const personaState = {};
   const synthesisContent = { value: null };
 
-  function colorOf(idx) { return COLORS[idx % COLORS.length]; }
-  function softColorOf(idx) { return SOFT[idx % SOFT.length]; }
-
   function showEmpty(visible) {
     const el = document.getElementById('empty-state');
     if (el) el.classList.toggle('hidden', !visible);
   }
-
   function setStatus(text, mode) {
     const el = document.getElementById('status');
     el.textContent = text;
     el.classList.remove('running', 'complete');
     if (mode) el.classList.add(mode);
   }
-
-  function setTopic(text) {
-    document.getElementById('topic').textContent = text;
-  }
-
-  function setPhase(activePhase) {
-    document.querySelectorAll('.phase-item').forEach(item => {
-      item.classList.remove('active', 'complete');
-    });
-    if (activePhase === 'phase-1') {
+  function setTopic(text) { document.getElementById('topic').textContent = text; }
+  function setPhase(p) {
+    document.querySelectorAll('.phase-item').forEach(i => i.classList.remove('active', 'complete'));
+    if (p === 'phase-1') {
       document.querySelector('[data-phase="phase-1"]').classList.add('active');
-    } else if (activePhase === 'phase-2') {
+    } else if (p === 'phase-2') {
       document.querySelector('[data-phase="phase-1"]').classList.add('complete');
       document.querySelector('[data-phase="phase-2"]').classList.add('active');
-    } else if (activePhase === 'complete') {
+    } else if (p === 'complete') {
       document.querySelector('[data-phase="phase-1"]').classList.add('complete');
       document.querySelector('[data-phase="phase-2"]').classList.add('complete');
       document.querySelector('[data-phase="complete"]').classList.add('complete');
     }
   }
 
-  function openDetail(title, subtitle, content, avatar) {
-    document.getElementById('detail-avatar').textContent = avatar || '👤';
-    document.getElementById('detail-title').textContent = title;
-    document.getElementById('detail-subtitle').textContent = subtitle;
-    document.getElementById('detail-content').textContent = content;
-    document.getElementById('detail-panel').classList.add('open');
+  function renderMarkdown(content) {
+    if (typeof marked === 'undefined') return escapeXml(content);
+    try {
+      return marked.parse(content, { gfm: true, breaks: true });
+    } catch (e) {
+      return escapeXml(content);
+    }
   }
 
+  function openDetail(name, idx, content, isSynthesis) {
+    const wrap = document.getElementById('detail-avatar-wrapper');
+    if (isSynthesis) {
+      wrap.innerHTML = '<span style="font-size: 32px;">⭐</span>';
+      wrap.style.background = '#fff8e8';
+      wrap.style.borderColor = '#c89b3f';
+    } else {
+      wrap.innerHTML = avatarSvgFor(name);
+      wrap.style.background = SOFT[idx % SOFT.length];
+      wrap.style.borderColor = COLORS[idx % COLORS.length];
+    }
+    document.getElementById('detail-title').textContent = isSynthesis ? '收斂決策' : name;
+    document.getElementById('detail-subtitle').textContent = isSynthesis ? 'Final consensus & action items' : 'Stakeholder perspective';
+    document.getElementById('detail-content').innerHTML = renderMarkdown(content);
+    document.getElementById('detail-panel').classList.add('open');
+  }
   document.getElementById('detail-close').onclick = () => {
     document.getElementById('detail-panel').classList.remove('open');
     network.unselectAll();
@@ -419,11 +552,76 @@
   network.on('selectNode', (e) => {
     const id = e.nodes[0];
     if (id === '__SYNTHESIS__' && synthesisContent.value) {
-      openDetail('收斂決策', 'Final consensus & action items', synthesisContent.value, '⭐');
+      openDetail(null, null, synthesisContent.value, true);
     } else if (personaState[id]) {
       const ps = personaState[id];
-      openDetail(id, 'Stakeholder perspective', ps.content || '(awaiting…)', ps.avatar);
+      openDetail(id, ps.idx, ps.content || '*(awaiting…)*', false);
     }
+    hideTooltip();
+  });
+
+  // === HOVER TOOLTIP ===
+  const tooltip = document.getElementById('hover-tooltip');
+  let tooltipTimeout = null;
+
+  function showTooltip(name, idx, content, x, y) {
+    clearTimeout(tooltipTimeout);
+    tooltipTimeout = setTimeout(() => {
+      tooltip.querySelector('.tt-text').textContent = name;
+      tooltip.querySelector('.tt-avatar').innerHTML = avatarSvgFor(name);
+      tooltip.querySelector('.tt-avatar').style.background = SOFT[idx % SOFT.length];
+      // Show preview: first 350 chars of content rendered as markdown
+      const preview = content.length > 350 ? content.substring(0, 350) + '\n\n*…(more)*' : content;
+      tooltip.querySelector('.tt-content').innerHTML = renderMarkdown(preview);
+      // Position near cursor but constrained to viewport
+      const tw = 320, th = tooltip.offsetHeight || 360;
+      const px = Math.min(x + 18, window.innerWidth - tw - 16);
+      const py = Math.min(y + 18, window.innerHeight - th - 16);
+      tooltip.style.left = px + 'px';
+      tooltip.style.top = py + 'px';
+      tooltip.classList.add('visible');
+    }, 80);
+  }
+  function hideTooltip() {
+    clearTimeout(tooltipTimeout);
+    tooltip.classList.remove('visible');
+  }
+  function showSynthesisTooltip(content, x, y) {
+    clearTimeout(tooltipTimeout);
+    tooltipTimeout = setTimeout(() => {
+      tooltip.querySelector('.tt-text').textContent = '收斂決策';
+      tooltip.querySelector('.tt-avatar').innerHTML = '<span style="font-size: 22px;">⭐</span>';
+      tooltip.querySelector('.tt-avatar').style.background = '#fff8e8';
+      const preview = content.length > 350 ? content.substring(0, 350) + '\n\n*…(more)*' : content;
+      tooltip.querySelector('.tt-content').innerHTML = renderMarkdown(preview);
+      const tw = 320, th = tooltip.offsetHeight || 360;
+      const px = Math.min(x + 18, window.innerWidth - tw - 16);
+      const py = Math.min(y + 18, window.innerHeight - th - 16);
+      tooltip.style.left = px + 'px';
+      tooltip.style.top = py + 'px';
+      tooltip.classList.add('visible');
+    }, 80);
+  }
+
+  network.on('hoverNode', (e) => {
+    const id = e.node;
+    const evt = e.event && e.event.srcEvent ? e.event.srcEvent : e.event;
+    const x = evt.clientX || 0;
+    const y = evt.clientY || 0;
+    if (id === '__SYNTHESIS__' && synthesisContent.value) {
+      showSynthesisTooltip(synthesisContent.value, x, y);
+    } else if (personaState[id] && personaState[id].content) {
+      showTooltip(id, personaState[id].idx, personaState[id].content, x, y);
+    }
+  });
+  network.on('blurNode', hideTooltip);
+  document.getElementById('graph').addEventListener('mousemove', (e) => {
+    if (!tooltip.classList.contains('visible')) return;
+    const tw = tooltip.offsetWidth || 320, th = tooltip.offsetHeight || 360;
+    const px = Math.min(e.clientX + 18, window.innerWidth - tw - 16);
+    const py = Math.min(e.clientY + 18, window.innerHeight - th - 16);
+    tooltip.style.left = px + 'px';
+    tooltip.style.top = py + 'px';
   });
 
   function resetGraph() {
@@ -433,59 +631,56 @@
     synthesisContent.value = null;
     document.getElementById('detail-panel').classList.remove('open');
     setPhase(null);
+    hideTooltip();
   }
 
-  function addPersonaNode(name, idx) {
-    const c = colorOf(idx);
-    const soft = softColorOf(idx);
-    const av = avatarFor(name);
-    personaState[name] = { idx, color: c, content: null, avatar: av };
+  function addPersonaNode(name, idx, status) {
+    personaState[name] = { idx, content: null };
+    const svg = generateCardSvg(name, idx, status);
     nodes.add({
       id: name,
-      label: `${av}  <b>${name}</b>\n<i>等待中</i>`,
-      color: { background: '#ffffff', border: c, highlight: { background: soft, border: c } },
-      font: { color: '#2d2418', multi: 'html', size: 13 }
+      shape: 'image',
+      image: svgToDataUri(svg),
+      size: 55,
+      shapeProperties: { useImageSize: false }
     });
   }
 
+  function updatePersonaNode(name, idx, status) {
+    const svg = generateCardSvg(name, idx, status);
+    nodes.update({ id: name, image: svgToDataUri(svg) });
+  }
+
   function addAllConnections() {
-    // Add dashed connections between all personas (potential ties)
     const names = Object.keys(personaState);
     for (let i = 0; i < names.length; i++) {
       for (let j = i + 1; j < names.length; j++) {
         edges.add({
           id: `__base_${names[i]}_${names[j]}`,
-          from: names[i],
-          to: names[j],
-          color: { color: 'rgba(154, 141, 117, 0.3)' },
-          width: 1,
-          dashes: [4, 6]
+          from: names[i], to: names[j],
+          color: { color: 'rgba(154, 141, 117, 0.28)' },
+          width: 1, dashes: [4, 6]
         });
       }
     }
   }
 
-  function applySwarmStart(data) {
+  async function applySwarmStart(data) {
     resetGraph();
     showEmpty(false);
     setTopic(`議題: ${data.topic}`);
     setStatus('Phase 1 — 同題開工', 'running');
     setPhase('phase-1');
-    data.personas.forEach((name, i) => addPersonaNode(name, i));
-    setTimeout(addAllConnections, 600);
+    // Pre-fetch all DiceBear avatars in parallel before adding nodes
+    await Promise.all(data.personas.map(p => preloadAvatar(p)));
+    data.personas.forEach((name, i) => addPersonaNode(name, i, '等待中'));
+    setTimeout(addAllConnections, 700);
   }
 
   function applyAgentProposal(data) {
     if (!personaState[data.agent]) return;
     personaState[data.agent].content = data.content;
-    const c = personaState[data.agent].color;
-    const soft = softColorOf(personaState[data.agent].idx);
-    const av = personaState[data.agent].avatar;
-    nodes.update({
-      id: data.agent,
-      label: `${av}  <b>${data.agent}</b>\n<i>已提交 ✓</i>`,
-      color: { background: soft, border: c, highlight: { background: soft, border: c } }
-    });
+    updatePersonaNode(data.agent, personaState[data.agent].idx, '已提交');
     if (data.status === 'phase-2') {
       setStatus('Phase 2 — 討論爭論', 'running');
       setPhase('phase-2');
@@ -497,15 +692,12 @@
     setPhase('phase-2');
     const fromState = personaState[data.from];
     if (!fromState) return;
-    const c = fromState.color;
+    const c = COLORS[fromState.idx % COLORS.length];
     const edgeId = `${data.from}__${data.to}__${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
     edges.add({
-      id: edgeId,
-      from: data.from,
-      to: data.to,
+      id: edgeId, from: data.from, to: data.to,
       color: { color: c, highlight: '#2d2418' },
-      width: 3,
-      dashes: false,
+      width: 3, dashes: false,
       title: data.content,
       arrows: { to: { enabled: true, scaleFactor: 0.6, type: 'arrow' } }
     });
@@ -513,9 +705,8 @@
       try {
         edges.update({
           id: edgeId,
-          color: { color: 'rgba(154, 141, 117, 0.3)' },
-          width: 1,
-          dashes: [4, 6],
+          color: { color: 'rgba(154, 141, 117, 0.28)' },
+          width: 1, dashes: [4, 6],
           arrows: { to: { enabled: false } }
         });
       } catch (e) {}
@@ -529,22 +720,17 @@
     if (!nodes.get('__SYNTHESIS__')) {
       nodes.add({
         id: '__SYNTHESIS__',
-        label: `⭐  <b>收斂決策</b>\n<i>Final consensus</i>`,
-        color: { background: '#fff8e8', border: '#c89b3f', highlight: { background: '#fff8e8', border: '#c89b3f' } },
-        font: { color: '#2d2418', multi: 'html', size: 14 },
-        size: 30,
-        shape: 'box',
-        margin: { top: 18, right: 22, bottom: 18, left: 22 },
-        shadow: { enabled: true, color: 'rgba(200, 155, 63, 0.35)', size: 26, x: 0, y: 6 }
+        shape: 'image',
+        image: svgToDataUri(generateSynthesisCardSvg()),
+        size: 60,
+        shapeProperties: { useImageSize: false }
       });
       Object.keys(personaState).forEach(p => {
         edges.add({
           id: `__synth_${p}`,
-          from: p,
-          to: '__SYNTHESIS__',
+          from: p, to: '__SYNTHESIS__',
           color: { color: 'rgba(200, 155, 63, 0.45)' },
-          width: 2,
-          dashes: [3, 4]
+          width: 2, dashes: [3, 4]
         });
       });
     }
@@ -552,34 +738,28 @@
 
   // === SOCKET.IO WIRE ===
   const socket = io();
-
-  socket.on('state-snapshot', (state) => {
+  socket.on('state-snapshot', async (state) => {
     if (state.status === 'idle' || !state.topic) {
-      showEmpty(true);
-      setPhase(null);
-      return;
+      showEmpty(true); setPhase(null); return;
     }
-    applySwarmStart({ topic: state.topic, personas: state.personas });
+    await applySwarmStart({ topic: state.topic, personas: state.personas });
     Object.entries(state.proposals).forEach(([agent, content]) => {
       applyAgentProposal({ agent, content, status: state.status });
     });
     state.debates.forEach(m => applyDebateMessage(m));
     if (state.synthesis) applySynthesisComplete({ content: state.synthesis });
   });
-
   socket.on('swarm-start', applySwarmStart);
   socket.on('agent-proposal', applyAgentProposal);
   socket.on('debate-message', applyDebateMessage);
   socket.on('synthesis-complete', applySynthesisComplete);
   socket.on('swarm-reset', () => {
-    resetGraph();
-    showEmpty(true);
+    resetGraph(); showEmpty(true);
     setTopic('No active swarm');
-    setStatus('Idle');
-    setPhase(null);
+    setStatus('Idle'); setPhase(null);
   });
 
-  console.log('🌀 Swarm dashboard ready (light theme, magazine aesthetic)');
+  console.log('🌀 Swarm dashboard ready (cartoon avatars + hover preview + markdown)');
 })();
 </script>
 
