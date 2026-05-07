@@ -1,0 +1,7 @@
+{
+  "name": "swarm-tools",
+  "description": "Multi-agent orchestration tools - real-time stakeholder jam with WebSocket dashboard",
+  "skills": [
+    "./skills/multi-persona-jam"
+  ]
+}

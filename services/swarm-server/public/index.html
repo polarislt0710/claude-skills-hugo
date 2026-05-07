@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🌀 Swarm Dashboard</title>
+<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; }
+  body {
+    background: linear-gradient(135deg, #0a0518 0%, #1a0f30 50%, #0a0518 100%);
+    color: #f0e6ff;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  #header {
+    position: fixed; top: 0; left: 0; right: 0;
+    padding: 16px 28px;
+    background: rgba(10, 5, 24, 0.85);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border-bottom: 1px solid rgba(255, 126, 185, 0.15);
+    z-index: 10;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  #brand { font-size: 18px; font-weight: 600; }
+  #brand .gradient {
+    background: linear-gradient(135deg, #ff7eb9, #7afcff);
+    -webkit-background-clip: text; background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  #topic { margin-left: 18px; opacity: 0.55; font-size: 14px; }
+  #status {
+    padding: 6px 14px; border-radius: 100px;
+    font-size: 12px; font-weight: 500;
+    background: rgba(122, 252, 255, 0.12);
+    border: 1px solid rgba(122, 252, 255, 0.3);
+    color: #7afcff;
+    transition: all 0.3s ease;
+  }
+  #status.running { background: rgba(255, 126, 185, 0.15); border-color: rgba(255, 126, 185, 0.4); color: #ff7eb9; animation: pulse 1.8s ease-in-out infinite; }
+  #status.complete { background: rgba(134, 239, 172, 0.15); border-color: rgba(134, 239, 172, 0.4); color: #86efac; }
+  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.7; transform: scale(0.97); } }
+
+  #graph {
+    position: absolute; inset: 0;
+    width: 100vw; height: 100vh;
+  }
+
+  #detail-panel {
+    position: fixed; right: 0; top: 60px; bottom: 0;
+    width: 440px; max-width: 90vw;
+    background: rgba(10, 5, 24, 0.92);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border-left: 1px solid rgba(255, 126, 185, 0.2);
+    padding: 24px 28px;
+    overflow-y: auto;
+    transform: translateX(105%);
+    transition: transform 0.35s cubic-bezier(.2, .9, .35, 1);
+    z-index: 5;
+  }
+  #detail-panel.open { transform: translateX(0); }
+  #detail-panel::-webkit-scrollbar { width: 6px; }
+  #detail-panel::-webkit-scrollbar-thumb { background: rgba(255, 126, 185, 0.3); border-radius: 3px; }
+  #detail-close {
+    position: absolute; top: 16px; right: 16px;
+    width: 28px; height: 28px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 50%;
+    color: #f0e6ff; font-size: 18px; line-height: 1;
+    cursor: pointer; user-select: none;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #detail-close:hover { background: rgba(255, 126, 185, 0.15); }
+  #detail-title { font-size: 22px; font-weight: 600; margin-bottom: 4px; padding-right: 36px; }
+  #detail-subtitle { font-size: 12px; opacity: 0.5; margin-bottom: 18px; text-transform: uppercase; letter-spacing: 0.05em; }
+  #detail-content {
+    font-size: 14px; line-height: 1.65;
+    white-space: pre-wrap; word-wrap: break-word;
+  }
+  #detail-content strong { color: #ff7eb9; }
+  #detail-content code { background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+
+  #legend {
+    position: fixed; bottom: 24px; left: 24px;
+    padding: 14px 18px;
+    background: rgba(10, 5, 24, 0.85);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(255, 126, 185, 0.15);
+    border-radius: 14px;
+    font-size: 12px;
+    z-index: 4;
+    max-width: 280px;
+    line-height: 1.6;
+    opacity: 0.85;
+  }
+  #legend strong { color: #ff7eb9; }
+
+  #empty-state {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 12px;
+    z-index: 3; pointer-events: none;
+    text-align: center;
+  }
+  #empty-state .big { font-size: 64px; }
+  #empty-state .label { font-size: 18px; opacity: 0.5; }
+  #empty-state .hint { font-size: 13px; opacity: 0.35; max-width: 400px; }
+  #empty-state.hidden { display: none; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <div>
+    <span id="brand">🌀 <span class="gradient">Swarm Dashboard</span></span>
+    <span id="topic">No active swarm</span>
+  </div>
+  <div id="status">Idle</div>
+</div>
+
+<div id="empty-state">
+  <div class="big">🌀</div>
+  <div class="label">Waiting for swarm…</div>
+  <div class="hint">Trigger a multi-persona jam in your Claude session.<br>Live updates will stream here.</div>
+</div>
+
+<div id="graph"></div>
+
+<div id="legend">
+  <strong>How to read</strong><br>
+  • Each node = a stakeholder persona<br>
+  • Edges light up when personas critique each other<br>
+  • Click any node to see their full perspective<br>
+  • Final node ⭐ = synthesized consensus
+</div>
+
+<div id="detail-panel">
+  <button id="detail-close">×</button>
+  <div id="detail-title"></div>
+  <div id="detail-subtitle"></div>
+  <div id="detail-content"></div>
+</div>
+
+<script>
+(function() {
+  const COLORS = ['#ff7eb9', '#7afcff', '#a78bfa', '#f4a261', '#7cb9e8', '#89b4a4', '#d8a657', '#f472b6'];
+  const SYNTH_COLOR = '#ffffff';
+
+  const nodes = new vis.DataSet();
+  const edges = new vis.DataSet();
+
+  const network = new vis.Network(
+    document.getElementById('graph'),
+    { nodes, edges },
+    {
+      nodes: {
+        shape: 'box',
+        font: { color: '#0a0518', size: 16, face: 'system-ui', vadjust: 0, multi: 'md', bold: { color: '#0a0518' } },
+        borderWidth: 2,
+        shadow: { enabled: true, color: 'rgba(0,0,0,0.4)', size: 14, x: 0, y: 6 },
+        margin: { top: 12, right: 18, bottom: 12, left: 18 },
+        widthConstraint: { minimum: 80, maximum: 180 },
+        chosen: {
+          node: function(values) { values.shadowSize = 22; values.borderWidth = 3; }
+        }
+      },
+      edges: {
+        color: { color: 'rgba(255,255,255,0.15)', highlight: '#ff7eb9' },
+        width: 1.5,
+        smooth: { enabled: true, type: 'continuous', roundness: 0.4 },
+        arrows: { to: { enabled: true, scaleFactor: 0.45, type: 'arrow' } },
+        arrowStrikethrough: false
+      },
+      physics: {
+        enabled: true,
+        forceAtlas2Based: {
+          gravitationalConstant: -80,
+          centralGravity: 0.012,
+          springLength: 220,
+          springConstant: 0.05,
+          damping: 0.55
+        },
+        maxVelocity: 50,
+        solver: 'forceAtlas2Based',
+        timestep: 0.35,
+        stabilization: { iterations: 200 }
+      },
+      interaction: {
+        hover: true,
+        tooltipDelay: 200,
+        zoomView: true,
+        dragView: true
+      }
+    }
+  );
+
+  const personaState = {}; // { name: { idx, color, content } }
+  const synthesisContent = { value: null };
+
+  function colorOf(idx) { return COLORS[idx % COLORS.length]; }
+
+  function showEmpty(visible) {
+    document.getElementById('empty-state').classList.toggle('hidden', !visible);
+  }
+
+  function setStatus(text, mode) {
+    const el = document.getElementById('status');
+    el.textContent = text;
+    el.classList.remove('running', 'complete');
+    if (mode) el.classList.add(mode);
+  }
+
+  function setTopic(text) {
+    document.getElementById('topic').textContent = text;
+  }
+
+  function openDetail(title, subtitle, content) {
+    document.getElementById('detail-title').textContent = title;
+    document.getElementById('detail-subtitle').textContent = subtitle;
+    document.getElementById('detail-content').textContent = content;
+    document.getElementById('detail-panel').classList.add('open');
+  }
+
+  document.getElementById('detail-close').onclick = () => {
+    document.getElementById('detail-panel').classList.remove('open');
+    network.unselectAll();
+  };
+
+  network.on('selectNode', (e) => {
+    const id = e.nodes[0];
+    if (id === '__SYNTHESIS__' && synthesisContent.value) {
+      openDetail('🎯 Synthesis', 'Final consensus & action items', synthesisContent.value);
+    } else if (personaState[id]) {
+      openDetail(id, 'Stakeholder perspective', personaState[id].content || '(loading…)');
+    }
+  });
+
+  network.on('hoverEdge', (e) => {
+    const edge = edges.get(e.edge);
+    if (edge && edge.title) {
+      // tooltip is built-in via title attribute
+    }
+  });
+
+  function resetGraph() {
+    nodes.clear();
+    edges.clear();
+    Object.keys(personaState).forEach(k => delete personaState[k]);
+    synthesisContent.value = null;
+    document.getElementById('detail-panel').classList.remove('open');
+  }
+
+  function applySwarmStart(data) {
+    resetGraph();
+    showEmpty(false);
+    setTopic(`Topic: ${data.topic}`);
+    setStatus('Phase 1: Independent thinking', 'running');
+    data.personas.forEach((name, i) => {
+      const c = colorOf(i);
+      personaState[name] = { idx: i, color: c, content: null };
+      nodes.add({
+        id: name,
+        label: name,
+        color: { background: c + '33', border: c, highlight: { background: c + '55', border: c } },
+        font: { color: '#f0e6ff', size: 16 },
+        shadow: { enabled: true, color: c + '88', size: 18, x: 0, y: 0 }
+      });
+    });
+  }
+
+  function applyAgentProposal(data) {
+    if (!personaState[data.agent]) return;
+    personaState[data.agent].content = data.content;
+    const c = personaState[data.agent].color;
+    nodes.update({
+      id: data.agent,
+      label: data.agent + '  ✓',
+      color: { background: c, border: c, highlight: { background: c, border: '#fff' } },
+      font: { color: '#0a0518', size: 16 }
+    });
+    if (data.status === 'phase-2') {
+      setStatus('Phase 2: Debate', 'running');
+    }
+  }
+
+  function applyDebateMessage(data) {
+    setStatus('Phase 2: Debate', 'running');
+    const fromState = personaState[data.from];
+    if (!fromState) return;
+    const c = fromState.color;
+    const edgeId = `${data.from}__${data.to}__${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+    edges.add({
+      id: edgeId,
+      from: data.from,
+      to: data.to,
+      color: { color: c, highlight: '#fff' },
+      width: 4,
+      title: data.content,
+      arrows: { to: { enabled: true, scaleFactor: 0.6 } }
+    });
+    // After 2.2 sec, fade edge to permanent low-key
+    setTimeout(() => {
+      try {
+        edges.update({ id: edgeId, color: { color: 'rgba(255,255,255,0.18)' }, width: 1 });
+      } catch (e) {}
+    }, 2200);
+  }
+
+  function applySynthesisComplete(data) {
+    synthesisContent.value = data.content;
+    setStatus('✓ Complete', 'complete');
+    if (!nodes.get('__SYNTHESIS__')) {
+      nodes.add({
+        id: '__SYNTHESIS__',
+        label: '⭐  Synthesis',
+        color: { background: '#fff', border: '#ff7eb9', highlight: { background: '#fff', border: '#ff7eb9' } },
+        font: { color: '#0a0518', size: 18, bold: true },
+        size: 30,
+        shape: 'box',
+        margin: { top: 16, right: 22, bottom: 16, left: 22 },
+        shadow: { enabled: true, color: 'rgba(255, 126, 185, 0.6)', size: 30, x: 0, y: 0 }
+      });
+      Object.keys(personaState).forEach(p => {
+        edges.add({
+          id: `__synth_${p}`,
+          from: p,
+          to: '__SYNTHESIS__',
+          color: { color: 'rgba(255,255,255,0.4)' },
+          width: 2,
+          dashes: [3, 3]
+        });
+      });
+    }
+  }
+
+  // === SOCKET.IO WIRE ===
+  const socket = io();
+
+  socket.on('connect', () => {
+    console.log('[ws] connected');
+  });
+
+  socket.on('state-snapshot', (state) => {
+    // Late-joining browser: replay current swarm state
+    if (state.status === 'idle' || !state.topic) {
+      showEmpty(true);
+      return;
+    }
+    applySwarmStart({ topic: state.topic, personas: state.personas });
+    Object.entries(state.proposals).forEach(([agent, content]) => {
+      applyAgentProposal({ agent, content, status: state.status });
+    });
+    state.debates.forEach(m => applyDebateMessage(m));
+    if (state.synthesis) applySynthesisComplete({ content: state.synthesis });
+  });
+
+  socket.on('swarm-start', applySwarmStart);
+  socket.on('agent-proposal', applyAgentProposal);
+  socket.on('debate-message', applyDebateMessage);
+  socket.on('synthesis-complete', applySynthesisComplete);
+  socket.on('swarm-reset', () => {
+    resetGraph();
+    showEmpty(true);
+    setTopic('No active swarm');
+    setStatus('Idle');
+  });
+
+  console.log('🌀 Swarm dashboard ready');
+})();
+</script>
+
+</body>
+</html>

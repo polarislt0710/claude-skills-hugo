@@ -16,47 +16,38 @@
     },
     {
       "name": "super-personas",
-      "description": "6 cognitive engineering personas (architect, debugger, reviewer, security-auditor, performance-engineer, refactor-engineer)",
+      "description": "6 cognitive engineering personas",
       "author": {"name": "Hugo Chan"},
       "category": "engineering",
-      "source": {
-        "source": "git-subdir",
-        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
-        "path": "local-plugins/super-personas"
-      }
+      "source": {"source": "git-subdir", "url": "https://github.com/polarislt0710/claude-skills-hugo.git", "path": "local-plugins/super-personas"}
     },
     {
       "name": "ai-prompts",
-      "description": "AI generation prompt builders (image, single-shot video, multi-shot video)",
+      "description": "AI generation prompt builders",
       "author": {"name": "Hugo Chan"},
       "category": "creative",
-      "source": {
-        "source": "git-subdir",
-        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
-        "path": "local-plugins/ai-prompts"
-      }
+      "source": {"source": "git-subdir", "url": "https://github.com/polarislt0710/claude-skills-hugo.git", "path": "local-plugins/ai-prompts"}
     },
     {
       "name": "marketing",
-      "description": "Marketing skills (copywriting, content-templates, growth-strategies, conversion, SEO)",
+      "description": "Marketing skills",
       "author": {"name": "Hugo Chan"},
       "category": "productivity",
-      "source": {
-        "source": "git-subdir",
-        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
-        "path": "local-plugins/marketing"
-      }
+      "source": {"source": "git-subdir", "url": "https://github.com/polarislt0710/claude-skills-hugo.git", "path": "local-plugins/marketing"}
     },
     {
       "name": "design",
-      "description": "20 professional design rules (typography, color, layout, components)",
+      "description": "20 professional design rules",
       "author": {"name": "Hugo Chan"},
       "category": "design",
-      "source": {
-        "source": "git-subdir",
-        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
-        "path": "local-plugins/design"
-      }
+      "source": {"source": "git-subdir", "url": "https://github.com/polarislt0710/claude-skills-hugo.git", "path": "local-plugins/design"}
+    },
+    {
+      "name": "swarm-tools",
+      "description": "Multi-agent stakeholder jam with real-time WebSocket dashboard at http://187.127.115.235:3010",
+      "author": {"name": "Hugo Chan"},
+      "category": "productivity",
+      "source": {"source": "git-subdir", "url": "https://github.com/polarislt0710/claude-skills-hugo.git", "path": "local-plugins/swarm-tools"}
     }
   ]
 }
