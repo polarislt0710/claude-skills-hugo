@@ -134,6 +134,72 @@ Print the synthesis Markdown in chat. End with:
 
 ---
 
+## Mid-jam: 加新 persona
+
+**Trigger phrases**:
+- 「加多 X persona / agent」 / 「再加 X」
+- 「now add X」
+- 「臨時加 X 同 Y」
+
+**Steps** (when triggered AFTER an existing swarm is running or complete):
+
+1. Spawn ONE Agent sub-agent for the new persona using SAME Phase 1 prompt template (### 身份/需求/痛點/反對/期望)
+2. POST result to `/events/persona-added`:
+   ```bash
+   curl -s -X POST http://187.127.115.235:3010/events/persona-added \
+     -H "Content-Type: application/json" \
+     --data-binary @- <<JSON
+   {"agent": "<new persona>", "content": <jq -Rs . escaped content>}
+   JSON
+   ```
+3. Generate 2 critique pairs between new persona and 2-3 most-relevant existing personas (e.g. critique pair with the persona whose needs CONFLICT most)
+4. POST those `debate-message` events with 0.5s spacing
+5. Optionally re-emit `synthesis-complete` with updated synthesis if user asks for refresh
+
+The dashboard will:
+- Show floating notification「✨ 新 persona 加入: <name>」for 3.5s
+- Add new persona card to graph
+- Auto-add dashed baseline edges between new persona and all existing nodes
+
+---
+
+## Mid-jam: 加 background context (rethink)
+
+**Trigger phrases**:
+- 「加 context: X，重新諗一次」 / 「rethink with: X」
+- 「補多個 info: X 俾佢哋」
+- 「現實情況係 X，重新 jam」
+
+**Steps**:
+
+1. POST context update to `/events/context-update`:
+   ```bash
+   curl -s -X POST http://187.127.115.235:3010/events/context-update \
+     -H "Content-Type: application/json" \
+     -d '{"context":"<short summary>","instruction":"rethink with constraint"}'
+   ```
+2. For each existing persona, spawn an Agent sub-agent (parallel) with this rethink prompt:
+   ```
+   You are <PERSONA>. Your previous perspective was:
+   <previous content>
+
+   New context just emerged: <context>
+
+   Output a REVISED perspective using the same ### 身份/需求/痛點/反對/期望 structure.
+   At the top, add a 1-line summary of WHAT CHANGED in your view due to the new context.
+   ```
+3. POST each revised proposal as `agent-proposal` (overwrites previous content on dashboard)
+4. Run a fresh debate round (~10 messages) addressing the new context
+5. Re-emit `synthesis-complete` with updated synthesis explicitly addressing the new context
+
+The dashboard will:
+- Show gold context banner across top of graph showing the latest context
+- Increment context count badge `×1, ×2, ...`
+- Show floating notification「💡 加咗 context — personas 重新諗中」
+- Update persona cards' content silently (click to see revised perspective)
+
+---
+
 ## Failure modes
 
 - **Backend unreachable** (curl returns connection refused): print 1-line warning, continue without events. Don't fail the whole jam.

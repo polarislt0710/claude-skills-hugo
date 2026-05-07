@@ -11,7 +11,6 @@ const PORT = process.env.PORT || 3010;
 app.use(express.json({ limit: '5mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// In-memory swarm state — lets late-joining browsers replay the current swarm
 let currentSwarm = freshSwarm();
 
 function freshSwarm() {
@@ -23,11 +22,11 @@ function freshSwarm() {
     debates: [],
     synthesis: null,
     status: 'idle',
+    contextHistory: [],
     startedAt: null,
   };
 }
 
-// REST endpoints — Claude skill posts events here
 app.post('/events/swarm-start', (req, res) => {
   const { topic, personas } = req.body || {};
   if (!topic || !Array.isArray(personas)) return res.status(400).json({ error: 'topic + personas required' });
@@ -74,13 +73,35 @@ app.post('/events/synthesis-complete', (req, res) => {
   res.json({ ok: true });
 });
 
-// State endpoint for late-joining browsers
-app.get('/api/state', (req, res) => res.json(currentSwarm));
+// === NEW: add a persona mid-jam ===
+app.post('/events/persona-added', (req, res) => {
+  const { agent, content } = req.body || {};
+  if (!agent) return res.status(400).json({ error: 'agent required' });
+  if (!currentSwarm.personas.includes(agent)) {
+    currentSwarm.personas.push(agent);
+  }
+  if (content) {
+    currentSwarm.proposals[agent] = content;
+  }
+  io.emit('persona-added', { agent, content });
+  console.log(`[persona-added] ${agent} (total ${currentSwarm.personas.length})`);
+  res.json({ ok: true });
+});
 
-// Health check
+// === NEW: add background context, trigger rethink ===
+app.post('/events/context-update', (req, res) => {
+  const { context, instruction } = req.body || {};
+  if (!context) return res.status(400).json({ error: 'context required' });
+  const entry = { context, instruction: instruction || '', ts: Date.now() };
+  currentSwarm.contextHistory.push(entry);
+  io.emit('context-update', entry);
+  console.log(`[context-update] ${String(context).substring(0, 60)}...`);
+  res.json({ ok: true });
+});
+
+app.get('/api/state', (req, res) => res.json(currentSwarm));
 app.get('/health', (req, res) => res.json({ ok: true, status: currentSwarm.status }));
 
-// Reset (manual via curl) — useful for testing
 app.post('/api/reset', (req, res) => {
   currentSwarm = freshSwarm();
   io.emit('swarm-reset');
@@ -89,13 +110,10 @@ app.post('/api/reset', (req, res) => {
 
 io.on('connection', (socket) => {
   console.log(`[ws] client connected (${io.engine.clientsCount} total)`);
-  // Send current state immediately so late-joining clients see existing swarm
   socket.emit('state-snapshot', currentSwarm);
-  socket.on('disconnect', () => {
-    console.log(`[ws] client disconnected (${io.engine.clientsCount} total)`);
-  });
+  socket.on('disconnect', () => console.log(`[ws] client disconnected (${io.engine.clientsCount} total)`));
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🌀 Swarm dashboard server listening on http://0.0.0.0:${PORT}`);
+  console.log(`🌀 Swarm dashboard server on http://0.0.0.0:${PORT}`);
 });

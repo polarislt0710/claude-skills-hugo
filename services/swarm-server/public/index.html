@@ -51,9 +51,11 @@
   #brand .icon {
     display: inline-flex; align-items: center; justify-content: center;
     width: 30px; height: 30px;
-    background: linear-gradient(135deg, #d97757, #c46740);
-    border-radius: 8px; color: white; font-size: 16px;
-    box-shadow: 0 2px 6px rgba(217, 119, 87, 0.35);
+    background: linear-gradient(135deg, #ffffff 0%, var(--accent-soft) 100%);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    color: #8a7350; font-size: 16px;
+    box-shadow: 0 1px 2px rgba(45, 36, 24, 0.08), inset 0 -1px 0 rgba(45, 36, 24, 0.05);
   }
   #topic { margin-left: 14px; color: var(--text-secondary); font-size: 13px; font-weight: 500; }
   #status {
@@ -273,6 +275,70 @@
   #detail-content th, #detail-content td { padding: 8px 10px; border: 1px solid var(--border); text-align: left; }
   #detail-content th { background: var(--bg-elevated); font-weight: 600; }
 
+
+  /* === NOTIFICATION (transient — for persona-added) === */
+  #notification {
+    position: fixed; top: 80px; left: 50%;
+    transform: translateX(-50%) translateY(-12px);
+    background: var(--bg-card);
+    border: 1px solid var(--accent);
+    border-radius: 100px;
+    padding: 10px 22px;
+    box-shadow: var(--shadow-md);
+    font-size: 13px; font-weight: 600;
+    color: var(--accent);
+    z-index: 12;
+    opacity: 0;
+    transition: all 0.4s cubic-bezier(.2, .9, .35, 1);
+    pointer-events: none;
+    display: flex; align-items: center; gap: 8px;
+    white-space: nowrap;
+  }
+  #notification.visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  /* === CONTEXT BANNER (persistent — for context-update) === */
+  #context-banner {
+    position: fixed; top: 76px; left: 252px; right: 16px;
+    padding: 10px 18px;
+    background: linear-gradient(135deg, #fff8e8 0%, #fdedc4 100%);
+    border: 1px solid #c89b3f;
+    border-radius: 12px;
+    box-shadow: var(--shadow-sm);
+    font-size: 12px;
+    color: #8a6d2c;
+    z-index: 7;
+    display: none;
+    align-items: center;
+    gap: 12px;
+    max-height: 60px;
+    overflow: hidden;
+  }
+  #context-banner.visible { display: flex; animation: ctx-slide-in 0.4s ease; }
+  @keyframes ctx-slide-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: translateY(0); } }
+  #context-banner .ctx-label {
+    flex-shrink: 0;
+    background: #c89b3f; color: #fff;
+    padding: 2px 10px; border-radius: 100px;
+    font-size: 10px; font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  #context-banner .ctx-text {
+    flex: 1; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+    font-weight: 500;
+  }
+  #context-banner .ctx-count {
+    flex-shrink: 0;
+    background: rgba(200, 155, 63, 0.2);
+    padding: 2px 8px; border-radius: 6px;
+    font-size: 11px; font-weight: 700;
+    font-feature-settings: "tnum";
+  }
+
   /* === EMPTY STATE === */
   #empty-state {
     position: absolute; inset: 0;
@@ -345,6 +411,17 @@
     <div class="label">Waiting for swarm…</div>
     <div class="hint">Trigger a multi-persona jam in your Claude session.<br>Live updates will stream here.</div>
   </div>
+</div>
+
+<div id="notification">
+  <span class="notif-icon">🌟</span>
+  <span class="notif-text"></span>
+</div>
+
+<div id="context-banner">
+  <span class="ctx-label">+ Context</span>
+  <span class="ctx-text"></span>
+  <span class="ctx-count">×1</span>
 </div>
 
 <div id="hover-tooltip">
@@ -753,10 +830,66 @@
   socket.on('agent-proposal', applyAgentProposal);
   socket.on('debate-message', applyDebateMessage);
   socket.on('synthesis-complete', applySynthesisComplete);
+  // === NEW: persona-added (mid-jam new persona) ===
+  socket.on('persona-added', async (data) => {
+    if (personaState[data.agent]) {
+      // Already present — just update content if provided
+      if (data.content) {
+        personaState[data.agent].content = data.content;
+        updatePersonaNode(data.agent, personaState[data.agent].idx, '已提交');
+      }
+      return;
+    }
+    showNotification(`✨ 新 persona 加入: ${data.agent}`);
+    await preloadAvatar(data.agent);
+    const newIdx = Object.keys(personaState).length;
+    addPersonaNode(data.agent, newIdx, data.content ? '已提交' : '等待中');
+    if (data.content) {
+      personaState[data.agent].content = data.content;
+    }
+    // Add baseline dashed edges between new persona and all existing ones
+    Object.keys(personaState).forEach(p => {
+      if (p !== data.agent) {
+        const eid = `__base_${data.agent}_${p}`;
+        if (!edges.get(eid) && !edges.get(`__base_${p}_${data.agent}`)) {
+          edges.add({
+            id: eid,
+            from: data.agent, to: p,
+            color: { color: 'rgba(154, 141, 117, 0.28)' },
+            width: 1, dashes: [4, 6]
+          });
+        }
+      }
+    });
+  });
+
+  // === NEW: context-update (rethink with new info) ===
+  let contextCount = 0;
+  socket.on('context-update', (data) => {
+    contextCount++;
+    showNotification(`💡 加咗 context — personas 重新諗中…`);
+    const banner = document.getElementById('context-banner');
+    banner.querySelector('.ctx-text').textContent = data.context;
+    banner.querySelector('.ctx-count').textContent = '×' + contextCount;
+    banner.classList.add('visible');
+  });
+
+  // === Notification helper ===
+  let notifTimeout = null;
+  function showNotification(text) {
+    clearTimeout(notifTimeout);
+    const n = document.getElementById('notification');
+    n.querySelector('.notif-text').textContent = text;
+    n.classList.add('visible');
+    notifTimeout = setTimeout(() => n.classList.remove('visible'), 3500);
+  }
+
   socket.on('swarm-reset', () => {
     resetGraph(); showEmpty(true);
     setTopic('No active swarm');
     setStatus('Idle'); setPhase(null);
+    contextCount = 0;
+    document.getElementById('context-banner').classList.remove('visible');
   });
 
   console.log('🌀 Swarm dashboard ready (cartoon avatars + hover preview + markdown)');
