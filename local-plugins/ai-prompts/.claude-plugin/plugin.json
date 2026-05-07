@@ -1,0 +1,9 @@
+{
+  "name": "ai-prompts",
+  "description": "AI generation prompt builders - image, single-shot video, multi-shot video",
+  "skills": [
+    "./skills/image",
+    "./skills/single-shot-video",
+    "./skills/multi-shot-video"
+  ]
+}

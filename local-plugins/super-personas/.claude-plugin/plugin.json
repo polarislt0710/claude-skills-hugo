@@ -1,0 +1,12 @@
+{
+  "name": "super-personas",
+  "description": "Cognitive persona framework - 6 specialized engineering mindsets",
+  "skills": [
+    "./skills/architect",
+    "./skills/debugger",
+    "./skills/reviewer",
+    "./skills/security-auditor",
+    "./skills/performance-engineer",
+    "./skills/refactor-engineer"
+  ]
+}

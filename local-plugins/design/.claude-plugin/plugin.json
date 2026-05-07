@@ -1,0 +1,10 @@
+{
+  "name": "design",
+  "description": "20 professional design rules across typography, color, layout, components - WCAG-compliant",
+  "skills": [
+    "./skills/typography",
+    "./skills/color",
+    "./skills/layout",
+    "./skills/components"
+  ]
+}
