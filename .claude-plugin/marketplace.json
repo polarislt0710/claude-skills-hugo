@@ -21,7 +21,7 @@
       "category": "engineering",
       "source": {
         "source": "git-subdir",
-        "url": "file:///Users/hugo/.claude/local-marketplace",
+        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
         "path": "local-plugins/super-personas"
       }
     },
@@ -32,7 +32,7 @@
       "category": "creative",
       "source": {
         "source": "git-subdir",
-        "url": "file:///Users/hugo/.claude/local-marketplace",
+        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
         "path": "local-plugins/ai-prompts"
       }
     },
@@ -43,7 +43,7 @@
       "category": "productivity",
       "source": {
         "source": "git-subdir",
-        "url": "file:///Users/hugo/.claude/local-marketplace",
+        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
         "path": "local-plugins/marketing"
       }
     },
@@ -54,7 +54,7 @@
       "category": "design",
       "source": {
         "source": "git-subdir",
-        "url": "file:///Users/hugo/.claude/local-marketplace",
+        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
         "path": "local-plugins/design"
       }
     }
