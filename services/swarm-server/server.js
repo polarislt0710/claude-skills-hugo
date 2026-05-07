@@ -23,6 +23,7 @@ function freshSwarm() {
     synthesis: null,
     status: 'idle',
     contextHistory: [],
+    rebuttals: {},
     startedAt: null,
   };
 }
@@ -96,6 +97,18 @@ app.post('/events/context-update', (req, res) => {
   currentSwarm.contextHistory.push(entry);
   io.emit('context-update', entry);
   console.log(`[context-update] ${String(context).substring(0, 60)}...`);
+  res.json({ ok: true });
+});
+
+// === NEW: rebuttal (one persona's response to one critic) ===
+app.post('/events/rebuttal', (req, res) => {
+  const { agent, critic, content } = req.body || {};
+  if (!agent || !critic || !content) return res.status(400).json({ error: 'agent + critic + content required' });
+  if (!currentSwarm.rebuttals) currentSwarm.rebuttals = {};
+  if (!currentSwarm.rebuttals[agent]) currentSwarm.rebuttals[agent] = [];
+  currentSwarm.rebuttals[agent].push({ critic, content, ts: Date.now() });
+  io.emit('rebuttal', { agent, critic, content });
+  console.log(`[rebuttal] ${agent} → response to ${critic}`);
   res.json({ ok: true });
 });
 

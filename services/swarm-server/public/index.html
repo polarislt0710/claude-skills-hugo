@@ -339,6 +339,91 @@
     font-feature-settings: "tnum";
   }
 
+
+  /* === REBUTTAL EXCHANGE CARDS === */
+  .rebuttal-section {
+    margin-top: 28px;
+    padding-top: 22px;
+    border-top: 1px solid var(--border);
+  }
+  .exchange-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin: 14px 0;
+    position: relative;
+    box-shadow: 0 1px 2px rgba(45, 36, 24, 0.04);
+  }
+  .exchange-card::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 16px; bottom: 16px;
+    width: 4px;
+    background: var(--critic-color, var(--accent));
+    border-radius: 0 4px 4px 0;
+  }
+  .exchange-critic {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 10px;
+    padding-left: 12px;
+  }
+  .exchange-critic .ec-avatar {
+    width: 30px; height: 30px;
+    border-radius: 8px;
+    background: var(--critic-soft, var(--accent-soft));
+    overflow: hidden;
+    flex-shrink: 0;
+    border: 1px solid var(--border);
+  }
+  .exchange-critic .ec-avatar svg, .exchange-critic .ec-avatar img { width: 100%; height: 100%; }
+  .exchange-critic .ec-name {
+    font-size: 13px; font-weight: 700; color: var(--text-primary);
+  }
+  .exchange-critic .ec-label {
+    font-size: 10px; font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-left: auto;
+    background: var(--bg-card);
+    padding: 2px 8px;
+    border-radius: 100px;
+    border: 1px solid var(--border);
+  }
+  .exchange-critique {
+    font-size: 13px;
+    color: var(--text-secondary);
+    font-style: italic;
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    line-height: 1.6;
+    background: var(--bg-card);
+    border-radius: 8px;
+    border: 1px dashed var(--border);
+    quotes: '"' '"';
+  }
+  .exchange-critique::before { content: open-quote; color: var(--text-muted); margin-right: 2px; }
+  .exchange-critique::after { content: close-quote; color: var(--text-muted); margin-left: 2px; }
+  .exchange-response {
+    font-size: 13px;
+    color: var(--text-primary);
+    line-height: 1.65;
+    padding: 12px 14px;
+    background: var(--bg-card);
+    border-radius: 8px;
+    border-left: 3px solid var(--accent);
+  }
+  .exchange-response-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 8px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
   /* === EMPTY STATE === */
   #empty-state {
     position: absolute; inset: 0;
@@ -570,6 +655,7 @@
 
   const personaState = {};
   const synthesisContent = { value: null };
+  const debatesByPair = {}; // key 'A__B' -> array of debate messages
 
   function showEmpty(visible) {
     const el = document.getElementById('empty-state');
@@ -618,7 +704,39 @@
     }
     document.getElementById('detail-title').textContent = isSynthesis ? '收斂決策' : name;
     document.getElementById('detail-subtitle').textContent = isSynthesis ? 'Final consensus & action items' : 'Stakeholder perspective';
-    document.getElementById('detail-content').innerHTML = renderMarkdown(content);
+
+    let html = renderMarkdown(content);
+
+    // Add rebuttals section if persona has any
+    if (!isSynthesis && personaState[name] && personaState[name].rebuttals && personaState[name].rebuttals.length > 0) {
+      const rs = personaState[name].rebuttals;
+      html += '<div class="rebuttal-section">';
+      html += '<h3>💬 對應回應 — ' + rs.length + ' 個質疑</h3>';
+      for (const r of rs) {
+        const cs = personaState[r.critic];
+        const cColor = cs ? COLORS[cs.idx % COLORS.length] : '#9a8d75';
+        const cSoft = cs ? SOFT[cs.idx % SOFT.length] : '#f0eadb';
+        const cAvatar = AVATAR_CACHE[r.critic] || '';
+        // Look up the original critique
+        const debates = debatesByPair[r.critic + '__' + name] || [];
+        const critiqueText = debates.length > 0 ? debates[0] : '(see debate edge)';
+        html += '<div class="exchange-card" style="--critic-color: ' + cColor + '; --critic-soft: ' + cSoft + ';">';
+        html += '<div class="exchange-critic">';
+        html += '<div class="ec-avatar"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80">' + cAvatar + '</svg></div>';
+        html += '<div class="ec-name">' + escapeXml(r.critic) + '</div>';
+        html += '<div class="ec-label">CHALLENGE</div>';
+        html += '</div>';
+        html += '<div class="exchange-critique">' + escapeXml(critiqueText) + '</div>';
+        html += '<div class="exchange-response">';
+        html += '<span class="exchange-response-label">→ ' + escapeXml(name) + ' 回應</span>';
+        html += renderMarkdown(r.content);
+        html += '</div>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    document.getElementById('detail-content').innerHTML = html;
     document.getElementById('detail-panel').classList.add('open');
   }
   document.getElementById('detail-close').onclick = () => {
@@ -767,6 +885,10 @@
   function applyDebateMessage(data) {
     setStatus('Phase 2 — 討論爭論', 'running');
     setPhase('phase-2');
+    // Track debate so rebuttals can quote the original critique
+    const key = data.from + '__' + data.to;
+    if (!debatesByPair[key]) debatesByPair[key] = [];
+    debatesByPair[key].push(data.content);
     const fromState = personaState[data.from];
     if (!fromState) return;
     const c = COLORS[fromState.idx % COLORS.length];
@@ -824,6 +946,15 @@
       applyAgentProposal({ agent, content, status: state.status });
     });
     state.debates.forEach(m => applyDebateMessage(m));
+    if (state.rebuttals) {
+      Object.entries(state.rebuttals).forEach(([agent, list]) => {
+        list.forEach(r => {
+          if (!personaState[agent]) return;
+          if (!personaState[agent].rebuttals) personaState[agent].rebuttals = [];
+          personaState[agent].rebuttals.push({ critic: r.critic, content: r.content });
+        });
+      });
+    }
     if (state.synthesis) applySynthesisComplete({ content: state.synthesis });
   });
   socket.on('swarm-start', applySwarmStart);
@@ -884,7 +1015,20 @@
     notifTimeout = setTimeout(() => n.classList.remove('visible'), 3500);
   }
 
-  socket.on('swarm-reset', () => {
+  // === NEW: rebuttal (persona response to a critic) ===
+  socket.on('rebuttal', (data) => {
+    if (!personaState[data.agent]) return;
+    if (!personaState[data.agent].rebuttals) personaState[data.agent].rebuttals = [];
+    personaState[data.agent].rebuttals.push({ critic: data.critic, content: data.content });
+    // If detail panel is currently open showing this agent, refresh
+    const panel = document.getElementById('detail-panel');
+    if (panel.classList.contains('open') && document.getElementById('detail-title').textContent === data.agent) {
+      const ps = personaState[data.agent];
+      openDetail(data.agent, ps.idx, ps.content || '', false);
+    }
+  });
+
+    socket.on('swarm-reset', () => {
     resetGraph(); showEmpty(true);
     setTopic('No active swarm');
     setStatus('Idle'); setPhase(null);

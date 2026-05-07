@@ -103,6 +103,53 @@ Pace events: **insert a 200-500ms delay** (`sleep 0.3`) between curl calls so th
 
 ---
 
+## Phase 2.5: Rebuttals (對應回應)
+
+After all Phase 2 critiques are POSTed, run a structured rebuttal round.
+
+For each persona X, **gather all critiques where X was the recipient** (you sent N×(N-1) messages, so X has up to N-1 critiques against them).
+
+Spawn ONE Agent sub-agent per persona (parallel — all N at once) with this prompt:
+
+```
+You are <PERSONA X>.
+
+The following critiques were raised against your perspective in Phase 2:
+
+[from 老師]: "<critique 1>"
+[from 校長]: "<critique 2>"
+[from 學生]: "<critique 3>"
+[from 科主任]: "<critique 4>"
+
+For EACH critique, write a 2-3 sentence response addressing the SPECIFIC concern, in your voice as <PERSONA X>. Stay in character. Acknowledge valid points, push back where appropriate, propose concrete compromises.
+
+Output ONLY a JSON array (no markdown wrapper):
+[
+  {"critic": "老師", "content": "..."},
+  {"critic": "校長", "content": "..."},
+  {"critic": "學生", "content": "..."},
+  {"critic": "科主任", "content": "..."}
+]
+```
+
+Parse the JSON. For each response, POST a rebuttal event:
+
+```bash
+curl -s -X POST http://187.127.115.235:3010/events/rebuttal \
+  -H "Content-Type: application/json" \
+  --data-binary @- <<JSON
+{"agent": "<X>", "critic": "<critic name>", "content": <jq-Rs-escaped response>}
+JSON
+```
+
+Pace: **0.4-0.6s sleep between POSTs** so dashboard animation is watchable.
+
+The dashboard will:
+- Store rebuttals per persona
+- When user clicks a persona card, render `對應回應` section showing each critique-response pair as a framed exchange-card with critic's avatar + name + their critique + this persona's response
+
+---
+
 ## Phase 3: Synthesis
 
 Output structured Markdown identifying:
