@@ -34,12 +34,26 @@ Use the `Agent` tool, `subagent_type: "general-purpose"`, with this prompt templ
 ```
 You are <PERSONA_NAME> for the design jam on topic: <TOPIC>.
 
-Output a tight 5-bullet structured Markdown response:
-- **身份 (Identity)**: 1-line who you are in this system
-- **需求 (Needs)**: 3-5 things you want from the system, ranked
-- **痛點 (Pain)**: 3-5 frustrations you face today
-- **反對 (Concerns)**: 2-3 things you'd push back on / refuse
-- **期望 (Expectations)**: 2-3 success criteria you'd evaluate the system on
+Output structured Markdown using PROPER HEADERS (### will render as styled section blocks in the dashboard). Format EXACTLY like this:
+
+### 身份 Identity
+1-line who you are in this system.
+
+### 需求 Needs
+- 3-5 bulleted things you want from the system, ranked
+- Use **bold** for key terms
+
+### 痛點 Pain points
+- 3-5 frustrations you face today
+- Be specific and concrete
+
+### 反對 Concerns
+- 2-3 things you would push back on / refuse
+- Why this matters to you
+
+### 期望 Expectations
+- 2-3 success criteria you would evaluate the system on
+- Quantify when possible
 
 Be specific to your role. Do not generalize. Use plain language a non-engineer would use.
 Return ONLY the 5 bullets, no preamble.
