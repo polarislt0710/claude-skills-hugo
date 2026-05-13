@@ -135,6 +135,23 @@
   }
   .file-chip:hover { background: var(--accent); color: #fff; }
 
+  .approval-panel {
+    background: linear-gradient(135deg, rgba(183, 138, 255, 0.08) 0%, rgba(74, 200, 163, 0.08) 100%);
+    border: 1px solid rgba(183, 138, 255, 0.35);
+    border-radius: 12px; padding: 18px 22px; margin-bottom: 20px;
+  }
+  .approval-head { display: flex; justify-content: space-between; align-items: center; }
+  .approval-btn {
+    padding: 9px 16px; border-radius: 8px; border: none; cursor: pointer;
+    font: inherit; font-weight: 700; font-size: 13px;
+  }
+  .approval-btn.approve { background: var(--pass); color: #002a14; }
+  .approval-btn.approve:hover { background: #4ade80cc; }
+  .approval-btn.refine { background: var(--accent); color: #fff; }
+  .approval-btn.refine:hover { background: #6d8aff cc; opacity: 0.9; }
+  .approval-btn.cancel-btn { background: transparent; color: var(--text-dim); border: 1px solid var(--border); }
+  .approval-btn.cancel-btn:hover { color: var(--revise); border-color: var(--revise); }
+
   .review-card {
     background: var(--panel); border-left: 3px solid var(--text-dim); padding: 14px 18px;
     border-radius: 8px; margin-bottom: 12px;
@@ -231,19 +248,21 @@
     <textarea id="newGoal" placeholder="例：實現學生作品評分功能，支援 rubric-based 同 AI-assisted 評分"></textarea>
     <label>Target Project</label>
     <input type="text" id="newTarget" value="/home/hugo-orca/orca-platform-mvp">
-    <label>模型分工</label>
+    <label>模型分工（Planner / Coder 預設 / Reviewer）</label>
     <div style="display: flex; gap: 8px; margin-bottom: 12px;">
       <div style="flex: 1;">
         <label style="font-size: 10px;">Planner</label>
         <select id="newPlanner">
           <option value="claude" selected>Opus (Claude)</option>
-          <option value="glm">GLM</option>
+          <option value="glm-5.1">GLM-5.1</option>
         </select>
       </div>
       <div style="flex: 1;">
-        <label style="font-size: 10px;">Coder</label>
+        <label style="font-size: 10px;">Coder（預設）</label>
         <select id="newCoder">
-          <option value="glm" selected>GLM</option>
+          <option value="glm-5.1" selected>GLM-5.1（主力）</option>
+          <option value="glm-4.6">GLM-4.6</option>
+          <option value="glm-4.5-air">GLM-4.5 Air（細模型，平）</option>
           <option value="claude">Opus (Claude)</option>
           <option value="codex">Codex</option>
         </select>
@@ -252,13 +271,20 @@
         <label style="font-size: 10px;">Reviewer</label>
         <select id="newReviewer">
           <option value="claude" selected>Opus (Claude)</option>
-          <option value="glm">GLM</option>
+          <option value="glm-5.1">GLM-5.1</option>
         </select>
       </div>
     </div>
-    <div class="modal-actions">
+    <div style="font-size: 11px; color: var(--text-dim); margin-bottom: 12px; padding: 8px 10px; background: var(--panel-2); border-radius: 6px;">
+      💡 Coder 預設 model 適用所有 phases。Opus 規劃時會為**簡單 phases** 自動建議用 GLM-4.5 Air 慳 token。
+    </div>
+    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+      <input type="checkbox" id="newDraft" checked style="width: auto; margin: 0;">
+      <span style="font-size: 13px; color: var(--text);">📝 Draft mode — 先睇 plan，approve 先執行 coding（建議）</span>
+    </label>
+    <div class="modal-actions" style="margin-top: 14px;">
       <button class="cancel" onclick="closeNewModal()">取消</button>
-      <button class="submit" onclick="submitNewMission()">🚀 開始 Mission</button>
+      <button class="submit" onclick="submitNewMission()">🚀 開始</button>
     </div>
   </div>
 </div>
@@ -296,10 +322,38 @@ function renderList() {
 
 function statusEmoji(s) {
   return ({
-    draft: '📝', planning: '🧠', succession: '📋', phase_coding: '⚙️',
+    draft: '📝', planning: '🧠', awaiting_approval: '⏸',
+    succession: '📋', phase_coding: '⚙️',
     phase_review: '🔍', final_review: '📊', complete: '✅',
     blocked: '🚫', failed: '❌', cancelled: '⏸'
   }[s] || '⚪');
+}
+
+const MODEL_CHOICES = [
+  { value: 'glm-5.1', label: 'GLM-5.1' },
+  { value: 'glm-4.6', label: 'GLM-4.6' },
+  { value: 'glm-4.5-air', label: 'GLM-4.5-Air' },
+  { value: 'claude', label: 'Opus' },
+  { value: 'codex', label: 'Codex' },
+];
+
+function modelShortLabel(m) {
+  if (!m) return 'default';
+  const ml = String(m).toLowerCase();
+  if (ml === 'glm' || ml === 'glm-5.1') return 'GLM-5.1';
+  if (ml === 'glm-4.6') return 'GLM-4.6';
+  if (ml === 'glm-4.5-air' || ml === 'glm-mini' || ml === 'glm-air') return 'GLM-Air';
+  if (ml === 'codex') return 'Codex';
+  return 'Opus';
+}
+
+function modelTierColor(m) {
+  const ml = String(m || '').toLowerCase();
+  if (ml.includes('air')) return '#4ac8a3';
+  if (ml.includes('glm-4.6')) return '#6dd3a1';
+  if (ml.startsWith('glm')) return '#5ba3d6';
+  if (ml === 'codex') return '#f9a86d';
+  return '#b78aff';
 }
 
 function escapeHtml(s) {
@@ -339,12 +393,12 @@ function renderMission(m, logs) {
         <div class="value">${m.currentPhase}/${phases.length}</div>
       </div>
       <div class="status-card">
-        <div class="label">Coder</div>
-        <div class="value glm">${(m.models?.coder || 'glm').toUpperCase()}</div>
+        <div class="label">Coder (default)</div>
+        <div class="value glm">${modelShortLabel(m.models?.coder)}</div>
       </div>
       <div class="status-card">
         <div class="label">Reviewer</div>
-        <div class="value opus">${(m.models?.reviewer || 'claude').toUpperCase()}</div>
+        <div class="value opus">${modelShortLabel(m.models?.reviewer)}</div>
       </div>
     </div>
 
@@ -358,19 +412,46 @@ function renderMission(m, logs) {
     </div>
 
     <div class="timeline">
-      <div class="timeline-h">📦 Phase Timeline</div>
+      <div class="timeline-h">📦 Phase Timeline ${phases.length ? `· ${phases.length} phases` : ''}</div>
       <div class="phases-track">
-        ${phases.map((p, i) => `
+        ${phases.map((p, i) => {
+          const effModel = p.coderModel || m.models?.coder || 'glm-5.1';
+          return `
           <div class="phase-node ${phaseClass(p, m)}" onclick="viewPhaseFile('${m.id}', ${p.id})">
             <div class="num">PHASE ${p.id}</div>
             <div class="name">${escapeHtml(p.title)}</div>
             <div class="status">${phaseStatusText(p)}</div>
+            <div style="margin-top: 6px;">
+              <span class="model-badge" style="background: ${modelTierColor(effModel)}22; color: ${modelTierColor(effModel)}; border: 1px solid ${modelTierColor(effModel)}55; padding: 2px 6px; border-radius: 4px; font-size: 9px; font-weight: 700;" onclick="event.stopPropagation(); changePhaseModel('${m.id}', ${p.id}, '${effModel}')" title="撳改 model">
+                ${modelShortLabel(effModel)}
+              </span>
+            </div>
           </div>
           ${i < phases.length - 1 ? '<span class="phase-arrow">→</span>' : ''}
-        `).join('')}
+        `;}).join('')}
         ${phases.length === 0 ? '<div style="color: var(--text-dim); font-size: 12px;">等待 Opus 規劃 phases...</div>' : ''}
       </div>
     </div>
+
+    ${m.status === 'awaiting_approval' ? `
+      <div class="approval-panel">
+        <div class="approval-head">
+          <strong style="font-size: 15px;">⏸ Plan ready — 等你 confirm</strong>
+          <span style="color: var(--text-dim); font-size: 12px;">Plan v${(m.refinements?.length || 0) + 1}</span>
+        </div>
+        <div style="color: var(--text-dim); font-size: 13px; margin: 8px 0;">
+          Opus 已寫好 plan（${phases.length} phases, ${m.plan?.successCriteria?.length || 0} criteria）。
+          確認執行前可以撳 <strong>📄 mission.md</strong> 睇詳情，或者打 feedback 叫 Opus 改 plan。
+        </div>
+        <textarea id="refineFeedback-${m.id}" placeholder="🗨️ 想改嘅地方（留空 → 直接 approve；填咗 → Opus 會修 plan 再等你 review）" style="width: 100%; min-height: 60px; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 10px; font: inherit; resize: vertical;"></textarea>
+        <div style="display: flex; gap: 8px; margin-top: 10px;">
+          <button class="approval-btn approve" onclick="approveMission('${m.id}')">✅ Approve & 開始 coding</button>
+          <button class="approval-btn refine" onclick="refineMission('${m.id}')">✏️ 用 feedback 改 plan</button>
+          <button class="approval-btn cancel-btn" onclick="cancelMission('${m.id}')">❌ Cancel</button>
+        </div>
+        ${m.refinements?.length ? `<div style="margin-top: 12px; font-size: 11px; color: var(--text-dim);">📜 已修訂 ${m.refinements.length} 次：${m.refinements.map((r, i) => `<div style="margin: 4px 0; padding: 6px 8px; background: var(--panel-2); border-radius: 4px;">v${i+1}: ${escapeHtml(r.feedback.slice(0, 100))}${r.feedback.length > 100 ? '…' : ''}</div>`).join('')}</div>` : ''}
+      </div>
+    ` : ''}
 
     <div class="files-panel">
       <h3>📂 Mission Files <span style="color: var(--text-dim); font-size: 11px; margin-left: 8px;">(click to view)</span></h3>
@@ -446,13 +527,8 @@ function activePhaseKey(m) {
   return 'system';
 }
 
-function isOpus(model) { return String(model).toLowerCase().startsWith('claude'); }
-function modelDisplay(model) {
-  const m = String(model || 'claude').toLowerCase();
-  if (m === 'glm' || m === 'bigmodel') return 'GLM';
-  if (m === 'codex') return 'Codex';
-  return 'Opus';
-}
+function isOpus(model) { const m = String(model || '').toLowerCase(); return m === 'claude' || m === 'opus'; }
+function modelDisplay(model) { return modelShortLabel(model); }
 function roleZh(role) {
   return ({ planner: '規劃師', succession: '分拆師', coder: 'Coder', reviewer: 'Reviewer', 'final-reviewer': '最終 Reviewer' }[role] || role);
 }
@@ -495,6 +571,62 @@ function closeFileViewer() {
   document.getElementById('fileViewer').classList.remove('open');
 }
 
+// ─── Draft mode actions ───
+async function approveMission(missionId) {
+  const ta = document.getElementById(`refineFeedback-${missionId}`);
+  const feedback = ta?.value.trim();
+  if (feedback) {
+    // If feedback provided when pressing Approve, treat as refine first
+    if (!confirm('你打咗 feedback。確認照樣 approve 唔改 plan？(撳 Cancel 用 feedback 改 plan)')) {
+      return refineMission(missionId);
+    }
+  }
+  const res = await fetch(`/mission/api/${missionId}/approve`, { method: 'POST' });
+  if (!res.ok) {
+    const e = await res.json();
+    alert('Error: ' + (e.error || 'unknown'));
+  }
+}
+
+async function refineMission(missionId) {
+  const ta = document.getElementById(`refineFeedback-${missionId}`);
+  const feedback = ta?.value.trim();
+  if (!feedback) { alert('要打 feedback 先可以 refine'); return; }
+  const res = await fetch(`/mission/api/${missionId}/refine`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ feedback }),
+  });
+  if (res.ok && ta) ta.value = '';
+  else {
+    const e = await res.json();
+    alert('Error: ' + (e.error || 'unknown'));
+  }
+}
+
+async function cancelMission(missionId) {
+  if (!confirm('確認 cancel 呢個 mission？')) return;
+  await fetch(`/mission/api/${missionId}/cancel`, { method: 'POST' });
+}
+
+async function changePhaseModel(missionId, phaseId, currentModel) {
+  const choice = prompt(
+    `Phase ${phaseId} 而家用緊：${modelShortLabel(currentModel)}\n\n揀新 model:\n` +
+    MODEL_CHOICES.map((c, i) => `${i + 1}. ${c.label} (${c.value})`).join('\n') +
+    '\n\n打數字 1-5（或者留空 cancel）：',
+    ''
+  );
+  if (!choice) return;
+  const idx = parseInt(choice) - 1;
+  if (isNaN(idx) || idx < 0 || idx >= MODEL_CHOICES.length) { alert('唔啱'); return; }
+  const newModel = MODEL_CHOICES[idx].value;
+  await fetch(`/mission/api/${missionId}/phase/${phaseId}/model`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ coderModel: newModel }),
+  });
+}
+
 // ─── New mission modal ───
 function openNewModal() { document.getElementById('modalBg').classList.add('open'); }
 function closeNewModal() { document.getElementById('modalBg').classList.remove('open'); }
@@ -502,6 +634,7 @@ function closeNewModal() { document.getElementById('modalBg').classList.remove('
 async function submitNewMission() {
   const topic = document.getElementById('newTopic').value.trim();
   if (!topic) { alert('要填 topic'); return; }
+  const draftMode = document.getElementById('newDraft').checked;
   const body = {
     topic,
     goal: document.getElementById('newGoal').value.trim(),
@@ -511,6 +644,7 @@ async function submitNewMission() {
       coder: document.getElementById('newCoder').value,
       reviewer: document.getElementById('newReviewer').value,
     },
+    autoExecute: !draftMode,
   };
   const res = await fetch('/mission/api/create', {
     method: 'POST',

@@ -720,3 +720,62 @@ html[data-hugo-cloudcli-theme="dark"] ::selection {
     background-position: 36% center;
   }
 }
+
+/* === User Message Text Contrast Fix (cozy + light) =================== *
+ * CloudCLI 嘅 user message bubble 喺 cozy theme 用米色 bg，但 default
+ * text color 係白色 → 完全睇唔到。覆蓋 inline `style="color: white"`
+ * 同埋 tailwind .text-white class（mid-specificity，但加 !important）。
+ * 用相對廣泛 selectors 因為我哋唔 own 個 bundle，class names 可能變。 */
+
+/* Generic: any .text-white-class inside chat region should respect theme */
+html[data-hugo-cloudcli-theme="cozy"] .text-white,
+html[data-hugo-cloudcli-theme="cozy"] .text-slate-50,
+html[data-hugo-cloudcli-theme="cozy"] .text-slate-100,
+html[data-hugo-cloudcli-theme="cozy"] .text-gray-50,
+html[data-hugo-cloudcli-theme="cozy"] .text-gray-100,
+html[data-hugo-cloudcli-theme="cozy"] .text-zinc-50,
+html[data-hugo-cloudcli-theme="cozy"] .text-zinc-100,
+html[data-hugo-cloudcli-theme="cozy"] .text-neutral-50,
+html[data-hugo-cloudcli-theme="cozy"] .text-neutral-100 {
+  color: #2c2519 !important;
+}
+
+html[data-hugo-cloudcli-theme="light"] .text-white,
+html[data-hugo-cloudcli-theme="light"] .text-slate-50,
+html[data-hugo-cloudcli-theme="light"] .text-slate-100,
+html[data-hugo-cloudcli-theme="light"] .text-gray-50,
+html[data-hugo-cloudcli-theme="light"] .text-gray-100 {
+  color: #17203b !important;
+}
+
+/* Target user-message containers (multiple naming patterns) */
+html[data-hugo-cloudcli-theme="cozy"] [class*="message" i][class*="user" i],
+html[data-hugo-cloudcli-theme="cozy"] [class*="UserMessage" i],
+html[data-hugo-cloudcli-theme="cozy"] [data-role="user"],
+html[data-hugo-cloudcli-theme="cozy"] [data-author="user"],
+html[data-hugo-cloudcli-theme="cozy"] [data-from="user"] {
+  color: #2c2519 !important;
+}
+html[data-hugo-cloudcli-theme="cozy"] [class*="message" i][class*="user" i] *:not(code):not(pre):not(svg):not(path),
+html[data-hugo-cloudcli-theme="cozy"] [data-role="user"] *:not(code):not(pre):not(svg):not(path),
+html[data-hugo-cloudcli-theme="cozy"] [data-author="user"] *:not(code):not(pre):not(svg):not(path) {
+  color: inherit !important;
+}
+
+/* Inline style="color: white" or similar — last-resort */
+html[data-hugo-cloudcli-theme="cozy"] [style*="color: white"],
+html[data-hugo-cloudcli-theme="cozy"] [style*="color:white"],
+html[data-hugo-cloudcli-theme="cozy"] [style*="color: #fff"],
+html[data-hugo-cloudcli-theme="cozy"] [style*="color:#fff"],
+html[data-hugo-cloudcli-theme="cozy"] [style*="color: rgb(255"] {
+  color: #2c2519 !important;
+}
+
+/* Dark theme: user message bubble should look readable — typically already
+ * has light bg, so default text should be dark. But if anything is using
+ * .text-black with dark bubble, flip to light. */
+html[data-hugo-cloudcli-theme="dark"] [class*="message" i][class*="user" i],
+html[data-hugo-cloudcli-theme="dark"] [data-role="user"],
+html[data-hugo-cloudcli-theme="dark"] [data-author="user"] {
+  color: #e8ecf5;
+}

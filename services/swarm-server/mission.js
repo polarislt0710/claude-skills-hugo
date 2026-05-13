@@ -55,7 +55,7 @@ function readFileSafe(filePath) {
 
 // ─── Mission entity ──────────────────────────────────────────────────────
 
-function makeMission({ topic, goal, targetProject, plannerModel, coderModel, reviewerModel }) {
+function makeMission({ topic, goal, targetProject, plannerModel, coderModel, reviewerModel, autoExecute }) {
   const missionId = id('mission');
   const dir = path.join(MISSIONS_ROOT, `${Date.now()}_${slug(topic)}`);
   ensureDir(dir);
@@ -66,6 +66,7 @@ function makeMission({ topic, goal, targetProject, plannerModel, coderModel, rev
     targetProject: targetProject || '/home/hugo-orca/orca-platform-mvp',
     dir,
     status: 'draft',
+    autoExecute: autoExecute !== false,  // default true; false = pause for approval after planning
     plan: {
       successCriteria: [],
       phases: [],
@@ -77,6 +78,7 @@ function makeMission({ topic, goal, targetProject, plannerModel, coderModel, rev
       reviewer: reviewerModel || 'claude',
     },
     reviews: [],
+    refinements: [],  // [{ feedback, ts }] for plan iterations
     timeline: [{ event: 'created', ts: nowIso(), summary: 'Mission created' }],
     logs: {},   // phase index -> log string
     finalReport: null,
@@ -114,10 +116,12 @@ function publicMission(mission) {
     targetProject: mission.targetProject,
     dir: mission.dir,
     status: mission.status,
+    autoExecute: mission.autoExecute !== false,
     plan: mission.plan,
     currentPhase: mission.currentPhase,
     models: mission.models,
     reviews: mission.reviews,
+    refinements: mission.refinements || [],
     timeline: mission.timeline,
     activeAgent: mission.activeAgent || null,
     finalReport: mission.finalReport,
@@ -154,9 +158,30 @@ function getBigModelKey() {
   return null;
 }
 
+// Resolve a model alias to its actual BigModel name + env config.
+// Supports:
+//   'claude' / 'opus'              → Claude (Anthropic native)
+//   'glm' / 'glm-5.1'              → GLM-5.1 (主力，長程複雜)
+//   'glm-4.6'                      → GLM-4.6 (中等)
+//   'glm-4.5-air' / 'glm-mini'     → GLM-4.5 Air (簡單、平)
+//   'codex'                        → Codex CLI
+function resolveModel(model) {
+  const m = String(model || 'claude').toLowerCase().trim();
+  if (m === 'codex') return { cli: 'codex', label: 'Codex', provider: 'codex' };
+  if (m === 'claude' || m === 'opus' || m === '') return { cli: 'claude', label: 'Opus', provider: 'anthropic' };
+  if (m.startsWith('glm')) {
+    let modelName = 'glm-5.1';
+    let label = 'GLM-5.1';
+    if (m === 'glm-4.5-air' || m === 'glm-mini' || m === 'glm-air') { modelName = 'glm-4.5-air'; label = 'GLM-4.5-Air'; }
+    else if (m === 'glm-4.6') { modelName = 'glm-4.6'; label = 'GLM-4.6'; }
+    return { cli: 'claude', label, provider: 'bigmodel', modelName };
+  }
+  return { cli: 'claude', label: 'Opus', provider: 'anthropic' };
+}
+
 function envForModel(model) {
-  const m = String(model || 'claude').toLowerCase();
-  if (m === 'glm' || m === 'bigmodel') {
+  const info = resolveModel(model);
+  if (info.provider === 'bigmodel') {
     const key = getBigModelKey();
     if (!key) {
       throw new Error('BIGMODEL_API_KEY missing (checked process.env + ~/.zhipu_secrets)');
@@ -164,8 +189,8 @@ function envForModel(model) {
     return {
       ANTHROPIC_BASE_URL: 'https://open.bigmodel.cn/api/anthropic',
       ANTHROPIC_AUTH_TOKEN: key,
-      ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.1',
-      ANTHROPIC_DEFAULT_SONNET_MODEL: 'glm-5.1',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: info.modelName,
+      ANTHROPIC_DEFAULT_SONNET_MODEL: info.modelName,
       ANTHROPIC_DEFAULT_HAIKU_MODEL: 'glm-4.5-air',
     };
   }
@@ -173,20 +198,17 @@ function envForModel(model) {
 }
 
 function modelLabel(model) {
-  const m = String(model || 'claude').toLowerCase();
-  if (m === 'glm' || m === 'bigmodel') return 'GLM';
-  if (m === 'codex') return 'Codex';
-  return 'Opus';
+  return resolveModel(model).label;
 }
 
 // Spawn an agent, stream its stdout/stderr via onChunk, resolve when done.
 function spawnAgent({ model, prompt, cwd, onChunk, label }) {
   return new Promise((resolve, reject) => {
     const extraEnv = envForModel(model);
-    const m = String(model || 'claude').toLowerCase();
+    const info = resolveModel(model);
 
     let shellCmd;
-    if (m === 'codex') {
+    if (info.cli === 'codex') {
       shellCmd = 'cd "$1" && exec codex exec --cd "$1" --sandbox danger-full-access --dangerously-bypass-approvals-and-sandbox "$2"';
     } else {
       // claude or glm (both use claude CLI, glm differs via env vars)
@@ -230,7 +252,7 @@ function spawnAgent({ model, prompt, cwd, onChunk, label }) {
     });
 
     // Return the child so caller can kill if needed
-    onChunk?.(`[mission] Spawning ${label} (${m}) in ${cwd}\n`);
+    onChunk?.(`[mission] Spawning ${label} (${info.label}) in ${cwd}\n`);
   });
 }
 
@@ -265,9 +287,19 @@ Target project：${mission.targetProject}
   "title": "簡短 title（例如：DB schema + API endpoints）",
   "scope": "2-3 句具體 scope 描述",
   "targetFiles": ["src/path/file1.ts", "src/path/file2.py"],
-  "successCheck": "一句講點樣驗證呢 phase 完成（例如：npm test 過、API endpoint 返回 200）"
+  "successCheck": "一句講點樣驗證呢 phase 完成（例如：npm test 過、API endpoint 返回 200）",
+  "coderModel": "glm-5.1"
 }
 \`\`\`
+
+### 📌 coderModel 選擇指引
+為每個 phase 揀適合嘅 coder model 嚟慳 token：
+
+- **\`"glm-5.1"\`** — 複雜邏輯、跨多 files、需要長程推理、新功能設計、tricky bugs
+- **\`"glm-4.6"\`** — 中等複雜度、refactor、加 features 但邏輯清晰
+- **\`"glm-4.5-air"\`** — 簡單修改、單一 file 嘅小改動、改 typo / 加 logging / 簡單 boilerplate
+
+預設用 \`glm-5.1\`，但 simple phases **必須** 揀 \`glm-4.5-air\` 嚟慳 cost。
 
 ## 🛡️ Risks & Mitigations
 2-3 個主要風險 + 應對。
@@ -493,6 +525,7 @@ function parsePhasesFromMd(md) {
         scope: String(obj.scope || ''),
         targetFiles: Array.isArray(obj.targetFiles) ? obj.targetFiles : [],
         successCheck: String(obj.successCheck || ''),
+        coderModel: obj.coderModel ? String(obj.coderModel) : null,  // null = inherit mission.models.coder
         status: 'pending',
         attempts: 0,
       });
@@ -625,8 +658,9 @@ async function runPhaseCoding(mission, emit, previousReviewFeedback = null) {
   phase.attempts = (phase.attempts || 0) + 1;
   phase.status = 'coding';
   mission.status = 'phase_coding';
-  mission.activeAgent = { role: 'coder', model: mission.models.coder, startedAt: nowIso(), phase: phase.id };
-  pushTimeline(mission, `phase-${phase.id}-coding-start`, `${modelLabel(mission.models.coder)} 開始 Phase ${phase.id} (attempt ${phase.attempts})`);
+  const effectiveCoder = phase.coderModel || mission.models.coder;
+  mission.activeAgent = { role: 'coder', model: effectiveCoder, startedAt: nowIso(), phase: phase.id };
+  pushTimeline(mission, `phase-${phase.id}-coding-start`, `${modelLabel(effectiveCoder)} 開始 Phase ${phase.id} (attempt ${phase.attempts})`);
   saveMission(mission);
   emit('mission-status', publicMission(mission));
 
@@ -634,7 +668,7 @@ async function runPhaseCoding(mission, emit, previousReviewFeedback = null) {
   const prompt = codingPrompt(mission, phase, phasePlanContent, previousReviewFeedback);
 
   await spawnAgent({
-    model: mission.models.coder,
+    model: effectiveCoder,
     prompt,
     cwd: mission.targetProject,
     label: `Coder Phase ${phase.id}`,
@@ -757,15 +791,80 @@ async function runFinalReview(mission, emit) {
   return { ok: true };
 }
 
-// Master driver: runs the whole pipeline asynchronously
-async function runMission(mission, emit) {
+// Re-plan with user feedback (draft mode iteration)
+async function refinePlan(mission, feedback, emit) {
+  mission.refinements.push({ feedback, ts: nowIso() });
+  mission.status = 'planning';
+  mission.activeAgent = { role: 'planner', model: mission.models.planner, startedAt: nowIso() };
+  pushTimeline(mission, 'plan-refine-start', `${modelLabel(mission.models.planner)} 根據 feedback 修改 plan`);
+  saveMission(mission);
+  emit('mission-status', publicMission(mission));
+
+  const oldPlan = readFileSafe(path.join(mission.dir, 'mission.md'));
+  const refinePrompt = `你係 Mission Control 嘅 Planning Architect。
+
+**之前嘅 mission.md：**
+\`\`\`
+${oldPlan}
+\`\`\`
+
+**User 嘅 feedback / 修改要求：**
+${feedback}
+
+根據 user feedback 修改 mission.md。**保留 user 滿意嘅部分**，只改 user 指出嘅地方。輸出新版本嘅 mission.md，**直接覆蓋舊嘅 mission.md** 喺 cwd。
+
+保持原有結構（## 🎯 Goal / ## ✅ Success Criteria / ## 📦 Phases / ## 🛡️ Risks）。
+每個 phase 仍然要用 \`\`\`phase JSON \`\`\` 格式（包括 coderModel field）。
+
+用繁體中文 / 廣東話。`;
+
+  await spawnAgent({
+    model: mission.models.planner,
+    prompt: refinePrompt,
+    cwd: mission.dir,
+    label: 'Planner (refine)',
+    onChunk: (chunk) => {
+      appendLog(mission, 'planning', chunk);
+      emit('mission-log', { missionId: mission.id, phase: 'planning', chunk });
+      saveMission(mission);
+    },
+  });
+
+  const missionMd = readFileSafe(path.join(mission.dir, 'mission.md'));
+  mission.plan.successCriteria = parseSuccessCriteria(missionMd);
+  mission.plan.phases = parsePhasesFromMd(missionMd);
+  mission.plan.rawMd = missionMd;
+  pushTimeline(mission, 'plan-refined', `Plan v${mission.refinements.length + 1} ready · ${mission.plan.phases.length} phases`);
+  mission.activeAgent = null;
+  mission.status = 'awaiting_approval';
+  saveMission(mission);
+  emit('mission-status', publicMission(mission));
+}
+
+// Run only the planning phase, then halt for user approval (if draft mode)
+async function runPlanningOnly(mission, emit) {
+  await runPlanning(mission, emit);
+  if (mission.status === 'failed') return;
+  mission.status = 'awaiting_approval';
+  pushTimeline(mission, 'awaiting-approval', '等待 user approve plan 先執行 coding');
+  saveMission(mission);
+  emit('mission-status', publicMission(mission));
+}
+
+// Run from succession onwards (after plan is approved)
+async function runExecutionPhase(mission, emit) {
   try {
-    await runPlanning(mission, emit);
-    if (mission.status === 'failed') return;
-    await runSuccession(mission, emit);
+    if (mission.status === 'awaiting_approval' || mission.status === 'planning_review') {
+      mission.status = 'succession';
+      saveMission(mission);
+    }
+    if (mission.status === 'succession' && mission.plan.phases.length > 0 && !mission.plan.phases.some(p => p.status !== 'pending')) {
+      await runSuccession(mission, emit);
+    }
     while (mission.status === 'phase_coding') {
+      const phase = mission.plan.phases[mission.currentPhase - 1];
       const previousReview = mission.reviews
-        .filter((r) => r.phaseId === mission.plan.phases[mission.currentPhase - 1]?.id && r.verdict === 'revise')
+        .filter((r) => r.phaseId === phase?.id && r.verdict === 'revise')
         .slice(-1)[0];
       await runPhaseCoding(mission, emit, previousReview?.feedback || null);
       if (mission.status === 'blocked') return;
@@ -775,6 +874,27 @@ async function runMission(mission, emit) {
     if (mission.status === 'final_review') {
       await runFinalReview(mission, emit);
     }
+  } catch (err) {
+    pushTimeline(mission, 'error', String(err.message || err));
+    mission.status = 'failed';
+    mission.activeAgent = null;
+    saveMission(mission);
+    emit('mission-status', publicMission(mission));
+  }
+}
+
+// Master driver: respects autoExecute flag
+async function runMission(mission, emit) {
+  try {
+    if (mission.autoExecute === false) {
+      // Draft mode: plan only, wait for approval
+      await runPlanningOnly(mission, emit);
+      return;
+    }
+    // Auto mode: plan and execute everything
+    await runPlanning(mission, emit);
+    if (mission.status === 'failed') return;
+    await runExecutionPhase(mission, emit);
   } catch (err) {
     pushTimeline(mission, 'error', String(err.message || err));
     mission.status = 'failed';
@@ -822,7 +942,7 @@ function registerRoutes(app, io) {
 
   app.post('/mission/api/create', (req, res) => {
     try {
-      const { topic, goal, targetProject, models } = req.body || {};
+      const { topic, goal, targetProject, models, autoExecute } = req.body || {};
       if (!topic) return res.status(400).json({ error: 'topic required' });
       const mission = makeMission({
         topic, goal,
@@ -830,6 +950,7 @@ function registerRoutes(app, io) {
         plannerModel: models?.planner || 'claude',
         coderModel: models?.coder || 'glm',
         reviewerModel: models?.reviewer || 'claude',
+        autoExecute,
       });
       missions.set(mission.id, mission);
       saveMission(mission);
@@ -845,7 +966,6 @@ function registerRoutes(app, io) {
   app.post('/mission/api/:id/cancel', (req, res) => {
     const m = missions.get(req.params.id);
     if (!m) return res.status(404).json({ error: 'not found' });
-    // Mark as cancelled — note: doesn't kill in-flight processes (could add child tracking later)
     m.status = 'cancelled';
     m.activeAgent = null;
     pushTimeline(m, 'cancelled', 'User cancelled');
@@ -854,7 +974,51 @@ function registerRoutes(app, io) {
     res.json({ ok: true });
   });
 
-  console.log('[mission] routes registered: GET /mission/api/list, GET /mission/api/:id, POST /mission/api/create');
+  // Draft mode: approve plan → start execution
+  app.post('/mission/api/:id/approve', (req, res) => {
+    const m = missions.get(req.params.id);
+    if (!m) return res.status(404).json({ error: 'not found' });
+    if (m.status !== 'awaiting_approval') {
+      return res.status(400).json({ error: `mission status is ${m.status}, not awaiting_approval` });
+    }
+    pushTimeline(m, 'plan-approved', 'User approved plan — 開始 execution');
+    saveMission(m);
+    emit('mission-status', publicMission(m));
+    setImmediate(() => runExecutionPhase(m, emit));
+    res.json({ ok: true });
+  });
+
+  // Draft mode: send feedback → re-plan
+  app.post('/mission/api/:id/refine', (req, res) => {
+    const m = missions.get(req.params.id);
+    if (!m) return res.status(404).json({ error: 'not found' });
+    const { feedback } = req.body || {};
+    if (!feedback || !String(feedback).trim()) {
+      return res.status(400).json({ error: 'feedback required' });
+    }
+    if (m.status !== 'awaiting_approval') {
+      return res.status(400).json({ error: `mission status is ${m.status}, not awaiting_approval` });
+    }
+    res.json({ ok: true });  // respond before kicking off
+    setImmediate(() => refinePlan(m, String(feedback), emit));
+  });
+
+  // Override coderModel for a specific phase
+  app.post('/mission/api/:id/phase/:phaseId/model', (req, res) => {
+    const m = missions.get(req.params.id);
+    if (!m) return res.status(404).json({ error: 'not found' });
+    const phaseId = Number(req.params.phaseId);
+    const { coderModel } = req.body || {};
+    const phase = m.plan.phases.find((p) => p.id === phaseId);
+    if (!phase) return res.status(404).json({ error: 'phase not found' });
+    phase.coderModel = coderModel || null;
+    pushTimeline(m, `phase-${phaseId}-model-changed`, `Coder for Phase ${phaseId} → ${modelLabel(coderModel || m.models.coder)}`);
+    saveMission(m);
+    emit('mission-status', publicMission(m));
+    res.json({ ok: true });
+  });
+
+  console.log('[mission] routes registered: list, get, create, approve, refine, phase/model, cancel');
 }
 
 module.exports = { registerRoutes };
