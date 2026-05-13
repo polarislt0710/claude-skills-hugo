@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mission Control — Opus × GLM</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/atom-one-dark.min.css">
+<script src="/socket.io/socket.io.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/core.min.js"></script>
+<style>
+  :root {
+    --bg: #0a0e1a;
+    --panel: #131726;
+    --panel-2: #1a1f33;
+    --border: #2a3050;
+    --text: #e6e8f0;
+    --text-dim: #8b94b0;
+    --accent: #6d8aff;
+    --opus: #b78aff;     /* Opus = purple */
+    --glm: #4ac8a3;      /* GLM = teal */
+    --pass: #4ade80;
+    --revise: #f97373;
+    --pending: #6b7280;
+    --running: #fbbf24;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, "PingFang TC", "Microsoft JhengHei", system-ui, sans-serif;
+    min-height: 100vh;
+  }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 24px; border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  .topbar h1 { font-size: 18px; font-weight: 700; }
+  .topbar h1 .badge { font-size: 11px; padding: 2px 8px; border-radius: 4px; background: var(--accent); color: #fff; margin-left: 8px; }
+  .topbar a { color: var(--text-dim); text-decoration: none; margin-left: 16px; font-size: 13px; }
+  .topbar a:hover { color: var(--text); }
+
+  .layout { display: grid; grid-template-columns: 320px 1fr; min-height: calc(100vh - 65px); }
+  .sidebar { background: var(--panel); border-right: 1px solid var(--border); overflow-y: auto; max-height: calc(100vh - 65px); }
+  .sidebar-header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .sidebar-header h2 { font-size: 14px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+  .new-mission-btn {
+    background: var(--accent); color: #fff; border: none; padding: 6px 12px;
+    border-radius: 6px; font-size: 12px; cursor: pointer; font-weight: 600;
+  }
+  .new-mission-btn:hover { opacity: 0.9; }
+  .mission-list { padding: 8px; }
+  .mission-card {
+    padding: 12px; border-radius: 8px; cursor: pointer; margin-bottom: 6px;
+    border: 1px solid transparent; transition: all 0.15s;
+  }
+  .mission-card:hover { background: var(--panel-2); }
+  .mission-card.active { background: var(--panel-2); border-color: var(--accent); }
+  .mission-card .title { font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+  .mission-card .meta { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-dim); }
+
+  .main { padding: 24px; overflow-y: auto; max-height: calc(100vh - 65px); }
+  .empty-state { text-align: center; padding: 80px 20px; color: var(--text-dim); }
+  .empty-state h2 { font-size: 24px; margin-bottom: 12px; color: var(--text); }
+
+  .mission-header { margin-bottom: 24px; }
+  .mission-header h1 { font-size: 22px; font-weight: 700; margin-bottom: 8px; }
+  .mission-header .subtitle { color: var(--text-dim); font-size: 13px; margin-bottom: 8px; }
+  .mission-header .goal { background: var(--panel); padding: 12px 16px; border-radius: 8px; border-left: 3px solid var(--accent); margin-top: 12px; }
+  .mission-header .goal strong { color: var(--accent); margin-right: 8px; }
+
+  .status-row { display: flex; gap: 16px; margin: 20px 0; }
+  .status-card { flex: 1; padding: 14px; background: var(--panel); border-radius: 8px; }
+  .status-card .label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+  .status-card .value { font-size: 18px; font-weight: 700; margin-top: 4px; }
+  .status-card .value.opus { color: var(--opus); }
+  .status-card .value.glm { color: var(--glm); }
+  .status-card .value.pass { color: var(--pass); }
+  .status-card .value.running { color: var(--running); }
+
+  .timeline { background: var(--panel); border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+  .timeline-h { font-size: 15px; font-weight: 600; margin-bottom: 16px; }
+  .phases-track { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .phase-node {
+    background: var(--panel-2); padding: 10px 14px; border-radius: 8px; min-width: 120px;
+    border: 2px solid transparent; cursor: pointer; transition: all 0.2s;
+  }
+  .phase-node.passed { border-color: var(--pass); }
+  .phase-node.coding { border-color: var(--glm); animation: pulse 1.5s infinite; }
+  .phase-node.reviewing { border-color: var(--opus); animation: pulse 1.5s infinite; }
+  .phase-node.revising { border-color: var(--revise); }
+  .phase-node.blocked { border-color: var(--revise); background: rgba(249, 115, 115, 0.1); }
+  .phase-node.pending { opacity: 0.5; }
+  .phase-node:hover { transform: translateY(-2px); }
+  .phase-node.active { background: var(--panel); }
+  .phase-node .num { font-size: 10px; color: var(--text-dim); font-weight: 700; }
+  .phase-node .name { font-size: 12px; margin-top: 2px; }
+  .phase-node .status { font-size: 10px; margin-top: 4px; color: var(--text-dim); }
+  .phase-arrow { color: var(--text-dim); font-size: 12px; }
+
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 currentColor; }
+    50% { box-shadow: 0 0 0 4px transparent; }
+  }
+
+  .activity-bar {
+    display: flex; align-items: center; gap: 16px; padding: 14px 20px;
+    background: var(--panel); border-radius: 12px; margin-bottom: 20px;
+  }
+  .activity-bar .indicator {
+    width: 10px; height: 10px; border-radius: 50%; background: var(--pending);
+  }
+  .activity-bar .indicator.running { background: var(--running); animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: 0.3; } }
+  .activity-bar .agent-label { font-weight: 600; }
+  .activity-bar .agent-label.opus { color: var(--opus); }
+  .activity-bar .agent-label.glm { color: var(--glm); }
+  .activity-bar .role-text { color: var(--text-dim); font-size: 12px; }
+
+  .live-log {
+    background: #000; border-radius: 12px; padding: 16px; height: 320px; overflow-y: auto;
+    font: 12px/1.5 ui-monospace, SF Mono, Monaco, monospace; color: #d8dee9;
+    border: 1px solid var(--border); margin-bottom: 20px;
+  }
+  .live-log .log-line { white-space: pre-wrap; word-break: break-all; }
+  .live-log .log-meta { color: #5e81ac; font-size: 11px; }
+
+  .files-panel { background: var(--panel); border-radius: 12px; padding: 16px; margin-bottom: 20px; }
+  .files-panel h3 { font-size: 14px; font-weight: 600; margin-bottom: 10px; }
+  .file-chip {
+    display: inline-block; padding: 4px 10px; background: var(--panel-2);
+    border-radius: 4px; font-size: 11px; margin: 2px; cursor: pointer;
+    font-family: ui-monospace, monospace;
+  }
+  .file-chip:hover { background: var(--accent); color: #fff; }
+
+  .review-card {
+    background: var(--panel); border-left: 3px solid var(--text-dim); padding: 14px 18px;
+    border-radius: 8px; margin-bottom: 12px;
+  }
+  .review-card.pass { border-left-color: var(--pass); }
+  .review-card.revise { border-left-color: var(--revise); }
+  .review-card .head { display: flex; justify-content: space-between; margin-bottom: 8px; }
+  .review-card .verdict { font-weight: 700; font-size: 12px; text-transform: uppercase; padding: 3px 8px; border-radius: 4px; }
+  .review-card .verdict.pass { background: var(--pass); color: #000; }
+  .review-card .verdict.revise { background: var(--revise); color: #000; }
+  .review-card .feedback {
+    font-size: 12px; color: var(--text-dim); margin-top: 8px; white-space: pre-wrap;
+    max-height: 200px; overflow-y: auto;
+  }
+
+  /* Modal */
+  .modal-bg {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: none;
+    align-items: center; justify-content: center; z-index: 100;
+  }
+  .modal-bg.open { display: flex; }
+  .modal {
+    background: var(--panel); padding: 24px; border-radius: 12px; width: 90%; max-width: 600px;
+    max-height: 80vh; overflow-y: auto;
+  }
+  .modal h2 { margin-bottom: 16px; }
+  .modal label { display: block; margin-bottom: 4px; color: var(--text-dim); font-size: 12px; }
+  .modal input, .modal textarea, .modal select {
+    width: 100%; padding: 10px; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; margin-bottom: 14px;
+    font: inherit;
+  }
+  .modal textarea { resize: vertical; min-height: 80px; font-family: inherit; }
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+  .modal-actions button {
+    padding: 8px 18px; border-radius: 6px; border: none; cursor: pointer;
+    font: inherit; font-weight: 600;
+  }
+  .modal-actions .cancel { background: transparent; color: var(--text-dim); }
+  .modal-actions .submit { background: var(--accent); color: #fff; }
+
+  /* File viewer */
+  .file-viewer { background: var(--panel); border-radius: 12px; padding: 20px; margin-top: 20px; display: none; }
+  .file-viewer.open { display: block; }
+  .file-viewer .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .file-viewer h3 { font-size: 14px; }
+  .file-viewer .close { background: transparent; border: 1px solid var(--border); color: var(--text-dim); padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+  .file-viewer .content { background: #000; padding: 16px; border-radius: 8px; max-height: 500px; overflow-y: auto; }
+  .file-viewer .content pre { font: 12px/1.5 ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; }
+  .file-viewer .content.markdown { background: var(--panel-2); padding: 20px; }
+  .file-viewer .content.markdown h1, .content.markdown h2 { margin: 12px 0 8px; }
+  .file-viewer .content.markdown h2 { border-left: 3px solid var(--accent); padding-left: 10px; }
+  .file-viewer .content.markdown code { background: rgba(255,255,255,0.05); padding: 1px 5px; border-radius: 3px; }
+  .file-viewer .content.markdown pre { background: #000; padding: 12px; border-radius: 6px; overflow-x: auto; }
+  .file-viewer .content.markdown ul, .content.markdown ol { padding-left: 20px; margin: 8px 0; }
+  .file-viewer .content.markdown table { border-collapse: collapse; margin: 10px 0; width: 100%; }
+  .file-viewer .content.markdown th, .content.markdown td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>🎯 Mission Control <span class="badge">Opus × GLM</span></h1>
+  <div>
+    <a href="/">← Swarm Dashboard</a>
+    <a href="/mirofish/">MiroFish →</a>
+  </div>
+</div>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <h2>Missions</h2>
+      <button class="new-mission-btn" onclick="openNewModal()">+ New</button>
+    </div>
+    <div class="mission-list" id="missionList"></div>
+  </aside>
+
+  <main class="main" id="main">
+    <div class="empty-state">
+      <h2>無 mission selected</h2>
+      <p>由左側選擇一個 mission，或者按 + New 開始新嘅。</p>
+    </div>
+  </main>
+</div>
+
+<!-- New mission modal -->
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <h2>🎯 New Mission</h2>
+    <label>Topic</label>
+    <input type="text" id="newTopic" placeholder="例：ORCA 評分系統 MVP">
+    <label>Goal（可選 — 唔填會由 Opus 制定）</label>
+    <textarea id="newGoal" placeholder="例：實現學生作品評分功能，支援 rubric-based 同 AI-assisted 評分"></textarea>
+    <label>Target Project</label>
+    <input type="text" id="newTarget" value="/home/hugo-orca/orca-platform-mvp">
+    <label>模型分工</label>
+    <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+      <div style="flex: 1;">
+        <label style="font-size: 10px;">Planner</label>
+        <select id="newPlanner">
+          <option value="claude" selected>Opus (Claude)</option>
+          <option value="glm">GLM</option>
+        </select>
+      </div>
+      <div style="flex: 1;">
+        <label style="font-size: 10px;">Coder</label>
+        <select id="newCoder">
+          <option value="glm" selected>GLM</option>
+          <option value="claude">Opus (Claude)</option>
+          <option value="codex">Codex</option>
+        </select>
+      </div>
+      <div style="flex: 1;">
+        <label style="font-size: 10px;">Reviewer</label>
+        <select id="newReviewer">
+          <option value="claude" selected>Opus (Claude)</option>
+          <option value="glm">GLM</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="cancel" onclick="closeNewModal()">取消</button>
+      <button class="submit" onclick="submitNewMission()">🚀 開始 Mission</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const socket = io();
+let missions = [];
+let currentMissionId = null;
+const logBuffer = {};
+
+// ─── Initial load ───
+async function loadList() {
+  const res = await fetch('/mission/api/list');
+  const data = await res.json();
+  missions = data.missions;
+  renderList();
+}
+
+function renderList() {
+  const list = document.getElementById('missionList');
+  if (missions.length === 0) {
+    list.innerHTML = '<div style="padding: 20px; color: var(--text-dim); font-size: 12px; text-align: center;">仲未有任何 mission</div>';
+    return;
+  }
+  list.innerHTML = missions.map(m => `
+    <div class="mission-card ${m.id === currentMissionId ? 'active' : ''}" onclick="selectMission('${m.id}')">
+      <div class="title">${escapeHtml(m.topic)}</div>
+      <div class="meta">
+        <span>${statusEmoji(m.status)} ${m.status}</span>
+        <span>P${m.currentPhase || 0}/${m.plan?.phases?.length || 0}</span>
+      </div>
+    </div>
+  `).join('');
+}
+
+function statusEmoji(s) {
+  return ({
+    draft: '📝', planning: '🧠', succession: '📋', phase_coding: '⚙️',
+    phase_review: '🔍', final_review: '📊', complete: '✅',
+    blocked: '🚫', failed: '❌', cancelled: '⏸'
+  }[s] || '⚪');
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+}
+
+async function selectMission(id) {
+  currentMissionId = id;
+  renderList();
+  const res = await fetch(`/mission/api/${id}`);
+  const data = await res.json();
+  if (data.mission) {
+    renderMission(data.mission, data.logs || {});
+  }
+}
+
+function renderMission(m, logs) {
+  const main = document.getElementById('main');
+  const phases = m.plan?.phases || [];
+  const activeAgent = m.activeAgent;
+  const lastLog = activeAgent ? (logs[activePhaseKey(m)] || logs[Object.keys(logs).pop()] || '') : '';
+
+  main.innerHTML = `
+    <div class="mission-header">
+      <h1>${escapeHtml(m.topic)}</h1>
+      <div class="subtitle">Mission ${m.id} · ${m.targetProject}</div>
+      ${m.goal ? `<div class="goal"><strong>🎯 Goal</strong>${escapeHtml(m.goal)}</div>` : ''}
+    </div>
+
+    <div class="status-row">
+      <div class="status-card">
+        <div class="label">Status</div>
+        <div class="value ${m.status === 'complete' ? 'pass' : (activeAgent ? 'running' : '')}">${statusEmoji(m.status)} ${m.status}</div>
+      </div>
+      <div class="status-card">
+        <div class="label">Current Phase</div>
+        <div class="value">${m.currentPhase}/${phases.length}</div>
+      </div>
+      <div class="status-card">
+        <div class="label">Coder</div>
+        <div class="value glm">${(m.models?.coder || 'glm').toUpperCase()}</div>
+      </div>
+      <div class="status-card">
+        <div class="label">Reviewer</div>
+        <div class="value opus">${(m.models?.reviewer || 'claude').toUpperCase()}</div>
+      </div>
+    </div>
+
+    <div class="activity-bar">
+      <div class="indicator ${activeAgent ? 'running' : ''}"></div>
+      ${activeAgent
+        ? `<span>正在工作：</span>
+           <span class="agent-label ${isOpus(activeAgent.model) ? 'opus' : 'glm'}">${modelDisplay(activeAgent.model)}</span>
+           <span class="role-text">担任 ${roleZh(activeAgent.role)}${activeAgent.phase ? ` · Phase ${activeAgent.phase}` : ''} · ${timeSince(activeAgent.startedAt)}</span>`
+        : `<span class="role-text">⏸ 暫無 agent 工作中</span>`}
+    </div>
+
+    <div class="timeline">
+      <div class="timeline-h">📦 Phase Timeline</div>
+      <div class="phases-track">
+        ${phases.map((p, i) => `
+          <div class="phase-node ${phaseClass(p, m)}" onclick="viewPhaseFile('${m.id}', ${p.id})">
+            <div class="num">PHASE ${p.id}</div>
+            <div class="name">${escapeHtml(p.title)}</div>
+            <div class="status">${phaseStatusText(p)}</div>
+          </div>
+          ${i < phases.length - 1 ? '<span class="phase-arrow">→</span>' : ''}
+        `).join('')}
+        ${phases.length === 0 ? '<div style="color: var(--text-dim); font-size: 12px;">等待 Opus 規劃 phases...</div>' : ''}
+      </div>
+    </div>
+
+    <div class="files-panel">
+      <h3>📂 Mission Files <span style="color: var(--text-dim); font-size: 11px; margin-left: 8px;">(click to view)</span></h3>
+      <div>
+        <span class="file-chip" onclick="viewFile('${m.id}', 'mission.md')">mission.md</span>
+        ${phases.map(p => `
+          <span class="file-chip" onclick="viewFile('${m.id}', 'phase-${p.id}-plan.md')">phase-${p.id}-plan.md</span>
+          <span class="file-chip" onclick="viewFile('${m.id}', 'phase-${p.id}-output.md')">phase-${p.id}-output.md</span>
+          <span class="file-chip" onclick="viewFile('${m.id}', 'phase-${p.id}-review.md')">phase-${p.id}-review.md</span>
+          <span class="file-chip" onclick="viewFile('${m.id}', 'phase-${p.id}.diff')">phase-${p.id}.diff</span>
+        `).join('')}
+        ${m.status === 'complete' ? `<span class="file-chip" onclick="viewFile('${m.id}', 'final-report.md')" style="background: var(--pass); color: #000;">final-report.md ⭐</span>` : ''}
+      </div>
+    </div>
+
+    <h3 style="margin: 16px 0 10px; font-size: 14px;">📺 Live Log</h3>
+    <div class="live-log" id="liveLog">${
+      activeAgent
+        ? `<div class="log-meta">[${modelDisplay(activeAgent.model)} ${roleZh(activeAgent.role)}]</div><div class="log-line">${escapeHtml(lastLog.slice(-6000))}</div>`
+        : '<div class="log-meta">無 agent 工作中。揀一個 phase 睇 history log。</div>'
+    }</div>
+
+    <h3 style="margin: 16px 0 10px; font-size: 14px;">⚖️ Reviews</h3>
+    <div id="reviewsList">
+      ${(m.reviews || []).map(r => `
+        <div class="review-card ${r.verdict}">
+          <div class="head">
+            <strong>Phase ${r.phaseId} · attempt ${r.attempt}</strong>
+            <span class="verdict ${r.verdict}">${r.verdict}</span>
+          </div>
+          <div class="feedback">${escapeHtml((r.feedback || '').slice(0, 1200))}</div>
+        </div>
+      `).join('') || '<div style="color: var(--text-dim); font-size: 12px; padding: 10px;">仲未有 reviews</div>'}
+    </div>
+
+    <div class="file-viewer" id="fileViewer">
+      <div class="head">
+        <h3 id="fileName">-</h3>
+        <button class="close" onclick="closeFileViewer()">關閉</button>
+      </div>
+      <div class="content" id="fileContent"></div>
+    </div>
+  `;
+}
+
+function phaseClass(p, m) {
+  if (p.lastVerdict === 'pass' || p.status === 'passed') return 'passed';
+  if (p.status === 'blocked') return 'blocked';
+  if (m.currentPhase === p.id && m.status === 'phase_coding') return 'coding';
+  if (m.currentPhase === p.id && m.status === 'phase_review') return 'reviewing';
+  if (p.status === 'revising') return 'revising';
+  if (m.currentPhase > p.id) return 'passed';
+  return 'pending';
+}
+
+function phaseStatusText(p) {
+  if (p.lastVerdict === 'pass' || p.status === 'passed') return '✅ Passed';
+  if (p.status === 'coding') return `⚙️ Coding (a${p.attempts || 1})`;
+  if (p.status === 'reviewing') return '🔍 Reviewing';
+  if (p.status === 'revising') return `↻ Revising (a${p.attempts || 1})`;
+  if (p.status === 'blocked') return '🚫 Blocked';
+  return '⏸ Pending';
+}
+
+function activePhaseKey(m) {
+  if (!m.activeAgent) return 'planning';
+  const r = m.activeAgent.role;
+  if (r === 'planner') return 'planning';
+  if (r === 'succession') return 'succession';
+  if (r === 'coder') return `phase-${m.activeAgent.phase}`;
+  if (r === 'reviewer') return `phase-${m.activeAgent.phase}-review`;
+  if (r === 'final-reviewer') return 'final-review';
+  return 'system';
+}
+
+function isOpus(model) { return String(model).toLowerCase().startsWith('claude'); }
+function modelDisplay(model) {
+  const m = String(model || 'claude').toLowerCase();
+  if (m === 'glm' || m === 'bigmodel') return 'GLM';
+  if (m === 'codex') return 'Codex';
+  return 'Opus';
+}
+function roleZh(role) {
+  return ({ planner: '規劃師', succession: '分拆師', coder: 'Coder', reviewer: 'Reviewer', 'final-reviewer': '最終 Reviewer' }[role] || role);
+}
+function timeSince(iso) {
+  if (!iso) return '';
+  const sec = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
+  return `${Math.floor(sec / 3600)}h${Math.floor((sec % 3600) / 60)}m`;
+}
+
+// ─── File viewer ───
+async function viewFile(missionId, filename) {
+  const v = document.getElementById('fileViewer');
+  const cont = document.getElementById('fileContent');
+  document.getElementById('fileName').textContent = filename;
+  v.classList.add('open');
+  cont.innerHTML = '<pre>載入中...</pre>';
+  cont.className = 'content';
+  try {
+    const res = await fetch(`/mission/api/${missionId}/file/${filename}`);
+    if (!res.ok) { cont.innerHTML = `<pre>檔案未生成（${res.status}）</pre>`; return; }
+    const text = await res.text();
+    if (filename.endsWith('.md')) {
+      cont.className = 'content markdown';
+      cont.innerHTML = marked.parse(text);
+    } else {
+      cont.className = 'content';
+      cont.innerHTML = `<pre>${escapeHtml(text)}</pre>`;
+    }
+    v.scrollIntoView({ behavior: 'smooth' });
+  } catch (e) {
+    cont.innerHTML = `<pre>Error: ${e.message}</pre>`;
+  }
+}
+function viewPhaseFile(missionId, phaseId) {
+  viewFile(missionId, `phase-${phaseId}-plan.md`);
+}
+function closeFileViewer() {
+  document.getElementById('fileViewer').classList.remove('open');
+}
+
+// ─── New mission modal ───
+function openNewModal() { document.getElementById('modalBg').classList.add('open'); }
+function closeNewModal() { document.getElementById('modalBg').classList.remove('open'); }
+
+async function submitNewMission() {
+  const topic = document.getElementById('newTopic').value.trim();
+  if (!topic) { alert('要填 topic'); return; }
+  const body = {
+    topic,
+    goal: document.getElementById('newGoal').value.trim(),
+    targetProject: document.getElementById('newTarget').value.trim(),
+    models: {
+      planner: document.getElementById('newPlanner').value,
+      coder: document.getElementById('newCoder').value,
+      reviewer: document.getElementById('newReviewer').value,
+    },
+  };
+  const res = await fetch('/mission/api/create', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json();
+  closeNewModal();
+  if (data.ok) {
+    await loadList();
+    selectMission(data.mission.id);
+  } else {
+    alert('Error: ' + (data.error || 'unknown'));
+  }
+}
+
+// ─── Socket.io live updates ───
+socket.on('connect', () => console.log('[ws] connected'));
+
+socket.on('mission-created', (m) => {
+  missions.unshift(m);
+  renderList();
+});
+
+socket.on('mission-status', (m) => {
+  const idx = missions.findIndex(x => x.id === m.id);
+  if (idx >= 0) missions[idx] = m;
+  else missions.unshift(m);
+  renderList();
+  if (m.id === currentMissionId) {
+    fetch(`/mission/api/${m.id}`).then(r => r.json()).then(d => {
+      renderMission(d.mission, d.logs || {});
+    });
+  }
+});
+
+socket.on('mission-log', ({ missionId, phase, chunk }) => {
+  if (missionId !== currentMissionId) return;
+  if (!logBuffer[phase]) logBuffer[phase] = '';
+  logBuffer[phase] += chunk;
+  if (logBuffer[phase].length > 30000) logBuffer[phase] = logBuffer[phase].slice(-30000);
+  const logEl = document.getElementById('liveLog');
+  if (logEl) {
+    const line = document.createElement('span');
+    line.className = 'log-line';
+    line.textContent = chunk;
+    logEl.appendChild(line);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+});
+
+socket.on('mission-review', ({ missionId, phase, verdict, feedback }) => {
+  if (missionId !== currentMissionId) return;
+  // Trigger a refresh
+  fetch(`/mission/api/${missionId}`).then(r => r.json()).then(d => {
+    renderMission(d.mission, d.logs || {});
+  });
+});
+
+// Periodic refresh as fallback
+setInterval(() => {
+  loadList();
+  if (currentMissionId) {
+    fetch(`/mission/api/${currentMissionId}`).then(r => r.json()).then(d => {
+      if (d.mission) renderMission(d.mission, d.logs || {});
+    });
+  }
+}, 10000);
+
+loadList();
+</script>
+
+</body>
+</html>
