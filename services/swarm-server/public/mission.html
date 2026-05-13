@@ -827,7 +827,11 @@ setInterval(() => {
   }
 }, 10000);
 
-loadList();
+loadList().then(() => {
+  // Honor ?focus=<missionId> in URL — auto-select that mission
+  const focus = new URLSearchParams(location.search).get('focus');
+  if (focus) selectMission(focus);
+});
 </script>
 
 </body>

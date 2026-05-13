@@ -236,6 +236,164 @@ html[data-hugo-cloudcli-theme="cozy"] #hugo-mission-button {
   background: linear-gradient(135deg, rgba(204, 178, 240, .35) 0%, rgba(180, 220, 200, .35) 100%);
 }
 
+/* === Send-to-Mission button (📤 next to 🎯 Mission) === */
+#hugo-send-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid rgba(109, 138, 255, .35);
+  border-radius: 8px;
+  background: rgba(109, 138, 255, .12);
+  color: #4a55e8;
+  font: 700 14px/1 var(--hugo-font);
+  cursor: pointer;
+  transition: transform .16s ease, background .16s ease;
+}
+#hugo-send-button:hover {
+  transform: translateY(-1px);
+  background: rgba(109, 138, 255, .22);
+}
+html[data-hugo-cloudcli-theme="dark"] #hugo-send-button {
+  background: rgba(109, 138, 255, .18);
+  color: #a5b4ff;
+  border-color: rgba(109, 138, 255, .4);
+}
+html[data-hugo-cloudcli-theme="cozy"] #hugo-send-button {
+  background: rgba(110, 158, 89, .22);
+  color: #416f37;
+  border-color: rgba(110, 158, 89, .4);
+}
+
+/* === Send-to-Mission Modal === */
+#hugo-send-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 999999;
+  background: rgba(0, 0, 0, .55);
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+#hugo-send-modal-card {
+  width: 100%;
+  max-width: 680px;
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--hugo-swarm-panel-bg, #fff);
+  color: var(--hugo-swarm-panel-text, #17203b);
+  border: 1px solid var(--hugo-swarm-panel-border, rgba(112, 123, 154, .24));
+  border-radius: 14px;
+  padding: 22px 26px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .25);
+}
+#hugo-send-modal .hugo-send-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+#hugo-send-modal .hugo-send-head strong {
+  font-size: 16px;
+}
+#hugo-send-modal #hugo-send-close {
+  background: transparent;
+  border: 0;
+  color: var(--hugo-swarm-panel-muted, #66708d);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+#hugo-send-modal .hugo-send-help {
+  font-size: 12px;
+  color: var(--hugo-swarm-panel-muted, #66708d);
+  margin-bottom: 14px;
+  line-height: 1.55;
+  padding: 8px 12px;
+  background: var(--hugo-swarm-panel-control-bg, rgba(0, 0, 0, .03));
+  border-left: 3px solid #6d8aff;
+  border-radius: 4px;
+}
+#hugo-send-modal label {
+  display: block;
+  margin: 10px 0 4px;
+  color: var(--hugo-swarm-panel-muted, #66708d);
+  font-size: 12px;
+  font-weight: 600;
+}
+#hugo-send-modal input,
+#hugo-send-modal textarea,
+#hugo-send-modal select {
+  width: 100%;
+  padding: 9px 12px;
+  background: var(--hugo-swarm-panel-control-bg, rgba(255, 255, 255, .76));
+  color: var(--hugo-swarm-panel-text, #17203b);
+  border: 1px solid var(--hugo-swarm-panel-border, rgba(112, 123, 154, .22));
+  border-radius: 6px;
+  font: 13px/1.5 var(--hugo-font);
+}
+#hugo-send-modal textarea {
+  resize: vertical;
+  min-height: 220px;
+  font-family: ui-monospace, "SF Mono", Monaco, monospace;
+  font-size: 12px;
+  white-space: pre;
+}
+#hugo-send-modal .hugo-send-plan-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin: 10px 0 4px;
+}
+#hugo-send-modal .hugo-send-mini {
+  background: transparent;
+  border: 1px solid var(--hugo-swarm-panel-border, rgba(112, 123, 154, .22));
+  color: var(--hugo-swarm-panel-text, #17203b);
+  padding: 3px 10px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+#hugo-send-modal .hugo-send-mini:hover { background: rgba(109, 138, 255, .12); }
+#hugo-send-modal .hugo-send-models {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+#hugo-send-modal .hugo-send-models > div { flex: 1; }
+#hugo-send-modal .hugo-send-warn {
+  font-size: 11px;
+  color: var(--hugo-swarm-panel-muted, #66708d);
+  margin-top: 12px;
+  line-height: 1.5;
+}
+#hugo-send-modal .hugo-send-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+#hugo-send-modal .hugo-send-actions button {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 0;
+  font: 700 13px/1 var(--hugo-font);
+  cursor: pointer;
+}
+#hugo-send-modal .hugo-send-cancel {
+  background: transparent;
+  color: var(--hugo-swarm-panel-muted, #66708d);
+  border: 1px solid var(--hugo-swarm-panel-border, rgba(112, 123, 154, .22)) !important;
+}
+#hugo-send-modal .hugo-send-submit {
+  background: linear-gradient(135deg, #b78aff 0%, #4ac8a3 100%);
+  color: #fff;
+}
+#hugo-send-modal .hugo-send-submit:hover { opacity: .92; }
+#hugo-send-modal .hugo-send-submit:disabled { opacity: .5; cursor: wait; }
+
 #hugo-swarm-panel {
   position: fixed;
   top: 56px;

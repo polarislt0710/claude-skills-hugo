@@ -974,6 +974,48 @@ function registerRoutes(app, io) {
     res.json({ ok: true });
   });
 
+  // Import pre-baked plan from CloudCLI chat (skips Opus planning step)
+  app.post('/mission/api/import', (req, res) => {
+    try {
+      const { topic, goal, targetProject, models, planMarkdown, sourceUrl } = req.body || {};
+      if (!topic || !planMarkdown) {
+        return res.status(400).json({ error: 'topic + planMarkdown required' });
+      }
+      const mission = makeMission({
+        topic, goal,
+        targetProject: targetProject || '/home/hugo-orca/orca-platform-mvp',
+        plannerModel: models?.planner || 'claude',
+        coderModel: models?.coder || 'glm-5.1',
+        reviewerModel: models?.reviewer || 'claude',
+        autoExecute: false,  // imported plans always go through approval
+      });
+
+      // Write the imported plan directly as mission.md
+      writeFileSafe(path.join(mission.dir, 'mission.md'), String(planMarkdown));
+
+      // Parse what we can — phases may be 0 if user didn't include ```phase``` blocks;
+      // user can refine in approval panel.
+      mission.plan.successCriteria = parseSuccessCriteria(planMarkdown);
+      mission.plan.phases = parsePhasesFromMd(planMarkdown);
+      mission.plan.rawMd = String(planMarkdown);
+      mission.plan.importedFrom = sourceUrl || 'cloudcli';
+
+      // Skip planning, jump to awaiting_approval
+      mission.status = 'awaiting_approval';
+      pushTimeline(mission, 'imported',
+        `Plan imported from ${sourceUrl ? 'CloudCLI: ' + sourceUrl : 'CloudCLI'} · ${mission.plan.phases.length} phases parsed`);
+
+      missions.set(mission.id, mission);
+      saveMission(mission);
+      emit('mission-created', publicMission(mission));
+      emit('mission-status', publicMission(mission));
+
+      res.json({ ok: true, mission: publicMission(mission) });
+    } catch (err) {
+      res.status(500).json({ error: String(err.message || err) });
+    }
+  });
+
   // Draft mode: approve plan → start execution
   app.post('/mission/api/:id/approve', (req, res) => {
     const m = missions.get(req.params.id);
@@ -1018,7 +1060,7 @@ function registerRoutes(app, io) {
     res.json({ ok: true });
   });
 
-  console.log('[mission] routes registered: list, get, create, approve, refine, phase/model, cancel');
+  console.log('[mission] routes registered: list, get, file, create, import, approve, refine, phase/model, cancel');
 }
 
 module.exports = { registerRoutes };
