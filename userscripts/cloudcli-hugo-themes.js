@@ -122,7 +122,8 @@
 
   function getMissionUrl() {
     const host = location.hostname || "187.127.115.235";
-    return `${location.protocol}//${host}:${SWARM_PORT}/mission`;
+    const theme = document.documentElement.dataset.hugoCloudcliTheme || getStoredTheme() || "cozy";
+    return `${location.protocol}//${host}:${SWARM_PORT}/mission?theme=${encodeURIComponent(theme)}`;
   }
 
   function inferCloudCliTopic(text) {
