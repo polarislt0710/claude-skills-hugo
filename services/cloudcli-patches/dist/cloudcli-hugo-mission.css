@@ -1,0 +1,64 @@
+/* Mission selector removed in v3. Mission Control is the only launch point. */
+#hugo-mission-panel {
+  display: none !important;
+}
+
+#hugo-codex-reasoning {
+  position: fixed;
+  right: 18px;
+  bottom: 92px;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px;
+  border: 1px solid rgba(150, 130, 102, 0.32);
+  border-radius: 999px;
+  background: rgba(255, 250, 240, 0.92);
+  box-shadow: 0 10px 26px rgba(70, 50, 28, 0.14);
+  color: #5f4b32;
+  font: 12px/1.1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  backdrop-filter: blur(14px);
+}
+
+.hugo-codex-reasoning-label {
+  padding-left: 4px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.hugo-codex-reasoning-options {
+  display: grid;
+  grid-template-columns: repeat(3, 28px);
+  gap: 3px;
+}
+
+.hugo-codex-reasoning-options button {
+  width: 28px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.hugo-codex-reasoning-options button:hover {
+  background: rgba(176, 122, 61, 0.12);
+}
+
+.hugo-codex-reasoning-options button.active {
+  border-color: rgba(176, 122, 61, 0.44);
+  background: #b7783d;
+  color: #fffaf0;
+  box-shadow: 0 3px 10px rgba(176, 122, 61, 0.24);
+}
+
+@media (max-width: 640px) {
+  #hugo-codex-reasoning {
+    right: 12px;
+    bottom: 80px;
+  }
+}
