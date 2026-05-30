@@ -6,6 +6,9 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { Server } = require('socket.io');
 
+// Load .env (Cronicle API key, etc.) before any module reads process.env
+require('./lib/env').loadEnv(path.join(__dirname, '.env'));
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
@@ -137,7 +140,15 @@ const EXECUTION_PRESETS = [
     layer: 'review',
     role: 'Reviewer',
     skill: 'code review / risk analysis / integration notes',
-    scope: '負責 review 現有改動、找 bug / race / security risk，不要 revert 其他 agent 工作。',
+    scope: '負責 review 現有改動、找 bug / race / security risk，不要 revert 其他 agent 工作。請將發現分成「🔴 必修(會出錯/破壞功能/安全)」同「🟡 建議(風格/邊角)」，並喺最後輸出一個明確標記：若有🔴必修項就寫一行「FIX_NEEDED: <逐項列出>」；若全部乾淨就寫一行「FIX_NEEDED: NONE」。比下游 Fix agent 直接用。',
+  },
+  {
+    key: 'fixer',
+    name: 'Fix Agent',
+    layer: 'review',
+    role: '修正',
+    skill: 'targeted fixes / apply review feedback / verify',
+    scope: '讀上一個 Reviewer Agent 嘅報告（尤其「FIX_NEEDED:」嗰行）。只修🔴必修項，一次過修晒，修完跑一次測試 / 驗證確認冇 leftover warning。🟡建議項同需要架構決策 / 使錢 / 改 schema 嘅深層問題唔好自作主張，改為清楚 flag 出嚟留俾 Hugo。鐵則：最多做一輪修正，唔好無限重試；若一輪修唔好，停低並寫低剩低咩、點解、建議下一步。不要 revert 其他 agent 工作。',
   },
 ];
 
@@ -186,6 +197,7 @@ const AGENT_SKILL_MAP = {
   backend:     ['architect', 'debugger', 'performance-engineer'],
   test:        ['debugger', 'reviewer-persona'],
   reviewer:    ['reviewer-persona', 'security-auditor', 'refactor-engineer'],
+  fixer:       ['debugger', 'refactor-engineer'],
   researcher:  ['brainstormers'],
   strategist:  ['brainstormers', 'architect'],
   synthesis:   ['brainstormers'],
@@ -248,12 +260,74 @@ app.get('/mirofish/*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'mirofish', 'index.html'));
 });
 
+// Automation Designer (Cronicle-backed) — chat UI + scheduler
+app.use('/automation', require('./routes/automation'));
+
+// Mission Controller v2 — handoff plan → coding → refill → review pipeline
+app.use('/mission', require('./routes/mission')(io));
+
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 let store = loadStore();
 let saveTimer = null;
 const liveJobs = new Map();
+// Global concurrency cap so we never overload the VPS with too many CLI processes at once.
+const MAX_CONCURRENT = Number(process.env.SWARM_MAX_CONCURRENT || 6);
+const spawnQueue = [];
+function pumpQueue() {
+  while (liveJobs.size < MAX_CONCURRENT && spawnQueue.length) {
+    const job = spawnQueue.shift();
+    try { job(); } catch (e) { console.error('[queue] launch failed', e.message); }
+  }
+}
 store.runs.forEach(normalizeRun);
+reconcileRunsOnBoot();
+
+// On startup the in-memory liveJobs map is empty, so any agent persisted as
+// "running" is stale (its child process died with the previous server, or was
+// orphaned). Mark those interrupted, try to reap orphan PIDs, and close any
+// sessions that were mid-flight so the UI never shows phantom "running" agents.
+function reconcileRunsOnBoot() {
+  if (process.env.SWARM_NO_RECONCILE === '1') return; // debug/local: keep running agents as-is
+  let interrupted = 0;
+  let reaped = 0;
+  for (const run of store.runs) {
+    if (!Array.isArray(run.agents)) continue;
+    for (const agent of run.agents) {
+      if (agent.status !== 'running') continue;
+      if (agent.pid) {
+        try {
+          process.kill(agent.pid, 0); // throws if not alive
+          try { process.kill(agent.pid, 'SIGTERM'); reaped += 1; } catch (_) {}
+        } catch (_) { /* already gone */ }
+      }
+      agent.status = 'interrupted';
+      agent.action = '伺服器重啟前中斷';
+      agent.summary = '伺服器重啟,呢個 agent 嘅 process 已中斷 — 可重跑。';
+      agent.completedAt = new Date().toISOString();
+      agent.pid = null;
+      interrupted += 1;
+    }
+    if (Array.isArray(run.sessions)) {
+      for (const session of run.sessions) {
+        if (session.status === 'running') {
+          session.status = 'interrupted';
+          session.completedAt = new Date().toISOString();
+        }
+      }
+    }
+    if (run.pipeline && Array.isArray(run.pipeline.stages)) {
+      let stopped = false;
+      run.pipeline.stages.forEach((s) => { if (s.status === 'running') { s.status = 'interrupted'; stopped = true; } });
+      if (stopped) run.pipeline.stopped = true;
+    }
+    if (run.status === 'executing') run.status = 'active';
+  }
+  if (interrupted) {
+    console.log(`[reconcile] ${interrupted} interrupted agent(s) on boot, ${reaped} orphan process(es) reaped`);
+    scheduleSave();
+  }
+}
 
 function loadStore() {
   try {
@@ -318,6 +392,15 @@ function normalizeRun(run) {
   if (!run) return run;
   run.layers = LAYERS;
   run.agents = Array.isArray(run.agents) ? run.agents : [];
+  run.sessions = Array.isArray(run.sessions) ? run.sessions : [];
+  if (run.pipeline === undefined) run.pipeline = null;
+  run.agents.forEach((agent) => {
+    if (agent.action === undefined) agent.action = '';
+    if (agent.model === undefined) agent.model = '';
+    if (agent.cli === undefined) agent.cli = '';
+    if (agent.pid === undefined) agent.pid = null;
+    if (agent.sessionId === undefined) agent.sessionId = null;
+  });
   run.edges = Array.isArray(run.edges) ? run.edges : [];
   run.artifacts = Array.isArray(run.artifacts) ? run.artifacts : [];
   run.contextHistory = Array.isArray(run.contextHistory) ? run.contextHistory : [];
@@ -344,14 +427,35 @@ function makeAgent(name, layer, role, skill, index, extra = {}) {
     skill,
     status: extra.status || 'pending',
     summary: extra.summary || '',
+    action: extra.action || '',
     content: extra.content || '',
     logs: extra.logs || '',
+    model: extra.model || '',
+    cli: extra.cli || '',
+    pid: extra.pid || null,
+    sessionId: extra.sessionId || null,
     artifactIds: extra.artifactIds || [],
     index,
     startedAt: extra.startedAt || null,
     completedAt: extra.completedAt || null,
     updatedAt: new Date().toISOString(),
   };
+}
+
+// ─── Model catalog (which CLI + model each sub-agent can run on) ───
+const MODEL_CATALOG = [
+  { cli: 'claude', model: 'opus',    label: 'Claude Opus 4.8', short: 'opus',   color: '#c8993f', tier: '旗艦 · 規劃腦' },
+  { cli: 'claude', model: 'sonnet',  label: 'Claude Sonnet', short: 'sonnet', color: '#87b7ff', tier: '均衡 · 預設' },
+  { cli: 'claude', model: 'haiku',   label: 'Claude Haiku',  short: 'haiku',  color: '#5fb89a', tier: '快 · 輕量' },
+  { cli: 'codex',  model: 'gpt-5.5', label: 'Codex gpt-5.5', short: 'codex',  color: '#9aa7b2', tier: 'OpenAI' },
+  { cli: 'glm',    model: 'glm-5.1', label: 'GLM 5.1',       short: 'glm',    color: '#b58cff', tier: '實驗', experimental: true },
+];
+
+function safeModelFlag(model) {
+  const m = String(model || '').trim();
+  if (!m) return '';
+  if (!/^[a-zA-Z0-9._:/-]{1,60}$/.test(m)) return '';
+  return m;
 }
 
 function detectDomain(text = '') {
@@ -485,11 +589,11 @@ function layerCounts(agents) {
   return Object.fromEntries(LAYERS.map((layer) => [layer.id, agents.filter((agent) => agent.layer === layer.id).length]));
 }
 
-function createRun({ topic, personas, chatContext, sessionId, projectPath, source, template, background, taskBrief } = {}) {
+function createRun({ topic, personas, chatContext, sessionId, projectPath, source, template, background, taskBrief, seed } = {}) {
   const now = new Date().toISOString();
   const agents = Array.isArray(personas) && personas.length
     ? personas.map((persona, index) => makeAgent(String(persona), 'stakeholder', 'Persona', 'stakeholder reasoning', index + 1))
-    : seedAgents(template || 'cloudcli', `${topic || ''}\n${chatContext || ''}`);
+    : (seed === false ? [] : seedAgents(template || 'cloudcli', `${topic || ''}\n${chatContext || ''}`));
 
   const run = {
     id: id('run'),
@@ -508,6 +612,7 @@ function createRun({ topic, personas, chatContext, sessionId, projectPath, sourc
     completedAt: null,
     layers: LAYERS,
     agents,
+    sessions: [],
     edges: buildDefaultEdges(agents),
     artifacts: [],
     messages: [],
@@ -611,6 +716,7 @@ function freshIdleState() {
     stage: 'idle',
     layers: LAYERS,
     agents: [],
+    sessions: [],
     edges: [],
     artifacts: [],
     messages: [],
@@ -713,18 +819,89 @@ function buildAutoBackground(run) {
   ].join('\n');
 }
 
-function buildAgentCommand(cliName) {
+function buildAgentCommand(cliName, model) {
   const cli = String(cliName || DEFAULT_AGENT_CLI).trim().toLowerCase();
+  const m = safeModelFlag(model);
   if (cli === 'codex') {
+    const mflag = m ? ` -m "${m}"` : '';
     return {
       label: 'codex',
-      shell: 'cd "$1" && exec codex exec --cd "$1" --sandbox danger-full-access --dangerously-bypass-approvals-and-sandbox "$2"',
+      cli: 'codex',
+      model: m,
+      shell: `cd "$1" && exec codex exec --cd "$1"${mflag} --sandbox danger-full-access --dangerously-bypass-approvals-and-sandbox "$2"`,
     };
   }
+  if (cli === 'glm') {
+    // GLM wrapper script ~/bin/glm — 真 executable，令 non-interactive spawn 搵到（取代舊 ~/.bashrc function；`exec <function>` 行唔通會 127）。Claude-compatible，需 BigModel key。
+    const mflag = m ? ` --model "${m}"` : '';
+    return {
+      label: 'glm',
+      cli: 'glm',
+      model: m || 'glm-5.1',
+      shell: `cd "$1" && exec "$HOME/bin/glm" -p --permission-mode bypassPermissions${mflag} "$2"`,
+    };
+  }
+  const mflag = m ? ` --model "${m}"` : '';
   return {
     label: 'claude',
-    shell: 'cd "$1" && exec claude -p --permission-mode bypassPermissions "$2"',
+    cli: 'claude',
+    model: m,
+    shell: `cd "$1" && exec claude -p --permission-mode bypassPermissions${mflag} "$2"`,
   };
+}
+
+// ─── Sessions (Plan → Session → Agent nesting) ───
+function createSession(run, { title, kind, model, cli } = {}) {
+  if (!Array.isArray(run.sessions)) run.sessions = [];
+  const cmd = buildAgentCommand(cli, model);
+  const session = {
+    id: id('session'),
+    title: title || (kind ? `${kind} session` : 'Execution session'),
+    kind: kind || 'code',
+    cli: cmd.label,
+    model: cmd.model || '',
+    status: 'running',
+    agentIds: [],
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+  };
+  run.sessions.unshift(session);
+  return session;
+}
+
+function updateSessionStatus(run, sessionId) {
+  if (!sessionId) return;
+  const session = (run.sessions || []).find((item) => item.id === sessionId);
+  if (!session) return;
+  const agents = run.agents.filter((agent) => agent.sessionId === sessionId);
+  // "active" = still running OR queued (pending = waiting for a concurrency slot).
+  const active = agents.some((agent) => agent.status === 'running' || agent.status === 'pending');
+  const anyFailed = agents.some((agent) => agent.status === 'failed' || agent.status === 'interrupted');
+  const justFinished = (!active && session.status === 'running');
+  if (justFinished) {
+    session.status = anyFailed ? 'failed' : 'complete';
+    session.completedAt = new Date().toISOString();
+  }
+  io.emit('session-updated', { runId: run.id, session });
+  if (justFinished) maybeAdvancePipeline(run, session);
+}
+
+// When a pipeline stage's session finishes, auto-start the next stage (staged fan-out).
+function maybeAdvancePipeline(run, session) {
+  const p = run.pipeline;
+  if (!p || p.stopped || !Array.isArray(p.stages) || !p.stages[p.current]) return;
+  const stage = p.stages[p.current];
+  if (stage.sessionId !== session.id) return;
+  stage.status = session.status;
+  if (session.status === 'failed' && !p.continueOnFail) {
+    p.stopped = true;
+    addArtifact(run, { type: 'execution-error', title: `Pipeline 喺「${stage.title}」中止`, content: '呢個 stage 有 agent 失敗,pipeline 已停。可重跑該 agent 或手動續行。' });
+    run.status = 'active';
+    io.emit('run-updated', publicRun(run));
+    scheduleSave();
+    return;
+  }
+  advancePipeline(run);
 }
 
 function buildExecutionPrompt(run, preset, agent, options = {}) {
@@ -759,6 +936,9 @@ function buildExecutionPrompt(run, preset, agent, options = {}) {
     isThinkingMode
       ? '- 請交付可閱讀嘅文字結果：重點結論、理據、風險、可選下一步；需要時用表格或 bullets。'
       : '- 若有測試或驗證方法，完成後請執行並回報結果。',
+    isThinkingMode
+      ? ''
+      : '- 修正紀律（重要）：完成主要工作後，最多做「一輪」自我 review + 修正就收手。唔好為咗清零散 warning 而無限重試 / 反覆改同一個位（呢樣會拖慢成個流程）。一輪之後若仲有未解決嘅 warning / 風險，唔好繼續鑽，直接喺回報度列出「剩低咩、點解、建議下一步」，留俾 Reviewer / Fix stage 處理。',
     '- 避免觸碰 secrets、SSH key、credentials、billing、安全設定。',
     '- 完成後用繁體中文 / 廣東話簡潔回報：改咗乜、測試結果、剩低風險。',
     '',
@@ -785,27 +965,80 @@ function appendAgentLog(run, agent, chunk) {
   if (agent.logs.length > MAX_LOG_CHARS) {
     agent.logs = `...[trimmed]\n${agent.logs.slice(-MAX_LOG_CHARS)}`;
   }
+  // Derive a short "current action" from the latest meaningful log line (strip ANSI).
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\x1b\[[0-9;]*m/g, '').trim())
+    .filter((line) => line && !line.startsWith('[swarm-server]'));
+  if (lines.length) agent.action = lines[lines.length - 1].slice(0, 160);
   agent.updatedAt = new Date().toISOString();
   run.updatedAt = agent.updatedAt;
-  io.emit('execution-agent-log', { runId: run.id, agentId: agent.id, chunk: text.slice(-4000) });
+  io.emit('execution-agent-log', { runId: run.id, agentId: agent.id, chunk: text.slice(-4000), action: agent.action });
   scheduleSave();
 }
 
 function startOneExecutionAgent(run, preset, options = {}) {
-  const isThinkingAgent = ["thinking", "research", "text"].includes(String(preset.deliveryMode));
-  const projectPath = isThinkingAgent ? safeProjectPath(SWARM_WORKSPACE) : safeProjectPath(run.projectPath || DEFAULT_PROJECT_ROOT);
   let agent = run.agents.find((candidate) => candidate.name === preset.name);
   if (!agent) {
     agent = makeAgent(preset.name, preset.layer, preset.role, preset.skill, run.agents.length + 1);
     run.agents.push(agent);
   }
-
   if (liveJobs.has(agent.id)) return agent;
+
+  const agentCommand = buildAgentCommand(options.cli || process.env.SWARM_AGENT_CLI, options.model);
+  const session = options.session || null;
+  agent.cli = agentCommand.label;
+  agent.model = agentCommand.model || '';
+  agent.completedAt = null;
+  if (session) {
+    agent.sessionId = session.id;
+    if (!session.agentIds.includes(agent.id)) session.agentIds.push(agent.id);
+  }
+
+  const launch = () => {
+    try {
+      spawnAgentNow(run, preset, agent, agentCommand, options);
+    } catch (e) {
+      agent.status = 'failed';
+      agent.summary = e.message;
+      agent.action = `啟動失敗:${e.message}`.slice(0, 160);
+      agent.completedAt = new Date().toISOString();
+      agent.pid = null;
+      io.emit('execution-agent-complete', { runId: run.id, agent });
+      updateSessionStatus(run, agent.sessionId);
+      io.emit('run-updated', publicRun(run));
+      pumpQueue();
+    }
+  };
+  if (liveJobs.size >= MAX_CONCURRENT) {
+    // Over the concurrency cap → queue it; show as waiting until a slot frees up.
+    agent.status = 'pending';
+    agent.action = `排隊中…（並發上限 ${MAX_CONCURRENT}）`;
+    agent.summary = '排隊等候執行 slot';
+    agent.startedAt = null;
+    spawnQueue.push(launch);
+    scheduleSave();
+    io.emit('execution-agent-started', { runId: run.id, agent });
+    io.emit('run-updated', publicRun(run));
+  } else {
+    launch();
+  }
+  return agent;
+}
+
+function spawnAgentNow(run, preset, agent, agentCommand, options = {}) {
+  if (liveJobs.has(agent.id)) return;
+  const fake = process.env.SWARM_FAKE_AGENT === '1';
+  const isThinkingAgent = ["thinking", "research", "text"].includes(String(preset.deliveryMode));
+  const projectPath = fake
+    ? require('os').tmpdir()
+    : (isThinkingAgent ? safeProjectPath(SWARM_WORKSPACE) : safeProjectPath(run.projectPath || DEFAULT_PROJECT_ROOT));
 
   agent.status = 'running';
   agent.startedAt = new Date().toISOString();
   agent.completedAt = null;
   agent.summary = 'Execution agent 正在工作中';
+  agent.action = '啟動中…';
   agent.logs = '';
   run.status = 'executing';
   run.stage = preset.layer || 'delivery';
@@ -816,11 +1049,13 @@ function startOneExecutionAgent(run, preset, options = {}) {
   io.emit('run-updated', publicRun(run));
 
   const prompt = buildExecutionPrompt(run, preset, agent, options);
-  const agentCommand = buildAgentCommand(options.cli || process.env.SWARM_AGENT_CLI);
-  appendAgentLog(run, agent, `[swarm-server] Agent CLI: ${agentCommand.label}\n`);
+  appendAgentLog(run, agent, `[swarm-server] Agent CLI: ${agentCommand.label}${agentCommand.model ? ` · ${agentCommand.model}` : ''}\n`);
+  const shell = fake
+    ? 'cd "$1"; for s in plan code test wrap; do echo "[fake] $s :: ${2:0:48}"; sleep 1; done; echo "[fake] done"'
+    : agentCommand.shell;
   const child = spawn(
     'bash',
-    ['-ic', agentCommand.shell, 'swarm-agent', projectPath, prompt],
+    ['-ic', shell, 'swarm-agent', projectPath, prompt],
     {
       cwd: projectPath,
       env: { ...process.env, TERM: process.env.TERM || 'xterm-256color' },
@@ -828,6 +1063,7 @@ function startOneExecutionAgent(run, preset, options = {}) {
     },
   );
 
+  agent.pid = child.pid || null;
   liveJobs.set(agent.id, child);
   const timer = setTimeout(() => {
     appendAgentLog(run, agent, `\n[swarm-server] Timeout after ${Math.round(EXEC_TIMEOUT_MS / 60000)} minutes. Terminating agent.\n`);
@@ -841,10 +1077,14 @@ function startOneExecutionAgent(run, preset, options = {}) {
     liveJobs.delete(agent.id);
     agent.status = 'failed';
     agent.summary = error.message;
+    agent.action = `啟動失敗:${error.message}`.slice(0, 160);
+    agent.pid = null;
     agent.completedAt = new Date().toISOString();
     addArtifact(run, { type: 'execution-error', title: `${preset.name} failed to start`, content: error.stack || error.message, agentId: agent.id });
+    updateSessionStatus(run, agent.sessionId);
     io.emit('execution-agent-complete', { runId: run.id, agent });
     io.emit('run-updated', publicRun(run));
+    pumpQueue();
   });
   child.on('close', (code, signal) => {
     clearTimeout(timer);
@@ -852,6 +1092,8 @@ function startOneExecutionAgent(run, preset, options = {}) {
     agent.status = code === 0 ? 'completed' : 'failed';
     agent.completedAt = new Date().toISOString();
     agent.summary = code === 0 ? '已完成 execution job' : `退出碼 ${code}${signal ? ` / ${signal}` : ''}`;
+    agent.action = code === 0 ? '✓ 完成' : `退出碼 ${code}${signal ? ` / ${signal}` : ''}`;
+    agent.pid = null;
     run.metrics.executionCompleted = (run.metrics.executionCompleted || 0) + 1;
     addArtifact(run, {
       type: code === 0 ? 'execution-report' : 'execution-error',
@@ -859,33 +1101,162 @@ function startOneExecutionAgent(run, preset, options = {}) {
       content: agent.logs || agent.summary,
       agentId: agent.id,
     });
-    if (!run.agents.some((item) => ['delivery', 'review'].includes(item.layer) && item.status === 'running')) {
+    updateSessionStatus(run, agent.sessionId);
+    if (!run.pipeline && !run.agents.some((item) => ['delivery', 'review'].includes(item.layer) && item.status === 'running')) {
       run.status = run.synthesis ? 'complete' : 'active';
     }
     run.updatedAt = agent.completedAt;
     scheduleSave();
     io.emit('execution-agent-complete', { runId: run.id, agent });
     io.emit('run-updated', publicRun(run));
+    pumpQueue();
   });
+}
 
-  return agent;
+// Spawn one "wave" = one session containing N agents that run in parallel.
+function runWave(run, opts) {
+  const mode = opts.deliveryMode || 'code';
+  const session = createSession(run, { title: opts.title, kind: opts.kind || mode, model: opts.model, cli: opts.cli });
+  if (opts.stageKey) session.pipelineStageKey = opts.stageKey;
+  const presets = ALL_EXECUTION_PRESETS.filter((p) => (opts.agentKeys || []).includes(p.key));
+  const per = opts.perAgentModels || {};
+  const agents = presets.map((p) => startOneExecutionAgent(run, p, {
+    deliveryMode: mode,
+    session,
+    model: (per[p.key] && per[p.key].model) || opts.model,
+    cli: (per[p.key] && per[p.key].cli) || opts.cli,
+    taskBrief: opts.taskBrief,
+  }));
+  io.emit('session-started', { runId: run.id, session });
+  io.emit('run-updated', publicRun(run));
+  scheduleSave();
+  return { session, agents };
 }
 
 function startExecutionAgents(run, keys, options = {}) {
   const mode = options.deliveryMode || options.mode || 'code';
   const defaults = ['thinking', 'research', 'text'].includes(String(mode)) ? THINKING_PRESETS : EXECUTION_PRESETS;
-  const wanted = Array.isArray(keys) && keys.length
-    ? ALL_EXECUTION_PRESETS.filter((preset) => keys.includes(preset.key))
-    : defaults;
+  // keys may be an array of strings (preset keys) OR objects { key, model, cli } for per-agent model.
+  const perKey = {};
+  let keyList = null;
+  if (Array.isArray(keys) && keys.length) {
+    keyList = keys
+      .map((entry) => {
+        if (typeof entry === 'string') return entry;
+        if (entry && entry.key) {
+          perKey[entry.key] = { model: entry.model, cli: entry.cli };
+          return entry.key;
+        }
+        return null;
+      })
+      .filter(Boolean);
+  }
+  const wanted = (keyList && keyList.length ? keyList : defaults.map((p) => p.key));
   run.metrics.deliveryMode = mode;
   run.metrics.deliverable = options.deliverable || (mode === 'code' ? 'code' : 'text');
-  run.metrics.agentCli = buildAgentCommand(options.cli || process.env.SWARM_AGENT_CLI).label;
+  run.metrics.agentCli = buildAgentCommand(options.cli || process.env.SWARM_AGENT_CLI, options.model).label;
   if (!run.background) {
     run.background = buildAutoBackground(run);
     run.backgroundSource = 'auto';
   }
   if (options.taskBrief) run.taskBrief = truncate(options.taskBrief, MAX_CONTEXT_CHARS);
-  return wanted.map((preset) => startOneExecutionAgent(run, preset, { ...options, deliveryMode: mode }));
+  return runWave(run, {
+    title: options.sessionTitle || `${mode} session`,
+    kind: mode,
+    deliveryMode: mode,
+    agentKeys: wanted,
+    model: options.model,
+    cli: options.cli,
+    perAgentModels: perKey,
+    taskBrief: options.taskBrief,
+  });
+}
+
+// ─── Staged fan-out pipeline: research → build → review, each wave parallel, waves in order ───
+function defaultStages(mode) {
+  if (['thinking', 'research', 'text'].includes(String(mode))) {
+    return [
+      { key: 'research', title: '研究 Research', kind: 'research', deliveryMode: 'thinking', agentKeys: ['researcher'] },
+      { key: 'strategy', title: '策略 Strategy', kind: 'decision', deliveryMode: 'thinking', agentKeys: ['strategist'] },
+      { key: 'synthesis', title: '交付 Synthesis', kind: 'text', deliveryMode: 'thinking', agentKeys: ['synthesis'] },
+    ];
+  }
+  return [
+    { key: 'research', title: '研究 Research', kind: 'research', deliveryMode: 'thinking', agentKeys: ['researcher'] },
+    { key: 'build', title: '建造 Build', kind: 'code', deliveryMode: 'code', agentKeys: ['frontend', 'backend', 'test'] },
+    { key: 'review', title: '覆核 Review', kind: 'review', deliveryMode: 'code', agentKeys: ['reviewer'] },
+    { key: 'fix', title: '修正 Fix', kind: 'code', deliveryMode: 'code', agentKeys: ['fixer'] },
+  ];
+}
+
+function startPipeline(run, options = {}) {
+  const mode = options.deliveryMode || 'code';
+  const stages = (Array.isArray(options.stages) && options.stages.length ? options.stages : defaultStages(mode))
+    .map((s) => ({ ...s, status: 'pending', sessionId: null }));
+  run.pipeline = {
+    mode,
+    model: options.model,
+    cli: options.cli,
+    perAgentModels: options.perAgentModels || {},
+    continueOnFail: !!options.continueOnFail,
+    stopped: false,
+    current: -1,
+    stages,
+    startedAt: new Date().toISOString(),
+  };
+  if (options.taskBrief) run.taskBrief = truncate(options.taskBrief, MAX_CONTEXT_CHARS);
+  if (!run.background) { run.background = buildAutoBackground(run); run.backgroundSource = 'auto'; }
+  run.metrics.deliveryMode = mode;
+  scheduleSave();
+  advancePipeline(run);
+  return run.pipeline;
+}
+
+function advancePipeline(run) {
+  const p = run.pipeline;
+  if (!p || p.stopped) return;
+  let next = p.current + 1;
+  while (next < p.stages.length && !(p.stages[next].agentKeys || []).length) next += 1;
+  if (next >= p.stages.length) {
+    p.current = p.stages.length;
+    run.status = run.synthesis ? 'complete' : 'active';
+    addArtifact(run, { type: 'note', title: 'Pipeline 完成 ✓', content: '所有 stage（研究 → 建造 → 覆核）已順序完成。' });
+    io.emit('run-updated', publicRun(run));
+    scheduleSave();
+    return;
+  }
+  p.current = next;
+  const stage = p.stages[next];
+  stage.status = 'running';
+  const { session } = runWave(run, {
+    title: stage.title,
+    kind: stage.kind,
+    deliveryMode: stage.deliveryMode,
+    agentKeys: stage.agentKeys,
+    model: p.model,
+    cli: p.cli,
+    perAgentModels: p.perAgentModels,
+    taskBrief: run.taskBrief,
+    stageKey: stage.key,
+  });
+  stage.sessionId = session.id;
+  io.emit('run-updated', publicRun(run));
+  scheduleSave();
+}
+
+// Resolve (or synthesize) a preset so an arbitrary agent can be re-spawned.
+function presetForAgent(agent) {
+  const byName = ALL_EXECUTION_PRESETS.find((preset) => preset.name === agent.name);
+  if (byName) return byName;
+  return {
+    key: agent.name,
+    name: agent.name,
+    layer: agent.layer || 'delivery',
+    role: agent.role || 'Agent',
+    skill: agent.skill || '',
+    scope: agent.summary || '負責本身角色範圍內嘅工作。',
+    deliveryMode: ['research', 'decision'].includes(agent.layer) ? 'thinking' : 'code',
+  };
 }
 
 function emitSnapshot() {
@@ -907,11 +1278,26 @@ app.get('/api/runs', (req, res) => {
     updatedAt: run.updatedAt,
     completedAt: run.completedAt,
     agentCount: run.agents.length,
+    runningAgents: run.agents.filter((agent) => agent.status === 'running').length,
     artifactCount: run.artifacts.length,
     contextCount: run.contextHistory.length,
+    sessionCount: (run.sessions || []).length,
+    sessions: (run.sessions || []).map((session) => ({
+      id: session.id,
+      title: session.title,
+      kind: session.kind,
+      model: session.model,
+      cli: session.cli,
+      status: session.status,
+      agentCount: (session.agentIds || []).length,
+    })),
     dynamicAgentSet: run.metrics && run.metrics.dynamicAgentSet,
   }));
   res.json({ currentRunId: store.currentRunId, runs });
+});
+
+app.get('/api/models', (req, res) => {
+  res.json({ defaultCli: DEFAULT_AGENT_CLI, models: MODEL_CATALOG });
 });
 
 app.get('/api/runs/:id', (req, res) => {
@@ -921,6 +1307,33 @@ app.get('/api/runs/:id', (req, res) => {
 
 app.get('/api/projects', (req, res) => {
   res.json({ defaultProjectRoot: DEFAULT_PROJECT_ROOT, projects: knownProjects() });
+});
+
+// Task-file picker: scan MISSION-*.md in the project root + a dedicated tasks folder.
+const SWARM_TASKS_DIR = process.env.SWARM_TASKS_DIR || path.join(process.env.HOME || '/home/hugo-orca', 'swarm-tasks');
+app.get('/api/tasks', (req, res) => {
+  const out = [];
+  const readTaskFile = (dir, file, source) => {
+    try {
+      const full = path.join(dir, file);
+      if (!fs.statSync(full).isFile()) return;
+      const raw = fs.readFileSync(full, 'utf8');
+      const titleLine = raw.split('\n').find((line) => line.trim()) || file;
+      const title = titleLine.replace(/^#+\s*/, '').replace(/^MISSION\s*[—-]\s*/i, '').trim().slice(0, 80) || file;
+      out.push({ name: file, source, title, brief: raw.slice(0, 12000) });
+    } catch (_) {}
+  };
+  try {
+    fs.readdirSync(DEFAULT_PROJECT_ROOT)
+      .filter((f) => /^MISSION-.*\.md$/i.test(f))
+      .forEach((f) => readTaskFile(DEFAULT_PROJECT_ROOT, f, 'mission'));
+  } catch (_) {}
+  try {
+    fs.readdirSync(SWARM_TASKS_DIR)
+      .filter((f) => /\.(md|markdown|txt)$/i.test(f))
+      .forEach((f) => readTaskFile(SWARM_TASKS_DIR, f, 'tasks'));
+  } catch (_) {}
+  res.json({ tasksDir: SWARM_TASKS_DIR, tasks: out.slice(0, 60) });
 });
 
 app.post('/api/runs', (req, res) => {
@@ -1069,13 +1482,88 @@ app.post('/api/runs/:id/execution/start', (req, res) => {
         })),
       });
     }
-    const agents = startExecutionAgents(run, body.agents, {
+    const { agents } = startExecutionAgents(run, body.agents, {
       cli: body.cli,
+      model: body.model,
       deliveryMode,
       deliverable,
       taskBrief: body.taskBrief,
     });
     res.json({ ok: true, agents, run });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Drop-zone one-shot: create a plan AND start its first execution session in one call.
+app.post('/api/plans/run', (req, res) => {
+  try {
+    const body = req.body || {};
+    const taskBrief = String(body.taskBrief || body.task || '').trim();
+    const topic = String(body.topic || '').trim() || (taskBrief ? taskBrief.split('\n')[0].slice(0, 70) : 'Swarm Plan');
+    const run = createRun({
+      topic,
+      taskBrief,
+      chatContext: body.chatContext,
+      sessionId: body.sessionId,
+      projectPath: body.projectPath,
+      source: body.source || 'dropzone',
+      template: body.template || 'cloudcli',
+      seed: false, // drop-zone plans start clean; agents come from the wave/pipeline we spawn
+    });
+    io.emit('swarm-start', publicRun(run));
+    const deliveryMode = body.deliveryMode || body.mode || 'code';
+    const deliverable = body.deliverable || (deliveryMode === 'code' ? 'code' : 'text');
+    if (body.staged) {
+      const pipeline = startPipeline(run, {
+        deliveryMode,
+        model: body.model,
+        cli: body.cli,
+        perAgentModels: body.perAgentModels || {},
+        stages: Array.isArray(body.stages) ? body.stages : null,
+        taskBrief,
+      });
+      emitSnapshot();
+      return res.json({ ok: true, run, pipeline });
+    }
+    const { agents } = startExecutionAgents(run, body.agents, {
+      cli: body.cli,
+      model: body.model,
+      deliveryMode,
+      deliverable,
+      taskBrief,
+      sessionTitle: body.sessionTitle,
+    });
+    emitSnapshot();
+    res.json({ ok: true, run, agents });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// Re-run a single agent (after a crash/interruption or failure).
+app.post('/api/runs/:id/agents/:agentId/rerun', (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  const agent = run.agents.find((item) => item.id === req.params.agentId);
+  if (!agent) return res.status(404).json({ error: 'agent not found' });
+  if (liveJobs.has(agent.id)) return res.status(409).json({ error: 'agent already running' });
+  try {
+    const body = req.body || {};
+    const preset = presetForAgent(agent);
+    const model = body.model || agent.model || undefined;
+    const cli = body.cli || agent.cli || undefined;
+    const session = createSession(run, { title: `Re-run · ${agent.name}`, kind: 'rerun', model, cli });
+    agent.status = 'pending';
+    startOneExecutionAgent(run, preset, {
+      session,
+      model,
+      cli,
+      deliveryMode: preset.deliveryMode || run.metrics.deliveryMode || 'code',
+    });
+    io.emit('session-started', { runId: run.id, session });
+    io.emit('run-updated', publicRun(run));
+    res.json({ ok: true, agent, session });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -1089,6 +1577,8 @@ app.get('/health', (req, res) => {
     currentRunId: store.currentRunId,
     runs: store.runs.length,
     liveJobs: liveJobs.size,
+    queued: spawnQueue.length,
+    maxConcurrent: MAX_CONCURRENT,
     agentCli: buildAgentCommand(process.env.SWARM_AGENT_CLI).label,
   });
 });
@@ -1197,6 +1687,12 @@ app.post('/events/rebuttal', (req, res) => {
 io.on('connection', (socket) => {
   console.log(`[ws] client connected (${io.engine.clientsCount} total)`);
   socket.emit('state-snapshot', publicRun(getCurrentRun()));
+  socket.on('mission:join', (room) => {
+    if (typeof room === 'string' && room.startsWith('mission-')) socket.join(room);
+  });
+  socket.on('mission:leave', (room) => {
+    if (typeof room === 'string') socket.leave(room);
+  });
   socket.on('disconnect', () => console.log(`[ws] client disconnected (${io.engine.clientsCount} total)`));
 });
 
