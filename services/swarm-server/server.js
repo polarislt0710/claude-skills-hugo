@@ -23,6 +23,43 @@ const MAX_CONTEXT_CHARS = 24000;
 const DEFAULT_AGENT_CLI = process.env.SWARM_AGENT_CLI || 'claude';
 const SWARM_WORKSPACE = process.env.SWARM_WORKSPACE || path.join(require("os").homedir(), "swarm-workspace");
 const MIROFISH_BACKEND_URL = process.env.MIROFISH_BACKEND_URL || 'http://127.0.0.1:5001';
+// Parallel build agents share one git working tree → race. SWARM_WORKTREE=1 gives
+// each parallel code agent its own git worktree, merged back after the wave.
+const SWARM_WORKTREE = process.env.SWARM_WORKTREE === '1';
+const worktreeMgr = require('./lib/mission-worktree');
+// SWARM_REVIEW_GATE=1 turns review→fix into a quality loop: reviewer emits
+// PASS/WARN/FAIL; WARN/FAIL runs fix then re-reviews, up to N iterations.
+const SWARM_REVIEW_GATE = process.env.SWARM_REVIEW_GATE === '1';
+// Default 1 fix pass (not 2) + soft mode (only FAIL loops; WARN accepted) to
+// prevent the slow multi-iteration fix storms seen in Mission Orchestrator.
+const SWARM_REVIEW_GATE_MAX = Number(process.env.SWARM_REVIEW_GATE_MAX || 1);
+const SWARM_REVIEW_GATE_STRICT = process.env.SWARM_REVIEW_GATE_STRICT === '1';
+const SWARM_GATE_TIME_BUDGET_MS = Number(process.env.SWARM_GATE_TIME_BUDGET_MS || 0);
+// ─── Swarm Council (三模議會 · Phase 2-4): 三模共識收斂 + 人手御准閘 + 人話講解 ───
+// 三個你揀嘅 model 讀真 project + plan,互相博弈到零爭議,moderator 改寫 plan.vN;
+// 收斂(或用盡 round)後停低交人手御准,批准後 explainer 用人話講解。全程沿用 CLI spawn
+// (OAuth Max,零增量成本)。全部邏輯 gate by p.mode==='council',唔影響既有 code/thinking pipeline。
+const SWARM_COUNCIL_MAX_ROUNDS = Number(process.env.SWARM_COUNCIL_MAX_ROUNDS || 6);      // 5-6 round 上限
+const SWARM_COUNCIL_TIME_BUDGET_MS = Number(process.env.SWARM_COUNCIL_TIME_BUDGET_MS || 0); // 0 = off
+const COUNCIL_DIR = (runId) => path.join(DATA_DIR, 'council', String(runId));
+// ─── Swarm Council Phase 1: 定向幕僚 chat (互動單-model brainstorm → mission brief) ───
+const MAX_CHAT_MSG_CHARS = 16000;   // 單條 message 上限
+const MAX_CHAT_TURNS = 60;          // thread 最多保留幾多 turn(超過 trim 最舊)
+const CHAT_TIMEOUT_MS = Number(process.env.SWARM_CHAT_TIMEOUT_MS || 120000); // 單 turn 上限
+// SWARM_PLAN_DECOMPOSE=1: a planner agent reads the task and splits the build
+// stage into N dependency-aware sub-phases (parallel waves), replacing the fixed
+// frontend/backend/test wave. Uses mission-wave-planner for topological waves.
+const SWARM_PLAN_DECOMPOSE = process.env.SWARM_PLAN_DECOMPOSE === '1';
+const SWARM_PLAN_MAX_PARALLEL = Number(process.env.SWARM_PLAN_MAX_PARALLEL || process.env.MISSION_PARALLEL_MAX || 3);
+const { planWaves } = require('./lib/mission-wave-planner');
+// SWARM_RUN_QUEUE=1: runs execute one-at-a-time. A RUN issued while another run
+// is executing is queued (status 'queued') and auto-started when the active one
+// finishes — instead of all runs fighting over the agent pool / 8GB RAM.
+const SWARM_RUN_QUEUE = process.env.SWARM_RUN_QUEUE === '1';
+const runQueuePending = [];
+// Mission Orchestrator soft-disabled by default — superseded by Swarm Desktop.
+// Code kept; set MISSION_ORCHESTRATOR_ENABLED=1 to re-enable the /mission routes.
+const MISSION_ORCHESTRATOR_ENABLED = process.env.MISSION_ORCHESTRATOR_ENABLED === '1';
 
 // ─── Skill Injection System ───
 // Reads skill SKILL.md files at startup and injects relevant content into agent prompts.
@@ -49,6 +86,7 @@ const SKILL_REGISTRY = {
   // standalone skills
   'brainstormers':  { standalone: 'brainstormers' },
   'taste-skill':    { standalone: 'taste-skill' },
+  'execution-discipline': { standalone: 'execution-discipline' },
 };
 
 function resolveSkillPath(entry) {
@@ -75,7 +113,7 @@ function stripFrontmatter(content) {
   return match ? content.slice(match[0].length) : content;
 }
 
-const MAX_SKILL_CHARS = 3000;
+const MAX_SKILL_CHARS = 6000;
 
 function loadSkills() {
   const cache = {};
@@ -150,7 +188,60 @@ const EXECUTION_PRESETS = [
     skill: 'targeted fixes / apply review feedback / verify',
     scope: '讀上一個 Reviewer Agent 嘅報告（尤其「FIX_NEEDED:」嗰行）。只修🔴必修項，一次過修晒，修完跑一次測試 / 驗證確認冇 leftover warning。🟡建議項同需要架構決策 / 使錢 / 改 schema 嘅深層問題唔好自作主張，改為清楚 flag 出嚟留俾 Hugo。鐵則：最多做一輪修正，唔好無限重試；若一輪修唔好，停低並寫低剩低咩、點解、建議下一步。不要 revert 其他 agent 工作。',
   },
+  {
+    key: 'verifier',
+    name: 'Verifier Agent',
+    layer: 'review',
+    role: '實測驗證',
+    skill: 'run acceptance commands / paste real output / evidence-gated sign-off',
+    scope: '你係最後一關，唔係睇 code，係**真係去 run**。讀 task 嘅驗收條件（acceptance / 「如何驗證」），逐條**實際執行對應指令**（curl / 查 DB / 跑 test / 開 app），並將**真實 output 原文貼返出嚟**做證據。鐵則：唔准淨係講「應該 work」；冇貼到 output 就當未過。任何一條驗收 fail、或者需要嘅嘢做唔到（缺密碼 / 權限）→ 唔好扮過到，照實報告。最後**獨立一行**輸出裁決：全部實測通過寫「VERIFY: PASS」；有 fail 寫「VERIFY: FAIL: <逐項 + 實際 output>」；做唔到驗證寫「VERIFY: BLOCKED: <缺咩>」。不要 revert 其他 agent 工作。',
+  },
 ];
+
+// ─── Swarm Council system prompts (注入 preset.scope) ───
+const COUNCIL_REVIEWER_SCOPE = [
+  '你係「三模議會」三個共識評審之一。另外仲有兩個*唔同 model* 嘅評審同你並行,之後有一個 moderator 會 merge 大家意見、改寫 plan。',
+  '你嘅 cwd 就係真實 project 根目錄。你**必須真係用 Read / grep / Bash(ls/cat/git log)去查項目入面嘅實際文件**先發言,唔准淨係讀 plan 文字就估。',
+  '輸入:① 當前 plan(喺下面 task brief)② project 實際 code / 結構 / config。',
+  '根據 goal,逐點寫低你嘅評審:',
+  '1. 要改善:plan 邊度弱、漏咗咩、邊度過度設計。',
+  '2. 要做 / 要捉(fix)/ 要加:實際 code 入面有咩 bug / 缺口 / 風險要喺 plan 反映。',
+  '3. 環節之間關係:步驟之間嘅連扣、依賴、UI、UX、data flow 有冇斷層或矛盾。',
+  '博弈紀律:主動挑另外兩位(上一 round)嘅論點骨頭,標出歧義同矛盾。目標係**傾到三個全部同意、零爭議**。同意就講同意,唔好為拗而拗。',
+  '**唔好自己直接改 plan 文字檔** —— 你只負責提出結構化改動建議,由 moderator 落實(避免三人撞同一個 file)。',
+  '最後**必須**用呢個固定格式收尾(俾機器 parse,前後唔好加多餘文字):',
+  'CONSENSUS: AGREE        # 或 DISPUTE(你對當前 plan 仲有未解爭議)',
+  'OPEN_ISSUES:',
+  '- [id] 一句講清未解爭議 / 要 moderator 仲裁嘅點(AGREE 就寫「(none)」)',
+  'PROPOSED_CHANGES:',
+  '- 對 plan 嘅具體改動(patch 級描述:邊段、改成點)',
+].join('\n');
+
+const COUNCIL_MODERATOR_SCOPE = [
+  '你係「三模議會」嘅 moderator(仲裁收斂)。讀下面 task brief 入面三個評審(A/B/C)今 round 嘅完整輸出 + 當前 plan。',
+  '1. Merge:將三人嘅 PROPOSED_CHANGES 合併、去重、解衝突,**改寫出新一版完整 plan**。三人有衝突嘅地方,揀技術上最穩陣嗰個,並一句講點解。若某評審缺席(fail),照 merge 在席者意見,唔好因為少咗一把聲就 block。',
+  '2. 重新評估每條 OPEN_ISSUES:已解決就剔走;仍未解就保留,標明邊位提出、卡喺邊。',
+  '3. **必須**將新 plan 全文用呢個 fenced block 輸出(系統會寫去 plan.vN.md):',
+  '```plan-final',
+  '<完整 markdown plan 全文>',
+  '```',
+  '4. 之後**必須**用呢個固定格式收尾(俾機器 parse):',
+  'COUNCIL: CONVERGED      # 三人零未解爭議;仲有爭議就寫 OPEN',
+  'OPEN_DISPUTES: <整數>',
+  'DISPUTES:',
+  '- [id] 一句講未解爭議(CONVERGED 就寫「(none)」)',
+].join('\n');
+
+const COUNCIL_EXPLAINER_SCOPE = [
+  '你向一個**非技術**用戶講解最終 plan。讀下面 task brief 入面嘅終稿 plan。',
+  '用**最短、結果論導向嘅人話(繁體中文 / 廣東話)**,唔好複述步驟細節,只答五件事,每段最多 2-3 句:',
+  '**做乜**:一句講要達成咩。',
+  '**點解**:解決緊咩痛點。',
+  '**出咩**:用戶最後攞到咩成果。',
+  '**幾耐**:粗略時間 / 工序量級。',
+  '**風險**:最值得擔心嘅 1-2 點 + 點 mitigate。',
+  '唔好 emoji、唔好 marketing 語、唔好「綜上所述」。直接俾人睇得明、肯撳批准。',
+].join('\n');
 
 const THINKING_PRESETS = [
   {
@@ -183,6 +274,67 @@ const THINKING_PRESETS = [
     deliveryMode: 'thinking',
     deliverable: 'text',
   },
+  {
+    key: 'planner',
+    name: 'Planner Agent',
+    layer: 'research',
+    role: '規劃拆解',
+    skill: 'plan decomposition / dependency analysis / vertical slicing',
+    scope: '讀 task,將「建造」工作拆成自包含、可獨立驗證嘅 sub-phase,標明依賴同預計改嘅檔案。',
+    deliveryMode: 'thinking',
+    deliverable: 'plan',
+  },
+  // ── Swarm Council (三模議會) presets ── 3 reviewer 共用同一 prompt,per-key 指定唔同 model
+  {
+    key: 'council_a',
+    name: 'Council Reviewer A',
+    layer: 'research',
+    role: '共識評審 A',
+    skill: 'critique / improve / dispute-tagging',
+    scope: COUNCIL_REVIEWER_SCOPE,
+    deliveryMode: 'thinking',
+    deliverable: 'consensus-review',
+  },
+  {
+    key: 'council_b',
+    name: 'Council Reviewer B',
+    layer: 'research',
+    role: '共識評審 B',
+    skill: 'critique / improve / dispute-tagging',
+    scope: COUNCIL_REVIEWER_SCOPE,
+    deliveryMode: 'thinking',
+    deliverable: 'consensus-review',
+  },
+  {
+    key: 'council_c',
+    name: 'Council Reviewer C',
+    layer: 'research',
+    role: '共識評審 C',
+    skill: 'critique / improve / dispute-tagging',
+    scope: COUNCIL_REVIEWER_SCOPE,
+    deliveryMode: 'thinking',
+    deliverable: 'consensus-review',
+  },
+  {
+    key: 'moderator',
+    name: 'Council Moderator',
+    layer: 'decision',
+    role: '仲裁收斂',
+    skill: 'merge proposals / resolve disputes / rewrite plan',
+    scope: COUNCIL_MODERATOR_SCOPE,
+    deliveryMode: 'thinking',
+    deliverable: 'plan',
+  },
+  {
+    key: 'explainer',
+    name: 'Plan Explainer',
+    layer: 'delivery',
+    role: '人話講解',
+    skill: 'plain-language summary / outcome-first',
+    scope: COUNCIL_EXPLAINER_SCOPE,
+    deliveryMode: 'thinking',
+    deliverable: 'text',
+  },
 ];
 
 const ALL_EXECUTION_PRESETS = [...EXECUTION_PRESETS, ...THINKING_PRESETS];
@@ -193,20 +345,32 @@ console.log('[skill-inject] loaded ' + Object.keys(SKILL_CACHE).length + ' / ' +
 
 // Agent preset key -> list of skill cache keys to inject
 const AGENT_SKILL_MAP = {
+  planner:     ['architect', 'brainstormers'],
   frontend:    ['typography', 'color', 'layout', 'components', 'taste-skill', 'performance-engineer'],
   backend:     ['architect', 'debugger', 'performance-engineer'],
   test:        ['debugger', 'reviewer-persona'],
   reviewer:    ['reviewer-persona', 'security-auditor', 'refactor-engineer'],
   fixer:       ['debugger', 'refactor-engineer'],
+  verifier:    ['debugger', 'reviewer-persona'],
   researcher:  ['brainstormers'],
   strategist:  ['brainstormers', 'architect'],
   synthesis:   ['brainstormers'],
+  // Swarm Council — 故意俾 3 reviewer 唔同 skill mix(除咗共有 reviewer-persona),增加博弈視角多樣性
+  council_a:   ['brainstormers', 'architect', 'reviewer-persona'],
+  council_b:   ['architect', 'reviewer-persona', 'security-auditor'],
+  council_c:   ['brainstormers', 'refactor-engineer', 'reviewer-persona'],
+  moderator:   ['architect', 'reviewer-persona'],
+  explainer:   [],  // 只靠 execution-discipline + tone prompt,免污染人話 tone
 };
 
 function getSkillContent(presetKey) {
-  const skillKeys = AGENT_SKILL_MAP[presetKey];
-  if (!skillKeys || skillKeys.length === 0) return '';
   const sections = [];
+  // 執行紀律 — 鐵則，所有 agent 一律注入（唔理 presetKey），凌駕其他 skill。
+  const discipline = SKILL_CACHE['execution-discipline'];
+  if (discipline) {
+    sections.push('### 執行紀律（鐵則 · 必讀必跟）\n' + discipline);
+  }
+  const skillKeys = AGENT_SKILL_MAP[presetKey] || [];
   for (const sk of skillKeys) {
     const content = SKILL_CACHE[sk];
     if (content) {
@@ -264,7 +428,13 @@ app.get('/mirofish/*', (req, res) => {
 app.use('/automation', require('./routes/automation'));
 
 // Mission Controller v2 — handoff plan → coding → refill → review pipeline
-app.use('/mission', require('./routes/mission')(io));
+if (MISSION_ORCHESTRATOR_ENABLED) {
+  app.use('/mission', require('./routes/mission')(io));
+} else {
+  // Soft-disabled: functionality moved to Swarm Desktop. Set
+  // MISSION_ORCHESTRATOR_ENABLED=1 to re-enable. Code is kept intact.
+  app.use('/mission/api', (req, res) => res.status(410).json({ error: 'Mission Orchestrator 已停用,功能遷移到 Swarm Desktop。需要回復:MISSION_ORCHESTRATOR_ENABLED=1。' }));
+}
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -415,6 +585,12 @@ function normalizeRun(run) {
   run.background = typeof run.background === 'string' ? run.background : '';
   run.backgroundSource = run.backgroundSource || (run.background ? 'manual' : '');
   run.taskBrief = typeof run.taskBrief === 'string' ? run.taskBrief : '';
+  // 定向幕僚 chat (Phase 1)
+  run.chatThread = Array.isArray(run.chatThread) ? run.chatThread : [];
+  run.chatModel = run.chatModel || null;
+  run.chatProjectPath = run.chatProjectPath || null;
+  run.chatBusy = !!run.chatBusy;
+  run.missionBrief = run.missionBrief || null;
   return run;
 }
 
@@ -607,6 +783,11 @@ function createRun({ topic, personas, chatContext, sessionId, projectPath, sourc
     background: background || '',
     backgroundSource: background ? 'manual' : '',
     taskBrief: taskBrief || '',
+    chatThread: [],
+    chatModel: null,
+    chatProjectPath: null,
+    chatBusy: false,
+    missionBrief: null,
     startedAt: now,
     updatedAt: now,
     completedAt: null,
@@ -726,6 +907,11 @@ function freshIdleState() {
     background: '',
     backgroundSource: '',
     taskBrief: '',
+    chatThread: [],
+    chatModel: null,
+    chatProjectPath: null,
+    chatBusy: false,
+    missionBrief: null,
     proposals: {},
     debates: [],
     synthesis: null,
@@ -850,6 +1036,102 @@ function buildAgentCommand(cliName, model) {
   };
 }
 
+// ─── 定向幕僚 chat helpers (Phase 1) ───
+function pushChatMessage(run, partial) {
+  const msg = {
+    id: id('chat'),
+    role: partial.role || 'assistant',
+    content: truncate(partial.content || '', MAX_CHAT_MSG_CHARS),
+    model: partial.model || '',
+    cli: partial.cli || '',
+    ts: new Date().toISOString(),
+    usedProjectPath: partial.usedProjectPath || null,
+    durationMs: partial.durationMs || null,
+    status: partial.status || 'ok',
+    error: partial.error || null,
+  };
+  if (!Array.isArray(run.chatThread)) run.chatThread = [];
+  run.chatThread.push(msg);
+  if (run.chatThread.length > MAX_CHAT_TURNS) run.chatThread = run.chatThread.slice(-MAX_CHAT_TURNS);
+  run.updatedAt = msg.ts;
+  scheduleSave();
+  return msg;
+}
+
+function resolveChatModel(run, override) {
+  if (override && typeof override === 'object' && override.model) {
+    return { cli: override.cli || 'claude', model: safeModelFlag(override.model) };
+  }
+  if (typeof override === 'string' && override) {
+    const hit = MODEL_CATALOG.find((m) => m.model === override || m.short === override);
+    if (hit) return { cli: hit.cli, model: hit.model };
+  }
+  if (run.chatModel && run.chatModel.model) return run.chatModel;
+  return { cli: 'claude', model: 'sonnet' };
+}
+
+function stripChatNoise(s) {
+  return String(s || '')
+    .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')        // ANSI escape
+    .replace(/^\[swarm-[^\]]*\][^\n]*$/gm, '')      // 自家 log 行
+    .trim();
+}
+
+const CHAT_PROMPT_MAX_CHARS = 90000; // 控 argv $2 長度(Linux MAX_ARG_STRLEN ~128KB)
+function buildChatPrompt(run, chatCwd, finalize) {
+  const head = [
+    '你係 Swarm Dashboard 嘅「策劃幕僚」,同用戶一對一傾偈,用繁體中文 / 廣東話。',
+    '目標:透過多回合對話,幫用戶由模糊念頭收斂成一份清晰、可執行嘅 mission brief(之後交俾三模議會落地)。',
+    '風格:精簡、直接、追問最關鍵嘅缺口;唔肯定就問,唔好自己亂作 plan 細節。',
+  ];
+  if (chatCwd) head.push(
+    '',
+    `用戶揀咗一個 project:${chatCwd}`,
+    '你而家身處呢個 project 根目錄,可以用 Read / Bash(ls/cat/grep/git log)查實際文件先答,唔好淨係靠估。引用文件寫清楚 path。brainstorm 階段唔好改任何 file。'
+  );
+  head.push('', `Run topic:${run.topic || '(未定)'}`, '', '──────── 對話紀錄 ────────');
+  let convo = (run.chatThread || []).map((m) => {
+    const who = m.role === 'user' ? '【用戶】' : (m.role === 'assistant' ? '【幕僚（你）】' : '【系統】');
+    return `${who}\n${m.content}`;
+  }).join('\n\n');
+  if (convo.length > CHAT_PROMPT_MAX_CHARS) convo = '…(略去較舊對話)…\n\n' + convo.slice(-CHAT_PROMPT_MAX_CHARS);
+  const tail = finalize
+    ? '\n──────── 請將以上對話收斂成一份完整 mission brief markdown ────────\n結構:## 目標 / ## 範圍同約束 / ## 建議步驟 / ## 風險 / ## 成功標準。淨係輸出 markdown 本身,前後唔好加客套說話。'
+    : '\n──────── 請你(幕僚)回覆最新一條用戶訊息 ────────';
+  return [head.join('\n'), convo, tail].join('\n');
+}
+
+// 獨立 chat spawner:唔行 spawnAgentNow/session/pipeline,唔掂 run.status/metrics(故 chat 唔會觸發 pipeline auto-advance)。
+// prompt 經 argv $2(同 agent 一致),靠 CHAT_PROMPT_MAX_CHARS 控長度。
+function spawnChatTurn(run, picked, chatCwd, finalize) {
+  return new Promise((resolve, reject) => {
+    const cmd = buildAgentCommand(picked.cli, picked.model);
+    const prompt = buildChatPrompt(run, chatCwd, finalize);
+    let cwd;
+    try { cwd = chatCwd ? safeProjectPath(chatCwd) : safeProjectPath(SWARM_WORKSPACE); }
+    catch (e) { return reject(new Error('cwd 無效: ' + e.message)); }
+    io.emit('chat-thinking', { runId: run.id, on: true, model: picked.model, finalize: !!finalize });
+    const started = Date.now();
+    let out = '', err = '', killed = false;
+    const child = spawn('bash', ['-ic', cmd.shell, 'swarm-chat', cwd, prompt], {
+      cwd, env: { ...process.env, TERM: process.env.TERM || 'xterm-256color' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const timer = setTimeout(() => { killed = true; try { child.kill('SIGTERM'); } catch (_) {} }, CHAT_TIMEOUT_MS);
+    child.stdout.on('data', (c) => { out += c.toString(); });
+    child.stderr.on('data', (c) => { err += c.toString(); });
+    child.on('error', (e) => { clearTimeout(timer); io.emit('chat-thinking', { runId: run.id, on: false }); reject(e); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      io.emit('chat-thinking', { runId: run.id, on: false });
+      const durationMs = Date.now() - started;
+      if (killed) return reject(new Error(`思考超時(${Math.round(CHAT_TIMEOUT_MS / 1000)}s)`));
+      if (code !== 0) return reject(new Error(`${cmd.label} exit ${code}: ${stripChatNoise(err || out).slice(-300)}`));
+      resolve({ text: stripChatNoise(out) || '(冇輸出)', durationMs, cli: picked.cli, model: picked.model });
+    });
+  });
+}
+
 // ─── Sessions (Plan → Session → Agent nesting) ───
 function createSession(run, { title, kind, model, cli } = {}) {
   if (!Array.isArray(run.sessions)) run.sessions = [];
@@ -869,6 +1151,30 @@ function createSession(run, { title, kind, model, cli } = {}) {
   return session;
 }
 
+// Barrier after a parallel code wave: merge each agent's worktree back into the
+// main repo serially, then clean up. Clean merge → kept; conflict → keep the
+// branch + warn (no half-merge) so the next stage still builds on a solid HEAD.
+function mergeSessionWorktrees(run, session) {
+  const repo = safeProjectPath(run.projectPath || DEFAULT_PROJECT_ROOT);
+  for (const wt of session.worktrees) {
+    try {
+      worktreeMgr.commitWorktree({ dir: wt.dir, message: `swarm ${run.id} ${wt.key}` });
+      const merge = worktreeMgr.mergeWorktree({ repo, branch: wt.branch, message: `swarm ${run.id}: merge ${wt.key}` });
+      worktreeMgr.removeWorktree({ repo, dir: wt.dir, branch: merge.conflict ? null : wt.branch });
+      if (!merge.ok && merge.conflict) {
+        addArtifact(run, {
+          type: 'execution-error',
+          title: `Worktree merge 撞 file: ${wt.key}`,
+          content: `衝突檔案: ${(merge.conflictFiles || []).join(', ') || '(未知)'}\n已 abort merge（主 repo 保持乾淨）。${wt.key} 嘅改動留喺 branch \`${wt.branch}\`,可手動 merge。`,
+        });
+      }
+    } catch (e) {
+      addArtifact(run, { type: 'execution-error', title: `Worktree 處理失敗: ${wt.key}`, content: e.message });
+    }
+  }
+  session.worktreesMerged = true;
+}
+
 function updateSessionStatus(run, sessionId) {
   if (!sessionId) return;
   const session = (run.sessions || []).find((item) => item.id === sessionId);
@@ -881,12 +1187,274 @@ function updateSessionStatus(run, sessionId) {
   if (justFinished) {
     session.status = anyFailed ? 'failed' : 'complete';
     session.completedAt = new Date().toISOString();
+    if (SWARM_WORKTREE && Array.isArray(session.worktrees) && session.worktrees.length) {
+      mergeSessionWorktrees(run, session);
+    }
   }
   io.emit('session-updated', { runId: run.id, session });
   if (justFinished) maybeAdvancePipeline(run, session);
 }
 
 // When a pipeline stage's session finishes, auto-start the next stage (staged fan-out).
+// Parse the planner agent's ```subphases JSON block from its logs.
+function parsePlannerSubphases(run, session) {
+  const agents = run.agents.filter((a) => a.sessionId === session.id);
+  const planner = agents.find((a) => a.layer === 'research') || agents[0];
+  const logs = (planner && planner.logs) || '';
+  const m = logs.match(/```subphases\s*\n([\s\S]*?)\n```/);
+  if (!m) return null;
+  try {
+    const parsed = JSON.parse(m[1].trim());
+    return Array.isArray(parsed.phases) && parsed.phases.length ? parsed.phases : null;
+  } catch {
+    return null;
+  }
+}
+
+// Turn planner sub-phases into dependency-ordered build wave stages, each with
+// dynamic per-sub-phase agents (worktree-isolated when a wave has >1).
+function generateBuildWaves(phases) {
+  const subPhases = phases.map((p, i) => ({
+    id: String(p.id || `p${i + 1}`),
+    title: String(p.title || `Sub-phase ${i + 1}`),
+    scope_md: String(p.scope_md || p.scope || ''),
+    dependencies: Array.isArray(p.dependencies) ? p.dependencies : [],
+    estFiles: Array.isArray(p.est_files) ? p.est_files : (Array.isArray(p.estFiles) ? p.estFiles : []),
+  }));
+  let plan;
+  try {
+    plan = planWaves(subPhases, { maxConcurrency: SWARM_PLAN_MAX_PARALLEL });
+  } catch (e) {
+    return { error: e.message, stages: [] };
+  }
+  const byId = new Map(subPhases.map((sp) => [sp.id, sp]));
+  const stages = plan.waves.map((wave, wi) => ({
+    key: `build-w${wi + 1}`,
+    title: `建造 Build · wave ${wi + 1}`,
+    kind: 'code',
+    deliveryMode: 'code',
+    status: 'pending',
+    sessionId: null,
+    dynamicAgents: wave.map((spStub) => {
+      const sp = byId.get(spStub.id) || spStub;
+      return {
+        key: `build-${sp.id}`,
+        name: `Build ${sp.id}: ${sp.title}`.slice(0, 58),
+        layer: 'delivery',
+        role: '建造',
+        skill: 'targeted implementation per sub-phase scope',
+        scope: '按下面 sub-phase scope 實作,只做你 scope 範圍內嘅嘢,避免改其他 sub-phase 嘅檔案。',
+        subScope: sp.scope_md,
+        deliveryMode: 'code',
+      };
+    }),
+  }));
+  return { stages, warnings: plan.warnings };
+}
+
+// Read the reviewer agent's PASS/WARN/FAIL verdict from its logs. No explicit
+// verdict → WARN (conservative: run one fix pass rather than blindly accepting).
+function parseVerdict(run, session) {
+  const agents = run.agents.filter((a) => a.sessionId === session.id);
+  const reviewer = agents.find((a) => a.layer === 'review') || agents[0];
+  const logs = (reviewer && reviewer.logs) || '';
+  const m = logs.match(/VERDICT\s*[:：]?\s*[`'"]?\s*(PASS|WARN|FAIL)/i)
+    || logs.match(/\*\*\s*Verdict\s*\*\*\s*[:：]?\s*[`'"]?\s*(PASS|WARN|FAIL)/i);
+  return m ? m[1].toUpperCase() : 'WARN';
+}
+
+// ─── Swarm Council parsers + plan IO (三模議會) ───
+// 讀最新一版 plan(plan.vN.md);冇就 fallback brief.md → run.taskBrief。
+function readLatestPlan(run) {
+  const dir = COUNCIL_DIR(run.id);
+  try {
+    const files = fs.readdirSync(dir)
+      .filter((f) => /^plan\.v\d+\.md$/.test(f))
+      .sort((a, b) => Number(a.match(/\d+/)[0]) - Number(b.match(/\d+/)[0]));
+    if (files.length) {
+      const last = files[files.length - 1];
+      return { v: Number(last.match(/\d+/)[0]), md: fs.readFileSync(path.join(dir, last), 'utf8') };
+    }
+  } catch (_) {}
+  try { return { v: 0, md: fs.readFileSync(path.join(dir, 'brief.md'), 'utf8') }; } catch (_) {}
+  return { v: 0, md: run.taskBrief || run.background || '' };
+}
+
+function writeCouncilPlan(run, version, md) {
+  const dir = COUNCIL_DIR(run.id);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `plan.v${version}.md`), md || '');
+  } catch (e) {
+    console.warn('[council] writeCouncilPlan failed:', e.message);
+  }
+}
+
+// 由 consensus session 嘅 reviewer logs 抽 CONSENSUS + OPEN_ISSUES。只 map 有 logs 嘅 agent →
+// glm 等 fail 咗就自動 degrade(在席者照計)。
+function parseCouncilReviews(run, session) {
+  const agents = run.agents.filter((a) => a.sessionId === session.id);
+  return agents.map((a) => {
+    const logs = a.logs || '';
+    const verdict = (logs.match(/CONSENSUS\s*[:：]\s*(AGREE|DISPUTE)/i) || [])[1] || 'DISPUTE';
+    const issues = (logs.match(/OPEN_ISSUES:\s*\n([\s\S]*?)(?:\nPROPOSED_CHANGES:|\n```|$)/i) || [, ''])[1];
+    return {
+      name: a.name, model: a.model || '',
+      agree: /AGREE/i.test(verdict),
+      failed: a.status === 'failed' || a.status === 'interrupted',
+      issuesRaw: (issues || '').trim(), logs,
+    };
+  });
+}
+
+// 由 moderator session 抽 plan-final 全文 + 收斂判定(CONVERGED + OPEN_DISPUTES)。
+function parseModerator(run, session) {
+  const agents = run.agents.filter((a) => a.sessionId === session.id);
+  const mod = agents.find((a) => a.layer === 'decision') || agents[0];
+  const logs = (mod && mod.logs) || '';
+  const planMd = (logs.match(/```plan-final\s*\n([\s\S]*?)\n```/) || [, ''])[1].trim();
+  const converged = /COUNCIL\s*[:：]\s*CONVERGED/i.test(logs);
+  const openMatch = logs.match(/OPEN_DISPUTES\s*[:：]\s*(\d+)/i);
+  const openDisputes = openMatch ? Number(openMatch[1]) : (converged ? 0 : 99);
+  const disputes = (logs.match(/DISPUTES:\s*\n([\s\S]*?)$/i) || [, ''])[1].trim();
+  return { planMd, converged, openDisputes, disputes, logs };
+}
+
+// Re-run the review stage after a fix pass (reset review + fix stages to pending,
+// rewind current so advancePipeline re-enters review).
+function loopBackToReview(run, p) {
+  const reviewIdx = p.stages.findIndex((s) => s.gate);
+  if (reviewIdx < 0) { p.gateDone = true; advancePipeline(run); return; }
+  // Time-budget guard: if the pipeline already ran too long, stop looping and
+  // finish — don't keep burning fix sessions.
+  if (SWARM_GATE_TIME_BUDGET_MS > 0) {
+    const elapsed = Date.now() - new Date(p.startedAt).getTime();
+    if (elapsed > SWARM_GATE_TIME_BUDGET_MS) {
+      p.gateDone = true;
+      p.stages.forEach((s) => { if (s.isFix) { s.agentKeys = []; s.status = 'skipped'; } });
+      addArtifact(run, { type: 'note', title: '⏱ 覆核 Gate: 時間預算用盡', content: `已跑 ${Math.round(elapsed / 60000)} 分鐘,停止 fix loop,剩餘問題人手跟進。` });
+      advancePipeline(run);
+      return;
+    }
+  }
+  for (let i = reviewIdx; i < p.stages.length; i += 1) {
+    p.stages[i].status = 'pending';
+    p.stages[i].sessionId = null;
+  }
+  p.current = reviewIdx - 1;
+  addArtifact(run, {
+    type: 'note',
+    title: `🔁 覆核 Gate: ${p.gateVerdict} → 第 ${p.gateIteration} 次修正後 re-review`,
+    content: `Reviewer 裁決 ${p.gateVerdict},已跑 fix,重新覆核（iteration ${p.gateIteration}/${p.maxGateIterations}）。`,
+  });
+  advancePipeline(run);
+}
+
+// ─── Swarm Council 收斂引擎 (三模議會) ───
+// consensus wave 完 → 砌 moderator input(plan + 三人全文) → 行 moderator;
+// moderator wave 完 → 寫 plan vN、判收斂(CONVERGED 且 未解==0)/rewind 再 round/pause 交人手。
+function advanceCouncil(run, p, stage, session) {
+  p.councilRound = p.councilRound || 1;
+
+  // (A) consensus wave 完 → moderator
+  if (stage.kind === 'consensus') {
+    stage.status = 'complete';
+    const reviews = parseCouncilReviews(run, session);
+    stage.reviews = reviews.map((r) => ({ name: r.name, model: r.model, agree: r.agree, failed: r.failed }));
+    const present = reviews.filter((r) => !r.failed && r.logs.trim());
+    const plan = readLatestPlan(run);
+    run.taskBrief = truncate(
+      `## Goal\n${run.background || run.topic || ''}\n\n## 當前 Plan (v${plan.v})\n${plan.md}\n\n` +
+      present.map((r) => `## 評審 ${r.name}${r.model ? ` (${r.model})` : ''} 輸出\n${r.logs}`).join('\n\n') +
+      (present.length < reviews.length ? `\n\n(註:${reviews.length - present.length} 位評審缺席/失敗,照 merge 在席者)` : ''),
+      MAX_CONTEXT_CHARS);
+    // 第一輪三模獨立 review 完 → 停低俾用戶睇齊三份 + 撳「開始拗」先入辯論收斂
+    if (p.councilRound === 1 && !p.councilDebateStarted) {
+      pauseForReviewGate(run, p, reviews);
+      return;
+    }
+    advancePipeline(run);
+    return;
+  }
+
+  // (B) moderator wave 完 → 寫 plan vN、判收斂
+  stage.status = 'complete';
+  const mod = parseModerator(run, session);
+  const nextV = (readLatestPlan(run).v || 0) + 1;
+  if (mod.planMd) { writeCouncilPlan(run, nextV, mod.planMd); p.councilPlanVersion = nextV; }
+  p.councilOpenDisputes = mod.openDisputes;
+  p.councilDisputes = mod.disputes;
+  addArtifact(run, {
+    type: 'note',
+    title: `🗳 共識 Round ${p.councilRound}/${SWARM_COUNCIL_MAX_ROUNDS} → plan v${p.councilPlanVersion}`,
+    content: `未解爭議: ${mod.openDisputes}\n${mod.disputes || '(none)'}${mod.planMd ? '' : '\n⚠ moderator 未輸出 plan-final block,沿用上一版。'}`,
+  });
+
+  const converged = mod.converged && mod.openDisputes === 0;
+  const maxedOut = p.councilRound >= SWARM_COUNCIL_MAX_ROUNDS;
+  const overBudget = SWARM_COUNCIL_TIME_BUDGET_MS > 0 &&
+    (Date.now() - new Date(p.startedAt).getTime()) > SWARM_COUNCIL_TIME_BUDGET_MS;
+  if (converged || maxedOut || overBudget) {
+    pauseForHumanGate(run, p, { converged, maxedOut, overBudget });
+    return;
+  }
+
+  // 未收斂 → rewind consensus+moderator stage,round+1,plan vN 做下一 round input
+  p.councilRound += 1;
+  const cIdx = p.stages.findIndex((s) => s.kind === 'consensus');
+  for (let i = cIdx; i < p.stages.length && ['consensus', 'moderator'].includes(p.stages[i].kind); i += 1) {
+    p.stages[i].status = 'pending';
+    p.stages[i].sessionId = null;
+  }
+  const plan = readLatestPlan(run);
+  run.taskBrief = truncate(
+    `## Goal\n${run.background || run.topic || ''}\n\n## 要評審嘅當前 Plan (v${plan.v})\n${plan.md}\n\n` +
+    `## 上一 round 未解爭議(請優先處理 / 表態)\n${mod.disputes || '(none)'}`,
+    MAX_CONTEXT_CHARS);
+  p.current = cIdx - 1;
+  io.emit('run-updated', publicRun(run));
+  advancePipeline(run);
+}
+
+// Phase 3 御准閘:收斂(或用盡 round)後停低,唔自動 advance,等用戶撳批准 / 再改。
+function pauseForHumanGate(run, p, why) {
+  p.stopped = true;
+  p.councilPaused = true;
+  const plan = readLatestPlan(run);
+  const reason = why.converged ? '三模零爭議收斂'
+    : (why.maxedOut ? `用盡 ${SWARM_COUNCIL_MAX_ROUNDS} round` : '時間預算用盡');
+  addArtifact(run, {
+    type: 'council-gate',
+    title: `⏸ 御准閘:${reason}（plan v${p.councilPlanVersion}）`,
+    content: `# Plan 終稿 v${p.councilPlanVersion}\n\n${plan.md}\n\n---\n## 未解爭議 (${p.councilOpenDisputes == null ? 0 : p.councilOpenDisputes})\n${p.councilDisputes || '(無 — 全部收斂)'}\n\n_撳「✅ 批准」出人話講解,或「✍️ 再改」加指示重跑一 round。_`,
+  });
+  run.status = 'active';
+  io.emit('run-updated', publicRun(run));
+  io.emit('council-paused', { runId: run.id, planVersion: p.councilPlanVersion, openDisputes: p.councilOpenDisputes });
+  scheduleSave();
+}
+
+// Review 閘:第一輪三模獨立 review(每個自己掃 project + plan)完,停低俾用戶睇齊三份,
+// 撳「開始拗」先入 moderator + 辯論收斂。
+function pauseForReviewGate(run, p, reviews) {
+  p.stopped = true;
+  p.councilReviewPaused = true;
+  const body = reviews.map((r) => {
+    const head = `### ${r.name}${r.model ? ` · ${r.model}` : ''}${r.failed ? ' ⚠(缺席/失敗)' : ''} — ${r.agree ? '同意' : '有異議'}`;
+    const txt = (r.logs || '').trim().slice(-3000) || '(冇輸出)';
+    return `${head}\n\n${txt}`;
+  }).join('\n\n---\n\n');
+  addArtifact(run, {
+    type: 'council-review-gate',
+    title: `🔎 三模獨立 review（${reviews.length} 份）— 撳「開始拗」入辯論`,
+    content: `# 三模獨立 review\n三個 model 各自掃過 project + plan,以下係佢哋嘅獨立評審。睇完撳「🥊 開始拗」,佢哋就會互相挑戰、收斂改 plan。\n\n${body}`,
+  });
+  run.status = 'active';
+  io.emit('run-updated', publicRun(run));
+  io.emit('council-review-paused', { runId: run.id, reviewCount: reviews.length });
+  scheduleSave();
+}
+
 function maybeAdvancePipeline(run, session) {
   const p = run.pipeline;
   if (!p || p.stopped || !Array.isArray(p.stages) || !p.stages[p.current]) return;
@@ -901,8 +1469,94 @@ function maybeAdvancePipeline(run, session) {
     scheduleSave();
     return;
   }
+
+  // ── Swarm Council consensus loop (三模議會):consensus → moderator → 收斂/rewind/pause ──
+  if (p.mode === 'council' && (stage.kind === 'consensus' || stage.kind === 'moderator')) {
+    advanceCouncil(run, p, stage, session);
+    return;
+  }
+
+  // ── Plan decompose: planner output → dynamic build waves spliced after plan ──
+  if (SWARM_PLAN_DECOMPOSE && stage.decompose && !stage.decomposed) {
+    stage.decomposed = true;
+    const fixedBuild = { key: 'build', title: '建造 Build', kind: 'code', deliveryMode: 'code', agentKeys: ['frontend', 'backend', 'test'], status: 'pending', sessionId: null };
+    const phases = parsePlannerSubphases(run, session);
+    if (!phases) {
+      addArtifact(run, { type: 'execution-error', title: '⚠ Planner 拆解失敗', content: 'Planner 冇輸出有效 subphases JSON,fallback 用固定 build (frontend/backend/test)。' });
+      p.stages.splice(p.current + 1, 0, fixedBuild);
+    } else {
+      const gen = generateBuildWaves(phases);
+      if (gen.error || !gen.stages.length) {
+        addArtifact(run, { type: 'execution-error', title: '⚠ 波次規劃失敗', content: `${gen.error || '冇 wave'},fallback 固定 build。` });
+        p.stages.splice(p.current + 1, 0, fixedBuild);
+      } else {
+        p.stages.splice(p.current + 1, 0, ...gen.stages);
+        addArtifact(run, {
+          type: 'note',
+          title: `🧩 Planner 拆咗 ${phases.length} 個 sub-phase → ${gen.stages.length} 波並行`,
+          content: gen.stages.map((s, i) => `Wave ${i + 1}: ${s.dynamicAgents.map((a) => a.name).join(', ')}`).join('\n'),
+        });
+      }
+    }
+    advancePipeline(run);
+    return;
+  }
+
+  // ── Review gate loop: PASS skips fix; WARN/FAIL runs fix then re-reviews ──
+  if (SWARM_REVIEW_GATE && !p.gateDone) {
+    if (stage.gate) {
+      const verdict = parseVerdict(run, session);
+      p.gateVerdict = verdict;
+      stage.verdict = verdict;
+      // soft (default): only FAIL loops a fix pass; WARN is accepted as-is.
+      // strict (SWARM_REVIEW_GATE_STRICT=1): WARN also loops. This is the main
+      // guard against the slow multi-iteration fix storms (WARN ≠ must-fix).
+      const needsFix = verdict === 'FAIL' || (SWARM_REVIEW_GATE_STRICT && verdict === 'WARN');
+      if (!needsFix) {
+        p.gateDone = true;
+        p.stages.forEach((s) => { if (s.isFix) { s.agentKeys = []; s.status = 'skipped'; } });
+        addArtifact(run, {
+          type: 'note',
+          title: `✅ 覆核 Gate: ${verdict}（接受）`,
+          content: verdict === 'PASS' ? 'Reviewer 裁定 PASS,跳過修正。' : 'WARN — soft 模式接受,跳過修正（FAIL 先會 loop fix；要嚴格就開 SWARM_REVIEW_GATE_STRICT）。',
+        });
+        advancePipeline(run);
+        return;
+      }
+      // needsFix → fall through → advancePipeline runs the fix stage.
+    } else if (stage.isFix) {
+      p.gateIteration = (p.gateIteration || 0) + 1;
+      if (p.gateIteration < p.maxGateIterations) {
+        loopBackToReview(run, p);
+        return;
+      }
+      p.gateDone = true;
+      addArtifact(run, {
+        type: 'note',
+        title: `⚠ 覆核 Gate: 用盡 ${p.maxGateIterations} 次修正`,
+        content: `最後裁決 ${p.gateVerdict || '-'}。pipeline 完成,剩餘問題請人手跟進。`,
+      });
+    }
+  }
+
   advancePipeline(run);
 }
+
+const PLANNER_DECOMPOSE_PROMPT = [
+  '',
+  '## 你嘅任務:拆 build sub-phase（必須,最重要）',
+  '讀上面 task brief / background,將「建造」工作拆成 1-6 個自包含 sub-phase。',
+  '每個 sub-phase 會交俾一個獨立 build agent 並行做,所以:',
+  '- scope_md 必須自包含（build agent 唔會見到原 task,淨係見你寫嘅 scope_md）',
+  '- 按模組 / 檔案邊界拆,盡量唔好兩個 sub-phase 改同一個 file（會撞,拖慢）',
+  '- 無依賴嘅 sub-phase 會並行；B 要用 A 嘅成果就喺 dependencies 寫 ["A"]',
+  '- 細 task 出 1 個 phase 就夠,唔好硬拆',
+  '',
+  '只輸出一個 ```subphases code block,純 JSON,前後唔好加其他文字:',
+  '```subphases',
+  '{"phases":[{"id":"p1","title":"≤40字標題","scope_md":"完整自包含建造說明:做乜/deliverable/success criteria","dependencies":[],"est_files":["src/foo.js"]}]}',
+  '```',
+].join('\n');
 
 function buildExecutionPrompt(run, preset, agent, options = {}) {
   const contexts = run.contextHistory
@@ -955,6 +1609,16 @@ function buildExecutionPrompt(run, preset, agent, options = {}) {
     artifacts ? `Existing artifacts:\n${artifacts}` : 'Existing artifacts: none yet',
     contexts || 'Chat Context: 暫時未收到 CloudCLI chat context。',
       getSkillContent(preset.key),
+    ...(options.gate ? [[
+      '',
+      '## 覆核裁決（必須）',
+      '完成 review 之後,喺回報最後**獨立一行**輸出裁決:',
+      '`VERDICT: PASS` = 冇問題,可收貨',
+      '`VERDICT: WARN` = 有小問題但可接受',
+      '`VERDICT: FAIL` = 有必須修嘅問題',
+      'WARN / FAIL 時請具體列出要修嘅項目,俾 Fix agent 跟進。',
+    ].join('\n')] : []),
+    ...(preset.key === 'planner' ? [PLANNER_DECOMPOSE_PROMPT] : []),
   ].join('\n');
 }
 
@@ -990,6 +1654,7 @@ function startOneExecutionAgent(run, preset, options = {}) {
   agent.cli = agentCommand.label;
   agent.model = agentCommand.model || '';
   agent.completedAt = null;
+  if (options.worktree) agent.worktree = options.worktree;
   if (session) {
     agent.sessionId = session.id;
     if (!session.agentIds.includes(agent.id)) session.agentIds.push(agent.id);
@@ -1030,9 +1695,34 @@ function spawnAgentNow(run, preset, agent, agentCommand, options = {}) {
   if (liveJobs.has(agent.id)) return;
   const fake = process.env.SWARM_FAKE_AGENT === '1';
   const isThinkingAgent = ["thinking", "research", "text"].includes(String(preset.deliveryMode));
+  // Council reviewer/moderator/explainer 雖然係 thinking,但要喺真 project 查文件 → 用 run.projectPath 做 cwd
+  // (其餘 thinking agent 照舊用共享 SWARM_WORKSPACE,唔受影響)。
+  const isCouncilAgent = ['council_a', 'council_b', 'council_c', 'moderator', 'explainer'].includes(preset.key);
+  const useProjectCwd = !isThinkingAgent || isCouncilAgent;
+  // Create this agent's isolated worktree (parallel code waves only). On failure,
+  // fall back to the shared repo so the agent still runs (degraded, not broken).
+  if (options.worktree && !fake) {
+    try {
+      worktreeMgr.createWorktree({
+        repo: safeProjectPath(run.projectPath || DEFAULT_PROJECT_ROOT),
+        baseCommit: options.worktree.base,
+        branch: options.worktree.branch,
+        dir: options.worktree.dir,
+      });
+    } catch (e) {
+      appendAgentLog(run, agent, `[swarm-server] worktree 建立失敗,fallback 共享 repo: ${e.message}\n`);
+      const failedBranch = options.worktree.branch;
+      options.worktree = null;
+      agent.worktree = null;
+      if (options.session && Array.isArray(options.session.worktrees)) {
+        options.session.worktrees = options.session.worktrees.filter((w) => w.branch !== failedBranch);
+      }
+    }
+  }
   const projectPath = fake
     ? require('os').tmpdir()
-    : (isThinkingAgent ? safeProjectPath(SWARM_WORKSPACE) : safeProjectPath(run.projectPath || DEFAULT_PROJECT_ROOT));
+    : (options.worktree ? options.worktree.dir
+       : (useProjectCwd ? safeProjectPath(run.projectPath || DEFAULT_PROJECT_ROOT) : safeProjectPath(SWARM_WORKSPACE)));
 
   agent.status = 'running';
   agent.startedAt = new Date().toISOString();
@@ -1104,6 +1794,7 @@ function spawnAgentNow(run, preset, agent, agentCommand, options = {}) {
     updateSessionStatus(run, agent.sessionId);
     if (!run.pipeline && !run.agents.some((item) => ['delivery', 'review'].includes(item.layer) && item.status === 'running')) {
       run.status = run.synthesis ? 'complete' : 'active';
+      pumpRunQueue();
     }
     run.updatedAt = agent.completedAt;
     scheduleSave();
@@ -1118,15 +1809,38 @@ function runWave(run, opts) {
   const mode = opts.deliveryMode || 'code';
   const session = createSession(run, { title: opts.title, kind: opts.kind || mode, model: opts.model, cli: opts.cli });
   if (opts.stageKey) session.pipelineStageKey = opts.stageKey;
-  const presets = ALL_EXECUTION_PRESETS.filter((p) => (opts.agentKeys || []).includes(p.key));
+  // dynamicAgents (Phase 2 planner waves) override the fixed preset roster.
+  const presets = (Array.isArray(opts.dynamicAgents) && opts.dynamicAgents.length)
+    ? opts.dynamicAgents
+    : ALL_EXECUTION_PRESETS.filter((p) => (opts.agentKeys || []).includes(p.key));
   const per = opts.perAgentModels || {};
-  const agents = presets.map((p) => startOneExecutionAgent(run, p, {
-    deliveryMode: mode,
-    session,
-    model: (per[p.key] && per[p.key].model) || opts.model,
-    cli: (per[p.key] && per[p.key].cli) || opts.cli,
-    taskBrief: opts.taskBrief,
-  }));
+  // Worktree isolation only for parallel CODE waves (>1 code agent — e.g. build
+  // stage frontend+backend+test). Single-agent / thinking waves stay on the
+  // shared repo, byte-for-byte unchanged.
+  const isCodeWave = !['thinking', 'research', 'text'].includes(String(mode));
+  const useWorktree = SWARM_WORKTREE && isCodeWave && presets.length > 1;
+  let waveBase = null;
+  if (useWorktree) {
+    waveBase = worktreeMgr.headSha(safeProjectPath(run.projectPath || DEFAULT_PROJECT_ROOT));
+    session.worktrees = [];
+  }
+  const agents = presets.map((p) => {
+    const agentOpts = {
+      deliveryMode: mode,
+      session,
+      model: (per[p.key] && per[p.key].model) || opts.model,
+      cli: (per[p.key] && per[p.key].cli) || opts.cli,
+      taskBrief: p.subScope || opts.taskBrief,
+      gate: !!opts.gate,
+    };
+    if (useWorktree) {
+      const dir = path.join(require('os').tmpdir(), 'swarm-wt', String(run.id), p.key);
+      const branch = `swarm/${run.id}/${p.key}`;
+      agentOpts.worktree = { dir, branch, base: waveBase };
+      session.worktrees.push({ key: p.key, dir, branch });
+    }
+    return startOneExecutionAgent(run, p, agentOpts);
+  });
   io.emit('session-started', { runId: run.id, session });
   io.emit('run-updated', publicRun(run));
   scheduleSave();
@@ -1174,6 +1888,16 @@ function startExecutionAgents(run, keys, options = {}) {
 
 // ─── Staged fan-out pipeline: research → build → review, each wave parallel, waves in order ───
 function defaultStages(mode) {
+  if (mode === 'council') {
+    // Swarm Council:consensus(3 reviewer 並行)→ moderate(仲裁改寫 plan)→ explain(人話講解)。
+    // consensus+moderate 會被 advanceCouncil rewind 重入,循環到收斂 / maxRounds;
+    // Phase 3 御准閘喺 moderate 收斂後、explain 之前發生(pauseForHumanGate 用 p.stopped)。
+    return [
+      { key: 'consensus', title: '共識評審 Consensus', kind: 'consensus', deliveryMode: 'thinking', agentKeys: ['council_a', 'council_b', 'council_c'] },
+      { key: 'moderate', title: '仲裁收斂 Moderate', kind: 'moderator', deliveryMode: 'thinking', agentKeys: ['moderator'] },
+      { key: 'explain', title: '人話講解 Explain', kind: 'explainer', deliveryMode: 'thinking', agentKeys: ['explainer'] },
+    ];
+  }
   if (['thinking', 'research', 'text'].includes(String(mode))) {
     return [
       { key: 'research', title: '研究 Research', kind: 'research', deliveryMode: 'thinking', agentKeys: ['researcher'] },
@@ -1181,11 +1905,20 @@ function defaultStages(mode) {
       { key: 'synthesis', title: '交付 Synthesis', kind: 'text', deliveryMode: 'thinking', agentKeys: ['synthesis'] },
     ];
   }
+  if (SWARM_PLAN_DECOMPOSE) {
+    // Planner splits the build into dynamic sub-phase waves, spliced in after the
+    // plan stage completes (research folded into the planner stage).
+    return [
+      { key: 'plan', title: '規劃拆解 Plan', kind: 'research', deliveryMode: 'thinking', agentKeys: ['planner'], decompose: true },
+      { key: 'review', title: '覆核 Review', kind: 'review', deliveryMode: 'code', agentKeys: ['reviewer'], gate: true },
+      { key: 'fix', title: '修正 Fix', kind: 'code', deliveryMode: 'code', agentKeys: ['fixer'], isFix: true },
+    ];
+  }
   return [
     { key: 'research', title: '研究 Research', kind: 'research', deliveryMode: 'thinking', agentKeys: ['researcher'] },
     { key: 'build', title: '建造 Build', kind: 'code', deliveryMode: 'code', agentKeys: ['frontend', 'backend', 'test'] },
-    { key: 'review', title: '覆核 Review', kind: 'review', deliveryMode: 'code', agentKeys: ['reviewer'] },
-    { key: 'fix', title: '修正 Fix', kind: 'code', deliveryMode: 'code', agentKeys: ['fixer'] },
+    { key: 'review', title: '覆核 Review', kind: 'review', deliveryMode: 'code', agentKeys: ['reviewer'], gate: true },
+    { key: 'fix', title: '修正 Fix', kind: 'code', deliveryMode: 'code', agentKeys: ['fixer'], isFix: true },
   ];
 }
 
@@ -1198,13 +1931,32 @@ function startPipeline(run, options = {}) {
     model: options.model,
     cli: options.cli,
     perAgentModels: options.perAgentModels || {},
-    continueOnFail: !!options.continueOnFail,
+    // Council 一律 continueOnFail:一個 model(例 glm)死唔應該炸成個議會,要 degrade 到在席者。
+    continueOnFail: !!options.continueOnFail || mode === 'council',
     stopped: false,
     current: -1,
     stages,
+    gateIteration: 0,
+    maxGateIterations: SWARM_REVIEW_GATE_MAX,
+    gateDone: false,
     startedAt: new Date().toISOString(),
+    // Swarm Council 收斂狀態
+    councilRound: 0,
+    councilPlanVersion: 0,
+    councilOpenDisputes: null,
+    councilDisputes: '',
+    councilPaused: false,
+    councilReviewPaused: false,  // 第一輪三模獨立 review 後嘅「開始拗」閘
+    councilDebateStarted: false,
   };
   if (options.taskBrief) run.taskBrief = truncate(options.taskBrief, MAX_CONTEXT_CHARS);
+  // Council:把初始 brief 寫去 brief.md,令 readLatestPlan 有乾淨 v0 baseline(唔受之後 taskBrief 改寫影響)。
+  if (mode === 'council') {
+    try {
+      fs.mkdirSync(COUNCIL_DIR(run.id), { recursive: true });
+      fs.writeFileSync(path.join(COUNCIL_DIR(run.id), 'brief.md'), run.taskBrief || run.topic || '');
+    } catch (e) { console.warn('[council] write brief.md failed:', e.message); }
+  }
   if (!run.background) { run.background = buildAutoBackground(run); run.backgroundSource = 'auto'; }
   run.metrics.deliveryMode = mode;
   scheduleSave();
@@ -1216,13 +1968,14 @@ function advancePipeline(run) {
   const p = run.pipeline;
   if (!p || p.stopped) return;
   let next = p.current + 1;
-  while (next < p.stages.length && !(p.stages[next].agentKeys || []).length) next += 1;
+  while (next < p.stages.length && !(p.stages[next].agentKeys || []).length && !(p.stages[next].dynamicAgents || []).length) next += 1;
   if (next >= p.stages.length) {
     p.current = p.stages.length;
     run.status = run.synthesis ? 'complete' : 'active';
     addArtifact(run, { type: 'note', title: 'Pipeline 完成 ✓', content: '所有 stage（研究 → 建造 → 覆核）已順序完成。' });
     io.emit('run-updated', publicRun(run));
     scheduleSave();
+    pumpRunQueue();
     return;
   }
   p.current = next;
@@ -1233,15 +1986,23 @@ function advancePipeline(run) {
     kind: stage.kind,
     deliveryMode: stage.deliveryMode,
     agentKeys: stage.agentKeys,
+    dynamicAgents: stage.dynamicAgents,
     model: p.model,
     cli: p.cli,
     perAgentModels: p.perAgentModels,
     taskBrief: run.taskBrief,
     stageKey: stage.key,
+    gate: SWARM_REVIEW_GATE && !!stage.gate,
   });
   stage.sessionId = session.id;
   io.emit('run-updated', publicRun(run));
   scheduleSave();
+}
+
+// First pipeline stage that isn't complete/skipped — the resume checkpoint.
+function findPipelineCheckpoint(p) {
+  if (!p || !Array.isArray(p.stages)) return -1;
+  return p.stages.findIndex((s) => !['complete', 'skipped'].includes(s.status));
 }
 
 // Resolve (or synthesize) a preset so an arbitrary agent can be re-spawned.
@@ -1261,6 +2022,28 @@ function presetForAgent(agent) {
 
 function emitSnapshot() {
   io.emit('state-snapshot', publicRun(getCurrentRun()));
+}
+
+// ─── Run queue (SWARM_RUN_QUEUE): one run at a time, auto-start the next ───
+function isRunActive() {
+  return store.runs.some((r) => r.status === 'executing');
+}
+
+function pumpRunQueue() {
+  if (!SWARM_RUN_QUEUE || isRunActive()) return;
+  while (runQueuePending.length) {
+    const run = store.runs.find((r) => r.id === runQueuePending.shift());
+    if (!run || run.status !== 'queued') continue;
+    const opt = run.queuedStart || {};
+    io.emit('swarm-start', publicRun(run));
+    if (opt.staged) {
+      startPipeline(run, opt);
+    } else {
+      startExecutionAgents(run, opt.agents, opt);
+    }
+    emitSnapshot();
+    return; // one at a time; next dequeues when this run finishes
+  }
 }
 
 app.get('/api/state', (req, res) => res.json(publicRun(getCurrentRun())));
@@ -1511,9 +2294,23 @@ app.post('/api/plans/run', (req, res) => {
       template: body.template || 'cloudcli',
       seed: false, // drop-zone plans start clean; agents come from the wave/pipeline we spawn
     });
-    io.emit('swarm-start', publicRun(run));
     const deliveryMode = body.deliveryMode || body.mode || 'code';
     const deliverable = body.deliverable || (deliveryMode === 'code' ? 'code' : 'text');
+    // Run queue: if another run is executing, queue this one instead of starting.
+    if (SWARM_RUN_QUEUE && isRunActive()) {
+      run.status = 'queued';
+      run.queuedStart = {
+        staged: !!body.staged, deliveryMode, deliverable,
+        model: body.model, cli: body.cli, perAgentModels: body.perAgentModels || {},
+        stages: Array.isArray(body.stages) ? body.stages : null,
+        agents: body.agents, taskBrief, sessionTitle: body.sessionTitle,
+      };
+      runQueuePending.push(run.id);
+      scheduleSave();
+      io.emit('run-updated', publicRun(run));
+      return res.json({ ok: true, queued: true, position: runQueuePending.length, run });
+    }
+    io.emit('swarm-start', publicRun(run));
     if (body.staged) {
       const pipeline = startPipeline(run, {
         deliveryMode,
@@ -1567,6 +2364,238 @@ app.post('/api/runs/:id/agents/:agentId/rerun', (req, res) => {
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
+});
+
+// Resume a stopped / interrupted pipeline from its checkpoint (last unfinished
+// stage). Re-runs that stage onward; complete/skipped stages are left alone.
+app.post('/api/runs/:id/resume', (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  const p = run.pipeline;
+  if (!p || !Array.isArray(p.stages) || !p.stages.length) {
+    return res.status(400).json({ error: 'no pipeline to resume' });
+  }
+  const idx = findPipelineCheckpoint(p);
+  if (idx < 0) {
+    return res.json({ ok: true, done: true, message: 'pipeline 已完成,冇嘢續' });
+  }
+  try {
+    p.stopped = false;
+    // Reset the checkpoint stage + any downstream non-complete stages so
+    // advancePipeline re-runs them cleanly.
+    for (let i = idx; i < p.stages.length; i += 1) {
+      if (['interrupted', 'running', 'failed', 'pending'].includes(p.stages[i].status)) {
+        p.stages[i].status = 'pending';
+        p.stages[i].sessionId = null;
+      }
+    }
+    p.current = idx - 1;
+    run.status = 'executing';
+    addArtifact(run, { type: 'note', title: `▶ Pipeline 續行 @ ${p.stages[idx].title}`, content: `由斷點「${p.stages[idx].title}」重新開始。` });
+    scheduleSave();
+    io.emit('run-updated', publicRun(run));
+    advancePipeline(run);
+    res.json({ ok: true, resumedFrom: p.stages[idx].key });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// ─── Swarm Council 御准閘 endpoints (三模議會) ───
+// 批准 → 解 pause、用終稿 plan 行 explainer stage(Phase 4)。
+app.post('/api/runs/:id/council/approve', (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  const p = run.pipeline;
+  if (!p || !p.councilPaused) return res.status(400).json({ error: '冇 council 御准閘可批准' });
+  const idx = p.stages.findIndex((s) => s.kind === 'explainer');
+  if (idx < 0) return res.status(400).json({ error: '冇 explainer stage' });
+  const plan = readLatestPlan(run);
+  run.taskBrief = truncate(`## 已批准嘅終稿 Plan (v${plan.v})\n\n${plan.md}`, MAX_CONTEXT_CHARS);
+  p.councilPaused = false;
+  p.stopped = false;
+  p.stages[idx].status = 'pending';
+  p.stages[idx].sessionId = null;
+  p.current = idx - 1;
+  run.status = 'executing';
+  addArtifact(run, { type: 'note', title: `✅ 已批准 plan v${plan.v} → 生成人話講解`, content: '' });
+  scheduleSave();
+  io.emit('run-updated', publicRun(run));
+  advancePipeline(run);
+  res.json({ ok: true, approvedVersion: plan.v });
+});
+
+// 再改 → 加用戶指示(最高優先)、重跑一 round consensus(councilRound++,封頂 MAX)。
+app.post('/api/runs/:id/council/revise', (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  const p = run.pipeline;
+  if (!p || !p.councilPaused) return res.status(400).json({ error: '冇 council 御准閘可再改' });
+  const cIdx = p.stages.findIndex((s) => s.kind === 'consensus');
+  if (cIdx < 0) return res.status(400).json({ error: '冇 consensus stage' });
+  const note = String((req.body || {}).note || '').trim();
+  const plan = readLatestPlan(run);
+  for (let i = cIdx; i < p.stages.length && ['consensus', 'moderator'].includes(p.stages[i].kind); i += 1) {
+    p.stages[i].status = 'pending';
+    p.stages[i].sessionId = null;
+  }
+  p.councilPaused = false;
+  p.stopped = false;
+  p.councilRound = Math.min((p.councilRound || 1) + 1, SWARM_COUNCIL_MAX_ROUNDS);
+  run.taskBrief = truncate(
+    `## Goal\n${run.background || run.topic || ''}\n\n## 當前 Plan (v${plan.v})\n${plan.md}\n\n` +
+    `## 用戶人手指示(最高優先)\n${note || '(用戶冇額外指示,請就未解爭議再收斂一次)'}\n\n` +
+    `## 仍未解爭議\n${p.councilDisputes || '(none)'}`,
+    MAX_CONTEXT_CHARS);
+  p.current = cIdx - 1;
+  run.status = 'executing';
+  addArtifact(run, { type: 'note', title: '✍️ 用戶要求再改 → 重跑一 round 共識', content: note || '(就未解爭議再收斂)' });
+  scheduleSave();
+  io.emit('run-updated', publicRun(run));
+  advancePipeline(run);
+  res.json({ ok: true, revising: true, round: p.councilRound });
+});
+
+// 開始拗:三模獨立 review 後,用戶撳掣 → 入 moderator + 辯論收斂(consensus 已 complete,advancePipeline 行 moderator)。
+app.post('/api/runs/:id/council/debate', (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  const p = run.pipeline;
+  if (!p || !p.councilReviewPaused) return res.status(400).json({ error: '冇 review 閘可開拗' });
+  p.councilReviewPaused = false;
+  p.councilDebateStarted = true;
+  p.stopped = false;
+  run.status = 'executing';
+  addArtifact(run, { type: 'note', title: '🥊 開始辯論 → moderator 收斂', content: '三模獨立 review 完,用戶開拗。' });
+  scheduleSave();
+  io.emit('run-updated', publicRun(run));
+  advancePipeline(run);
+  res.json({ ok: true });
+});
+
+// 落實:批准後將議會終稿 plan 交 code pipeline(build→review→fix)真正喺 project 實作。
+app.post('/api/runs/:id/council/execute', (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  const plan = readLatestPlan(run);
+  if (!plan.md || !plan.md.trim() || (plan.v || 0) < 1) {
+    return res.status(400).json({ error: '未有議會終稿 plan 可落實(請先跑完議會 + 批准)' });
+  }
+  const body = req.body || {};
+  const model = body.model || 'sonnet';
+  const perAgentModels = body.perAgentModels || { reviewer: { cli: 'claude', model: 'opus' } };
+  const taskBrief = `# 落實以下已通過三模議會審議嘅 plan（v${plan.v}）\n\n按呢個 plan 直接喺 project 落手實作,完成後跑驗證 / 測試。唔好重新爭論 plan 本身,佢已經三模收斂 + 人手批准。\n\n${plan.md}`;
+  try {
+    const pipeline = startPipeline(run, {
+      deliveryMode: 'code',
+      model,
+      perAgentModels,
+      // 跳過 research(plan 已係研究成果),直接 build → review → fix
+      stages: [
+        { key: 'build', title: '建造 Build', kind: 'code', deliveryMode: 'code', agentKeys: ['frontend', 'backend', 'test'] },
+        { key: 'review', title: '覆核 Review', kind: 'review', deliveryMode: 'code', agentKeys: ['reviewer'], gate: true },
+        { key: 'fix', title: '修正 Fix', kind: 'code', deliveryMode: 'code', agentKeys: ['fixer'], isFix: true },
+      ],
+      taskBrief,
+    });
+    addArtifact(run, { type: 'note', title: `▶ 落實 plan v${plan.v} → code pipeline 開波`, content: `已交 build → review → fix 喺 ${run.projectPath} 實作。` });
+    io.emit('run-updated', publicRun(run));
+    res.json({ ok: true, executingVersion: plan.v, pipeline });
+  } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ─── 定向幕僚 chat endpoints (Phase 1) ───
+// 即回 200 + 背景 spawn(唔 block REST 等 10-60s),assistant turn 經 socket push。
+app.post('/api/runs/:id/chat', (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  const body = req.body || {};
+  const message = String(body.message || '').trim();
+  if (!message) return res.status(400).json({ error: 'message required' });
+  if (run.chatBusy) return res.status(409).json({ error: '上一回合仲傾緊,等陣先' });
+  const picked = resolveChatModel(run, body.modelOverride);
+  run.chatModel = picked;
+  if (body.projectPath !== undefined) {
+    if (body.projectPath) { try { run.chatProjectPath = safeProjectPath(body.projectPath); } catch (e) { return res.status(400).json({ error: e.message }); } }
+    else run.chatProjectPath = null;
+  }
+  const chatCwd = run.chatProjectPath;
+  const userMsg = pushChatMessage(run, { role: 'user', content: message });
+  io.emit('chat-message', { runId: run.id, message: userMsg });
+  run.chatBusy = true;
+  io.emit('run-updated', publicRun(run));
+  res.json({ ok: true, accepted: userMsg.id });
+  spawnChatTurn(run, picked, chatCwd, false)
+    .then((r) => {
+      const m = pushChatMessage(run, { role: 'assistant', content: r.text, model: r.model, cli: r.cli, durationMs: r.durationMs, usedProjectPath: chatCwd, status: 'ok' });
+      io.emit('chat-message', { runId: run.id, message: m });
+    })
+    .catch((e) => {
+      const m = pushChatMessage(run, { role: 'assistant', content: `（傾偈失敗:${e.message}）`, model: picked.model, cli: picked.cli, status: 'failed', error: e.message });
+      io.emit('chat-message', { runId: run.id, message: m });
+    })
+    .finally(() => { run.chatBusy = false; io.emit('run-updated', publicRun(run)); scheduleSave(); });
+});
+
+// 定稿:用較強 model 將全 thread 收斂成 mission brief,寫 brief.md + missionBrief + artifact。
+app.post('/api/runs/:id/chat/finalize', (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  if (!Array.isArray(run.chatThread) || !run.chatThread.length) return res.status(400).json({ error: '冇對話內容可定稿' });
+  if (run.chatBusy) return res.status(409).json({ error: '傾緊偈,等陣先定稿' });
+  const body = req.body || {};
+  run.chatBusy = true;
+  io.emit('run-updated', publicRun(run));
+  res.json({ ok: true, finalizing: true });
+  const picked = (run.chatModel && run.chatModel.model) ? run.chatModel : { cli: 'claude', model: 'opus' };
+  const chatCwd = run.chatProjectPath;
+  spawnChatTurn(run, picked, chatCwd, true)
+    .then((r) => {
+      const intentType = body.intentType || (chatCwd ? 'review-project' : 'new-plan');
+      const goalText = String(body.goalText || run.topic || '').slice(0, 2000);
+      const draftPlanMd = r.text;
+      const briefMd = `---\nintentType: ${intentType}\ngoalText: ${goalText.replace(/\n/g, ' ')}\nprojectPath: ${chatCwd || ''}\n---\n\n${draftPlanMd}`;
+      const dir = COUNCIL_DIR(run.id);
+      try { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'brief.md'), briefMd); } catch (e) { console.warn('[chat] write brief.md:', e.message); }
+      run.missionBrief = { intentType, goalText, projectPath: chatCwd || null, draftPlanMd, briefPath: path.join(dir, 'brief.md'), finalizedAt: new Date().toISOString() };
+      if (intentType === 'review-project' && chatCwd) run.projectPath = chatCwd;
+      run.taskBrief = truncate(`【${intentType}】${goalText}\n\n${draftPlanMd}`, MAX_CONTEXT_CHARS);
+      addArtifact(run, { type: 'mission-brief', title: `📋 Mission Brief（${intentType}）`, content: briefMd });
+      addContext(run, { context: `# Mission Brief\nIntent: ${intentType}\nGoal: ${goalText}\n\n${draftPlanMd}`, source: 'chat-finalize' });
+      io.emit('chat-finalized', { runId: run.id, brief: run.missionBrief });
+    })
+    .catch((e) => { io.emit('chat-finalized', { runId: run.id, error: e.message }); })
+    .finally(() => { run.chatBusy = false; io.emit('run-updated', publicRun(run)); scheduleSave(); });
+});
+
+// 交議會:用 chat 定稿嘅 brief,喺同一 run 開 council pipeline(Phase 2)。
+app.post('/api/runs/:id/council/start', (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  const brief = run.missionBrief;
+  // taskBrief 優先序:已定稿 brief > run.taskBrief > 直接用 chat 對話(免一定要先定稿)
+  let taskBrief = run.taskBrief || (brief && brief.draftPlanMd) || '';
+  if (!taskBrief.trim() && Array.isArray(run.chatThread) && run.chatThread.length) {
+    taskBrief = '## 用戶 review 目標 / prompt(由 chat 對話收集)\n\n' +
+      run.chatThread.map((m) => `【${m.role === 'user' ? '用戶' : '幕僚'}】${m.content}`).join('\n\n');
+  }
+  if (!taskBrief.trim()) return res.status(400).json({ error: '未有 brief / 對話,請先喺 chat 寫低你想 review 乜' });
+  const per = (req.body || {}).perAgentModels || {};
+  // 預設 model 組合,可由前端逐個覆寫
+  const perAgentModels = {
+    council_a: per.council_a || { cli: 'claude', model: 'opus' },
+    council_b: per.council_b || { cli: 'codex', model: 'gpt-5.5' },
+    council_c: per.council_c || { cli: 'glm', model: 'glm-5.1' },
+    moderator: per.moderator || { cli: 'claude', model: 'opus' },
+    explainer: per.explainer || { cli: 'claude', model: 'sonnet' },
+  };
+  const wantPath = (brief && brief.projectPath) || run.chatProjectPath;
+  if (wantPath) { try { run.projectPath = safeProjectPath(wantPath); } catch (_) {} }
+  try {
+    const pipeline = startPipeline(run, { deliveryMode: 'council', perAgentModels, taskBrief });
+    io.emit('run-updated', publicRun(run));
+    res.json({ ok: true, pipeline });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 app.get('/health', (req, res) => {

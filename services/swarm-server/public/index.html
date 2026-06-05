@@ -215,6 +215,7 @@ canvas#office{display:block;width:100%;height:480px;image-rendering:pixelated}
 .logtoggle:hover{color:var(--text);border-color:var(--line-2)}
 .logtoggle.on{color:var(--gold);border-color:color-mix(in srgb,var(--gold) 45%,transparent);background:color-mix(in srgb,var(--gold) 9%,transparent)}
 .feed{flex:1;overflow:auto;padding:8px 12px}
+#detailBox{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden}
 .fline{display:flex;gap:8px;padding:6px 2px;border-bottom:1px solid color-mix(in srgb,var(--text) 6%,transparent);font-size:11.5px;line-height:1.4;animation:fadein .3s ease}
 @keyframes fadein{from{opacity:0;transform:translateY(-3px)}to{opacity:1}}
 .fline .ts{font-family:var(--mono);color:var(--faint);font-size:10px;flex:none;width:54px}
@@ -242,7 +243,7 @@ canvas#office{display:block;width:100%;height:480px;image-rendering:pixelated}
       <div class="tstat"><b id="s-done">0</b><span>Done</span></div>
     </div>
     <div class="spacer"></div>
-    <a class="navlink" href="/mission.html">Mission</a>
+    <!-- Mission Orchestrator soft-disabled — superseded by Swarm Desktop -->
     <a class="navlink" href="/automation/">Automation</a>
     <a class="navlink" href="/mirofish/" target="_blank">MiroFish</a>
     <div class="clock" id="clock">--:--:--</div>
@@ -313,6 +314,33 @@ canvas#office{display:block;width:100%;height:480px;image-rendering:pixelated}
         </div>
       </div>
 
+      <div class="hero" id="chatPanel" style="margin-top:10px">
+        <div class="hero-head" id="chatHead">
+          <div class="ht"><span class="glyph">💬</span>定向幕僚 <span class="hint" style="margin:0">— 同單一 model 傾掂方向 → 定稿 → 交三模議會</span></div>
+          <button class="btn ghost sm" id="chatToggle">收起</button>
+        </div>
+        <div class="hero-body" id="chatBody">
+          <div class="row">
+            <div class="fldwrap"><label>傾偈 Model</label><div class="modelchips" id="chatModelChips"></div></div>
+            <div class="fldwrap" style="flex:1;min-width:200px"><label>查邊個 Project（可選）</label><select class="fld" id="chatProjSelect" style="width:100%"></select></div>
+          </div>
+          <div id="chatLog" class="logbox" style="min-height:160px;max-height:42vh;overflow:auto;padding:9px"></div>
+          <div id="chatThinking" class="hint" style="display:none">⏱ <span id="chatThinkModel"></span> 思考緊…</div>
+          <div class="hero-foot" style="gap:8px">
+            <textarea class="task" id="chatInput" style="min-height:46px;flex:1" placeholder="例如:我想 review orca-platform-mvp 個 grading 流程,目標係搵出可以改善嘅地方…（Cmd/Ctrl+Enter 送出）"></textarea>
+            <button class="btn go" id="chatSendBtn">▶ 傾</button>
+            <button class="btn ghost sm" id="chatFinalizeBtn" title="將傾偈結論固化成 mission brief">✓ 定稿</button>
+            <button class="btn sm" id="chatToCouncilBtn" style="display:none" title="用定稿 brief 開三模議會">🗳 交議會</button>
+          </div>
+          <div id="councilPickRow" class="row" style="display:none;margin-top:8px;align-items:flex-end">
+            <div class="fldwrap"><label>議員 A</label><select class="fld" id="csA"></select></div>
+            <div class="fldwrap"><label>議員 B</label><select class="fld" id="csB"></select></div>
+            <div class="fldwrap"><label>議員 C</label><select class="fld" id="csC"></select></div>
+            <button class="btn go sm" id="councilGoBtn">🗳 開議會</button>
+          </div>
+        </div>
+      </div>
+
       <div class="mapwrap" id="mapwrap">
         <div class="map-head">
           <div class="mt" id="mapTitle">Pixel Office</div>
@@ -325,6 +353,17 @@ canvas#office{display:block;width:100%;height:480px;image-rendering:pixelated}
           </div>
           <div class="spacer" style="flex:1"></div>
           <button class="btn ghost sm" id="reviewBtn" title="加開一個 Reviewer Agent（Opus 4.8）覆核現有改動">＋ Review pass</button>
+          <button class="btn ghost sm" id="resumeBtn" style="display:none" title="由斷點續跑停咗 / 中斷咗嘅 pipeline">▶ 續行</button>
+          <button class="btn go sm" id="councilDebateBtn" style="display:none" title="三模獨立 review 完 → 開始辯論收斂">🥊 開始拗</button>
+          <button class="btn go sm" id="councilApproveBtn" style="display:none" title="批准三模議會終稿 → 出人話講解">✅ 批准</button>
+          <button class="btn ghost sm" id="councilReviseBtn" style="display:none" title="加指示,叫議會再收斂多一 round">✍️ 再改</button>
+          <button class="btn go sm" id="councilExecuteBtn" style="display:none" title="將議會終稿 plan 交 code pipeline 真正喺 project 實作">▶ 落實 plan</button>
+        </div>
+        <div id="executePickRow" class="row" style="display:none;padding:8px 14px;border-bottom:1px solid var(--line);align-items:flex-end;gap:10px">
+          <div class="fldwrap"><label>建造 model</label><select class="fld" id="exBuild"></select></div>
+          <div class="fldwrap"><label>覆核 model</label><select class="fld" id="exReviewer"></select></div>
+          <button class="btn go sm" id="executeGoBtn">▶ 確認落實</button>
+          <span class="hint" style="margin:0">build agent（前/後/測）用建造 model；reviewer 用覆核 model</span>
         </div>
         <canvas id="office"></canvas>
       </div>
@@ -412,6 +451,7 @@ const state = {
   list:[], byId:{}, focus:null, selAgent:null,
   models:[], projects:[], defaultProject:'', tasks:[],
   feed:[], logBuf:{}, mode:'code', defModel:null, agentSel:{}, profile:'balanced', staged:false, logMd:true,
+  chat:{thinking:false, model:null},
 };
 const PROFILES = {
   balanced:{label:'⚖ 均衡', hint:'Opus 4.8 規劃/覆核、Sonnet 建造、Haiku+GLM 輕量分流', map:{frontend:'sonnet',backend:'sonnet',test:'haiku',reviewer:'opus',researcher:'glm-5.1',strategist:'opus',synthesis:'sonnet'}},
@@ -441,7 +481,7 @@ function findAgent(id){for(const r of Object.values(state.byId)){const a=(r.agen
 
 let pending=false;
 function scheduleRender(){if(pending)return;pending=true;requestAnimationFrame(()=>{pending=false;renderAll();});}
-function renderAll(){renderTopstats();renderBoard();renderCenter();renderInspector();}
+function renderAll(){renderTopstats();renderBoard();renderCenter();renderInspector();renderChat();}
 
 function renderTopstats(){
   let live=0,sess=0,done=0;const plans=state.list.length;
@@ -462,17 +502,30 @@ function renderBoard(){
         <span class="pill">${r.agentCount||0} agents</span>
         <span class="pill">${r.sessionCount||0} sess</span>
         ${r.dynamicAgentSet?`<span class="pill">${esc(r.dynamicAgentSet)}</span>`:''}
+        <span class="pill" data-cancel="1" title="取消 / 移除呢個 mission" style="cursor:pointer;margin-left:auto;color:var(--red);border-color:color-mix(in srgb,var(--red) 45%,transparent)">${st==='queued'?'✕ 取消排隊':'✕ 移除'}</span>
       </div>`;
     card.onclick=()=>focusPlan(r.id);
+    const cb=card.querySelector('[data-cancel]');
+    if(cb)cb.onclick=(e)=>{e.stopPropagation();cancelRun(r.id,r.topic,st);};
     box.appendChild(card);
   });
 }
 function renderCenter(){const run=focusedRun();office.setRun(run);$('#mapTitle').innerHTML='Pixel Office'+(run?` <span class="muted" style="font-weight:400">· ${esc(run.topic||'')}</span>`:'');renderPipeStrip(run);renderLanes(run);}
 function renderPipeStrip(run){
   const ps=$('#pipeStrip');if(!ps)return;const p=run&&run.pipeline;
-  if(!p||!p.stages){ps.style.display='none';return;}
+  const rb=$('#resumeBtn');const ab=$('#councilApproveBtn');const vb=$('#councilReviseBtn');const db=$('#councilDebateBtn');
+  const paused=!!(p&&p.councilPaused);
+  const reviewPaused=!!(p&&p.councilReviewPaused);
+  if(ab)ab.style.display=paused?'':'none';
+  if(vb)vb.style.display=paused?'':'none';
+  if(db)db.style.display=reviewPaused?'':'none';
+  const xb=$('#councilExecuteBtn');const planReady=!!(p&&p.mode==='council'&&p.councilPlanVersion>0&&!paused&&!reviewPaused);if(xb)xb.style.display=planReady?'':'none';
+  if(!p||!p.stages){ps.style.display='none';if(rb)rb.style.display='none';return;}
   ps.style.display='';
-  ps.innerHTML=p.stages.map((s,i)=>{const cls=s.status==='complete'?'complete':(s.status==='running'?'run':(s.status==='failed'||s.status==='interrupted'?'failed':''));const ic=s.status==='complete'?'✓':(s.status==='failed'||s.status==='interrupted')?'✕':(i===p.current?'▶':'▢');return `<span class="pill ${cls}">${ic} ${esc(s.title.split(' ')[0])}</span>`;}).join(' <span class="muted">→</span> ');
+  const tag=reviewPaused?' · 🔎 三模 review 完,待開拗':(paused?' · ⏸ 待御准':'');
+  const head=p.mode==='council'?`<span class="pill" style="border-color:var(--gold);color:var(--gold)">🗳 議會 R${p.councilRound||0}${tag}</span> `:'';
+  ps.innerHTML=head+p.stages.map((s,i)=>{const cls=s.status==='complete'?'complete':(s.status==='running'?'run':(s.status==='failed'||s.status==='interrupted'?'failed':''));const ic=s.status==='complete'?'✓':(s.status==='failed'||s.status==='interrupted')?'✕':(i===p.current?'▶':'▢');return `<span class="pill ${cls}">${ic} ${esc(s.title.split(' ')[0])}</span>`;}).join(' <span class="muted">→</span> ');
+  if(rb){const stopped=(p.stopped&&!paused&&!reviewPaused)||p.stages.some(s=>s.status==='interrupted'||s.status==='failed');rb.style.display=stopped?'':'none';}
 }
 
 function renderLanes(run){
@@ -673,7 +726,15 @@ async function loadTasks(){try{const r=await api('/api/tasks');state.tasks=r.tas
 async function loadRuns(){try{const r=await api('/api/runs');state.list=r.runs||[];if(!state.focus)state.focus=r.currentRunId||(state.list[0]&&state.list[0].id)||null;if(state.focus&&!state.byId[state.focus])await focusPlan(state.focus,true);}catch(e){}scheduleRender();}
 async function focusPlan(id,silent){state.focus=id;state.selAgent=null;try{state.byId[id]=await api('/api/runs/'+id);}catch(e){}scheduleRender();}
 async function rerunAgent(runId,agentId){try{await api('/api/runs/'+runId+'/agents/'+agentId+'/rerun',{method:'POST',body:'{}'});toast('已重新啟動 agent');}catch(e){toast('重跑失敗:'+e.message,true);}}
+async function cancelRun(id,topic,st){if(!confirm((st==='queued'?'取消排隊中嘅 mission?':'移除呢個 mission?')+'\n'+(topic||id)))return;try{await api('/api/runs/'+id,{method:'DELETE'});toast(st==='queued'?'已取消排隊 mission':'已移除 mission');loadRuns();}catch(e){toast('取消失敗:'+e.message,true);}}
 async function addReview(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}try{await api('/api/runs/'+run.id+'/execution/start',{method:'POST',body:JSON.stringify({deliveryMode:'code',agents:['reviewer'],cli:'claude',model:'opus'})});toast('已加 Review pass（Opus 4.8）');}catch(e){toast('失敗:'+e.message,true);}}
+async function resumePipeline(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}try{const r=await api('/api/runs/'+run.id+'/resume',{method:'POST',body:'{}'});toast(r.done?'pipeline 已完成,冇嘢續':'▶ 由斷點續跑緊');}catch(e){toast('續行失敗:'+e.message,true);}}
+async function approveCouncil(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}try{const r=await api('/api/runs/'+run.id+'/council/approve',{method:'POST',body:'{}'});toast('✅ 已批准 plan v'+r.approvedVersion+',生成人話講解中…');}catch(e){toast('批准失敗:'+e.message,true);}}
+async function reviseCouncil(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}const note=prompt('想點改?(可留空,淨係叫議會就未解爭議再收斂一 round)')||'';try{const r=await api('/api/runs/'+run.id+'/council/revise',{method:'POST',body:JSON.stringify({note})});toast('✍️ 議會重跑 round '+(r.round||'')+' 共識…');}catch(e){toast('再改失敗:'+e.message,true);}}
+async function startDebate(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}try{await api('/api/runs/'+run.id+'/council/debate',{method:'POST',body:'{}'});toast('🥊 三模開始辯論收斂…');}catch(e){toast('開拗失敗:'+e.message,true);}}
+function executePlan(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}const row=$('#executePickRow');if(!row)return;const show=row.style.display==='none';row.style.display=show?'':'none';if(show)fillExecuteSelectors();}
+function fillExecuteSelectors(){[['exBuild','sonnet'],['exReviewer','opus']].forEach(([sid,defModel])=>{const sel=$('#'+sid);if(!sel||sel._filled)return;sel._filled=true;state.models.forEach(m=>{const o=el('option');o.value=m.cli+'|'+m.model;o.textContent=m.short||m.label;if(m.model===defModel)o.selected=true;sel.appendChild(o);});});}
+async function confirmExecute(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}const pick=sid=>{const v=($('#'+sid).value||'').split('|');return{cli:v[0]||'claude',model:v[1]||'sonnet'};};const build=pick('exBuild');const rev=pick('exReviewer');if(!confirm('將議會終稿 plan 交 code pipeline 真正落手實作?\n建造='+build.model+'，覆核='+rev.model+'\n會喺 '+(run.projectPath||'')+' 改 code（build → review → fix）。'))return;try{const r=await api('/api/runs/'+run.id+'/council/execute',{method:'POST',body:JSON.stringify({model:build.model,perAgentModels:{frontend:build,backend:build,test:build,reviewer:rev,fixer:build}})});toast('▶ 落實 plan v'+r.executingVersion+' 開波，build→review→fix 跑緊…');$('#executePickRow').style.display='none';}catch(e){toast('落實失敗:'+e.message,true);}}
 
 function buildAgentsPayload(){const sel=state.agentSel[state.mode]||{};const out=[];PRESETS[state.mode].forEach(p=>{const s=sel[p.key];if(s&&s.on){const o={key:p.key};if(s.model){const mm=state.models.find(m=>m.model===s.model)||{};o.model=s.model;o.cli=mm.cli||state.defModel.cli;}out.push(o);}});return out;}
 function profilePerAgent(){
@@ -715,6 +776,30 @@ function renderAgentPick(){
   $('#runHint').textContent=PRESETS[state.mode].filter(p=>(sel[p.key]||{}).on).length+' 個 agent 待命 · 預設 '+state.defModel.cli+'·'+state.defModel.model;
 }
 function renderProjects(){const sel=$('#projSelect');sel.innerHTML='';const seen=new Set();const add=(p,l)=>{if(seen.has(p))return;seen.add(p);const o=el('option');o.value=p;o.textContent=l||p;sel.appendChild(o);};if(state.defaultProject)add(state.defaultProject,state.defaultProject+' (default)');state.projects.forEach(p=>add(p.path,p.label+' — '+p.path));}
+
+// ─── 定向幕僚 chat (Phase 1) ───
+function renderChatModelChips(){const box=$('#chatModelChips');if(!box)return;box.innerHTML='';state.models.forEach(m=>{const sel=state.chat.model||state.defModel;const on=sel&&sel.cli===m.cli&&sel.model===m.model;const c=el('span','chip'+(on?' on':''),`<span class="swatch" style="background:${m.color};color:${m.color}"></span>${esc(m.short||m.label)}`);c.title=m.tier||'';c.onclick=()=>{state.chat.model={cli:m.cli,model:m.model};renderChatModelChips();};box.appendChild(c);});}
+function renderChatProjects(){const sel=$('#chatProjSelect');if(!sel)return;sel.innerHTML='';const o0=el('option');o0.value='';o0.textContent='（純 brainstorm,唔查 project）';sel.appendChild(o0);const seen=new Set();const add=(p,l)=>{if(seen.has(p))return;seen.add(p);const o=el('option');o.value=p;o.textContent=l||p;sel.appendChild(o);};if(state.defaultProject)add(state.defaultProject,state.defaultProject+' (default)');state.projects.forEach(p=>add(p.path,p.label+' — '+p.path));}
+function renderChat(){
+  const run=focusedRun();const box=$('#chatLog');if(!box)return;
+  const t=(run&&run.chatThread)||[];
+  box.innerHTML=t.length?t.map(m=>{
+    const who=m.role==='user'?'你':(m.role==='assistant'?esc(m.model||'幕僚'):'系統');
+    const meta=(m.role==='assistant'&&m.durationMs)?`<span class="muted" style="font-size:10px"> · ${(m.durationMs/1000).toFixed(0)}s${m.usedProjectPath?' · 查咗 project':''}</span>`:'';
+    const bad=(m.status==='failed'||m.status==='timeout');
+    return `<div style="margin-bottom:10px"><b style="color:${m.role==='user'?'var(--gold)':'var(--blue)'}">${who}</b>${meta}<div style="margin-top:2px${bad?';color:var(--red)':''}">${mdLite(m.content)}</div></div>`;
+  }).join(''):'<div class="empty">未開始傾偈。揀 model、（可選）揀 project,寫低你想做乜,撳「傾」。</div>';
+  box.scrollTop=box.scrollHeight;
+  const tk=$('#chatThinking');if(tk)tk.style.display=((run&&run.chatBusy)||state.chat.thinking)?'':'none';
+  const cb=$('#chatToCouncilBtn');if(cb)cb.style.display=(run&&((run.chatThread&&run.chatThread.length)||run.missionBrief))?'':'none';
+}
+function ingestChatMessage(d){const run=state.byId[d.runId];if(run){run.chatThread=run.chatThread||[];if(!run.chatThread.find(x=>x.id===d.message.id))run.chatThread.push(d.message);}if(d.runId===state.focus){state.chat.thinking=false;renderChat();}}
+async function ensureChatRun(){let run=focusedRun();if(run&&run.id)return run.id;const proj=$('#chatProjSelect').value||undefined;const r=await api('/api/runs',{method:'POST',body:JSON.stringify({topic:'定向幕僚 Session',seed:false,projectPath:proj})});state.focus=r.run.id;state.byId[r.run.id]=r.run;await loadRuns();return r.run.id;}
+async function sendChat(){const msg=$('#chatInput').value.trim();if(!msg){toast('寫低你想做乜先',true);return;}let runId;try{runId=await ensureChatRun();}catch(e){toast('開 session 失敗:'+e.message,true);return;}const body={message:msg,modelOverride:state.chat.model||state.defModel,projectPath:$('#chatProjSelect').value||''};$('#chatInput').value='';state.chat.thinking=true;renderChat();try{await api('/api/runs/'+runId+'/chat',{method:'POST',body:JSON.stringify(body)});}catch(e){state.chat.thinking=false;renderChat();toast('傾偈失敗:'+e.message,true);}}
+async function finalizeChat(){const run=focusedRun();if(!run){toast('未開始傾偈',true);return;}if(!confirm('將呢段傾偈定稿成 mission brief?之後可以撳「交議會」開三模議會。'))return;state.chat.thinking=true;renderChat();try{await api('/api/runs/'+run.id+'/chat/finalize',{method:'POST',body:'{}'});toast('定稿中…（10-40s）');}catch(e){state.chat.thinking=false;renderChat();toast('定稿失敗:'+e.message,true);}}
+function toggleCouncilPick(){const row=$('#councilPickRow');if(!row)return;const show=row.style.display==='none';row.style.display=show?'':'none';if(show)fillCouncilSelectors();}
+function fillCouncilSelectors(){[['csA','opus'],['csB','gpt-5.5'],['csC','glm-5.1']].forEach(([sid,defModel])=>{const sel=$('#'+sid);if(!sel||sel._filled)return;sel._filled=true;state.models.forEach(m=>{const o=el('option');o.value=m.cli+'|'+m.model;o.textContent=m.short||m.label;if(m.model===defModel)o.selected=true;sel.appendChild(o);});});}
+async function startCouncilFromChat(){const run=focusedRun();if(!run){toast('未揀 run',true);return;}const pick=sid=>{const v=($('#'+sid).value||'').split('|');return{cli:v[0]||'claude',model:v[1]||'opus'};};const perAgentModels={council_a:pick('csA'),council_b:pick('csB'),council_c:pick('csC')};try{await api('/api/runs/'+run.id+'/council/start',{method:'POST',body:JSON.stringify({perAgentModels})});toast('🗳 三模議會開波!');$('#councilPickRow').style.display='none';}catch(e){toast('開議會失敗:'+e.message,true);}}
 function renderTaskPicker(){const sel=$('#taskPicker');if(!sel)return;sel.innerHTML='<option value="">📂 任務檔…</option>'+state.tasks.map((t,i)=>`<option value="${i}">${t.source==='mission'?'◆ ':'• '}${esc(t.title)}</option>`).join('');}
 
 // ─── theme ───
@@ -736,6 +821,11 @@ socket.on('execution-agent-started',d=>{const run=state.byId[d.runId];if(run){co
 socket.on('execution-agent-log',d=>{state.logBuf[d.agentId]=((state.logBuf[d.agentId]||'')+(d.chunk||'')).slice(-8000);const f=findAgent(d.agentId);if(f&&d.action)f.a.action=d.action;if(state.selAgent===d.agentId){const lb=$('#logbox');if(lb){const nearBottom=lb.scrollHeight-lb.scrollTop-lb.clientHeight<60;if(state.logMd){lb.innerHTML=mdLite(state.logBuf[d.agentId]);}else{lb.textContent=state.logBuf[d.agentId];}if(nearBottom)lb.scrollTop=lb.scrollHeight;}}});
 socket.on('execution-agent-complete',d=>{const run=state.byId[d.runId];if(run){const i=run.agents.findIndex(a=>a.id===d.agent.id);if(i>=0)run.agents[i]=d.agent;}const ok=d.agent.status==='completed';pushFeed(ok?'done':'fail',ok?'✓':'✕',`<b>${esc(d.agent.name)}</b> ${ok?'完成':'失敗'}`);scheduleRender();});
 socket.on('artifact-added',d=>{const run=state.byId[d.runId];if(run){run.artifacts=run.artifacts||[];run.artifacts.unshift(d.artifact);}pushFeed('art','◈',`artifact <b>${esc(d.artifact.title||'')}</b>`);});
+socket.on('council-paused',d=>{const run=state.byId[d.runId];if(run&&run.pipeline)run.pipeline.councilPaused=true;pushFeed('art','⏸',`議會停低待御准 · plan v${d.planVersion} · 未解 ${d.openDisputes==null?0:d.openDisputes}`);if(d.runId===state.focus)scheduleRender();toast('⏸ 三模議會收斂完,等你御准');});
+socket.on('council-review-paused',d=>{const run=state.byId[d.runId];if(run&&run.pipeline)run.pipeline.councilReviewPaused=true;pushFeed('art','🔎',`三模獨立 review 完(${d.reviewCount}份),待你開拗`);if(d.runId===state.focus)scheduleRender();toast('🔎 三模 review 完,睇齊三份再撳「開始拗」');});
+socket.on('chat-message',d=>ingestChatMessage(d));
+socket.on('chat-thinking',d=>{if(d.runId===state.focus){state.chat.thinking=!!d.on;const tm=$('#chatThinkModel');if(tm)tm.textContent=esc(d.model||'');const tk=$('#chatThinking');if(tk)tk.style.display=d.on?'':'none';}});
+socket.on('chat-finalized',d=>{if(d.error){toast('定稿失敗:'+d.error,true);if(d.runId===state.focus){state.chat.thinking=false;renderChat();}return;}const run=state.byId[d.runId];if(run&&d.brief)run.missionBrief=d.brief;toast('📋 Mission brief 已定稿,可撳「交議會」');if(d.runId===state.focus){state.chat.thinking=false;renderChat();}});
 socket.on('debate-message',d=>{pushFeed('debate','⇄',`<b>${esc(d.from)}</b> → <b>${esc(d.to)}</b> 挑戰`);if(d.run)ingestRun(d.run);scheduleRender();});
 socket.on('agent-proposal',d=>{if(d.run)ingestRun(d.run);scheduleRender();});
 socket.on('persona-added',d=>{if(d.run)ingestRun(d.run);scheduleRender();});
@@ -749,6 +839,19 @@ $('#heroHead').onclick=()=>{if($('#hero').classList.contains('collapsed')){$('#h
 $('#newPlanBtn').onclick=()=>{$('#hero').classList.remove('collapsed');$('#heroToggle').textContent='收起';$('#taskInput').focus();$('#stage').scrollTop=0;};
 $('#runBtn').onclick=()=>runPlan();
 $('#reviewBtn').onclick=()=>addReview();
+$('#resumeBtn').onclick=()=>resumePipeline();
+$('#councilApproveBtn').onclick=()=>approveCouncil();
+$('#councilReviseBtn').onclick=()=>reviseCouncil();
+$('#councilDebateBtn').onclick=()=>startDebate();
+$('#councilExecuteBtn').onclick=()=>executePlan();
+$('#executeGoBtn').onclick=()=>confirmExecute();
+$('#chatSendBtn').onclick=()=>sendChat();
+$('#chatFinalizeBtn').onclick=()=>finalizeChat();
+$('#chatToCouncilBtn').onclick=()=>toggleCouncilPick();
+$('#councilGoBtn').onclick=()=>startCouncilFromChat();
+$('#chatInput').addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();sendChat();}});
+$('#chatHead').onclick=()=>{$('#chatPanel').classList.toggle('collapsed');$('#chatToggle').textContent=$('#chatPanel').classList.contains('collapsed')?'展開':'收起';};
+$('#chatToggle').onclick=e=>{e.stopPropagation();$('#chatPanel').classList.toggle('collapsed');$('#chatToggle').textContent=$('#chatPanel').classList.contains('collapsed')?'展開':'收起';};
 $('#resetBtn').onclick=async()=>{if(confirm('Reset current swarm？(唔會刪除過往 plan 紀錄)')){try{await api('/api/reset',{method:'POST',body:'{}'});}catch(e){}}};
 $('#themeBtn').onclick=()=>applyTheme(document.documentElement.getAttribute('data-theme')==='ink'?'forest':'ink');
 $('#modeChips').onclick=e=>{const c=e.target.closest('.chip');if(!c)return;state.mode=c.dataset.mode;document.querySelectorAll('#modeChips .chip').forEach(x=>x.classList.toggle('on',x===c));applyProfile(state.profile);};
@@ -805,6 +908,7 @@ function setupResizers(){
   setupResizers();
   await loadModels();await loadProjects();await loadTasks();
   renderProjects();renderModelChips();applyProfile(state.profile);
+  renderChatModelChips();renderChatProjects();
   await loadRuns();renderAll();
 })();
 })();
