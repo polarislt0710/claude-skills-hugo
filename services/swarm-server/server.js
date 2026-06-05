@@ -218,7 +218,7 @@ const COUNCIL_REVIEWER_SCOPE = [
 ].join('\n');
 
 const COUNCIL_MODERATOR_SCOPE = [
-  '你係「三模議會」嘅 moderator(仲裁收斂)。讀下面 task brief 入面三個評審(A/B/C)今 round 嘅完整輸出 + 當前 plan。',
+  '你係「三模議會」嘅 moderator(仲裁收斂)。三個評審(A/B/C)今 round 嘅完整輸出**會以 file path 形式喺 task brief 列出** —— 你**必須先用 Read tool 逐個讀晒嗰啲 file 全文**先 merge,唔好只靠摘要(摘要會缺料,尤其體積大嗰份)。讀埋當前 plan。',
   '1. Merge:將三人嘅 PROPOSED_CHANGES 合併、去重、解衝突,**改寫出新一版完整 plan**。三人有衝突嘅地方,揀技術上最穩陣嗰個,並一句講點解。若某評審缺席(fail),照 merge 在席者意見,唔好因為少咗一把聲就 block。',
   '2. 重新評估每條 OPEN_ISSUES:已解決就剔走;仍未解就保留,標明邊位提出、卡喺邊。',
   '3. **必須**將新 plan 全文用呢個 fenced block 輸出(系統會寫去 plan.vN.md):',
@@ -1363,10 +1363,24 @@ function advanceCouncil(run, p, stage, session) {
     stage.reviews = reviews.map((r) => ({ name: r.name, model: r.model, agree: r.agree, failed: r.failed }));
     const present = reviews.filter((r) => !r.failed && r.logs.trim());
     const plan = readLatestPlan(run);
+    // 把每位評審完整輸出寫去 file → moderator 用 Read 讀全文(避免 taskBrief argv 上限截斷而丟失 reviewer)。
+    const cdir = COUNCIL_DIR(run.id);
+    const reviewFiles = [];
+    try {
+      fs.mkdirSync(cdir, { recursive: true });
+      present.forEach((r, i) => {
+        const fn = `round-${p.councilRound}-reviewer-${i + 1}.md`;
+        fs.writeFileSync(path.join(cdir, fn), `# ${r.name}${r.model ? ` (${r.model})` : ''}\n\n${r.logs}`);
+        reviewFiles.push({ name: r.name, model: r.model, path: path.join(cdir, fn) });
+      });
+    } catch (e) { console.warn('[council] write review files failed:', e.message); }
     run.taskBrief = truncate(
       `## Goal\n${run.background || run.topic || ''}\n\n## 當前 Plan (v${plan.v})\n${plan.md}\n\n` +
-      present.map((r) => `## 評審 ${r.name}${r.model ? ` (${r.model})` : ''} 輸出\n${r.logs}`).join('\n\n') +
-      (present.length < reviews.length ? `\n\n(註:${reviews.length - present.length} 位評審缺席/失敗,照 merge 在席者)` : ''),
+      `## 三位評審今 round 完整輸出（已各自寫去 file）\n你**必須逐個用 Read tool 讀晒以下每個 file 全文先 merge**，唔好淨係靠下面摘要（摘要只係索引，會缺料）：\n` +
+      reviewFiles.map((f) => `- ${f.name}${f.model ? ` (${f.model})` : ''}: \`${f.path}\``).join('\n') +
+      (present.length < reviews.length ? `\n(註:${reviews.length - present.length} 位評審缺席/失敗,照 merge 在席者)` : '') +
+      `\n\n## 各評審摘要（索引用，完整內容請 Read 上面 file）\n` +
+      present.map((r) => `### ${r.name}${r.model ? ` (${r.model})` : ''}\n${truncate(r.logs, 1800)}`).join('\n\n'),
       MAX_CONTEXT_CHARS);
     // 第一輪三模獨立 review 完 → 停低俾用戶睇齊三份 + 撳「開始拗」先入辯論收斂
     if (p.councilRound === 1 && !p.councilDebateStarted) {
