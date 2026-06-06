@@ -1758,8 +1758,9 @@ function spawnAgentNow(run, preset, agent, agentCommand, options = {}) {
     ? 'cd "$1"; for s in plan code test wrap; do echo "[fake] $s :: ${2:0:48}"; sleep 1; done; echo "[fake] done"'
     : agentCommand.shell;
   // ─── Council 開盡 reasoning（只影響議會,唔掂 mission/coding agent）───
-  // Codex: default medium → high effort;Claude/Opus: 開 extended thinking。
-  // GLM(council_c) 故意唔掂——BigModel 按 token 收費,要 Hugo 開聲先調(CLAUDE.md decision boundary)。
+  // Codex: default medium → high effort;Claude/Opus + GLM: 開 extended thinking。
+  // GLM(council_c) 經 BigModel anthropic-compat、行 claude 二進制,一樣食 MAX_THINKING_TOKENS
+  // (Hugo 2026-06-06 授權埋 GLM 都調大;smoke 證 BigModel 收個 env 唔會炸,會多燒少少 credit)。
   // 全部可由 env 覆寫:SWARM_COUNCIL_CODEX_EFFORT / SWARM_COUNCIL_THINKING。
   const councilEnv = {};
   if (isCouncilAgent && !fake) {
@@ -1767,9 +1768,10 @@ function spawnAgentNow(run, preset, agent, agentCommand, options = {}) {
       const effort = process.env.SWARM_COUNCIL_CODEX_EFFORT || 'high';
       shell = shell.replace('codex exec', `codex exec -c model_reasoning_effort="${effort}"`);
       appendAgentLog(run, agent, `[swarm-server] Council Codex reasoning_effort=${effort}\n`);
-    } else if (agentCommand.cli === 'claude') {
+    } else {
+      // claude / opus / sonnet / glm 都行 claude 二進制 → 食 MAX_THINKING_TOKENS
       councilEnv.MAX_THINKING_TOKENS = process.env.SWARM_COUNCIL_THINKING || '31999';
-      appendAgentLog(run, agent, `[swarm-server] Council Claude MAX_THINKING_TOKENS=${councilEnv.MAX_THINKING_TOKENS}\n`);
+      appendAgentLog(run, agent, `[swarm-server] Council ${agentCommand.cli} MAX_THINKING_TOKENS=${councilEnv.MAX_THINKING_TOKENS}\n`);
     }
   }
   const child = spawn(
