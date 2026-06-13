@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mission Control</title>
+<link rel="stylesheet" href="styles.css" />
+<script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-icon">🎯</span>
+    <div>
+      <div class="brand-title">Mission Control</div>
+      <div class="brand-sub">Handoff plan → smart route → agent roster → warning gate → summary</div>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <a class="ghost" href="/automation/" target="_blank">⚙️ Automation</a>
+    <a class="ghost" href="http://187.127.115.235:3012" target="_blank" rel="noopener">Cronicle ↗</a>
+  </div>
+</header>
+
+<main class="grid">
+  <!-- LEFT: Setup -->
+  <section class="card setup-card">
+    <div class="card-header"><span>🚀 新 Mission</span><span id="setup-status" class="muted small"></span></div>
+    <div class="setup-body">
+      <label>Plan file (<code id="handoff-dir-hint" class="muted small">~/handoffs/</code>)</label>
+      <div class="row">
+        <select id="plan-select"><option value="">(loading…)</option></select>
+        <button class="ghost small" id="btn-refresh-plans">↻</button>
+      </div>
+      <details class="plan-preview-wrap">
+        <summary class="muted small">Plan preview</summary>
+        <pre class="plan-preview" id="plan-preview">(揀左 plan 之後出 preview)</pre>
+      </details>
+
+      <div class="batch-panel">
+        <div class="batch-panel-head">
+          <div>
+            <div class="batch-title">Batch Mission</div>
+            <div class="muted small">一次揀幾個 handoff plan，先分析撞 file 風險，再安全排隊。</div>
+          </div>
+          <button class="ghost small" id="btn-refresh-batches">↻</button>
+        </div>
+        <div class="batch-plan-list" id="batch-plan-list">
+          <div class="placeholder">Loading plans…</div>
+        </div>
+        <div class="batch-actions">
+          <button class="ghost small" id="btn-analyze-batch">Analyze Batch</button>
+          <button class="primary small" id="btn-confirm-batch" disabled>Confirm & Queue Batch</button>
+          <span id="batch-status" class="muted small"></span>
+        </div>
+        <div class="batch-analysis" id="batch-analysis">
+          <div class="placeholder">揀 2 個或以上 plan 之後分析。</div>
+        </div>
+        <div class="batch-queue-list" id="batch-queue-list">
+          <div class="placeholder">Batch queue loading…</div>
+        </div>
+      </div>
+
+      <label>Target project (cwd for agents)</label>
+      <input type="text" id="target-project" value="/home/hugo-orca/orca-platform-mvp" />
+
+      <label>Title (optional)</label>
+      <input type="text" id="title-input" placeholder="(默認用 plan 檔名)" />
+
+      <label class="checkbox-label">
+        <input type="checkbox" id="auto-orchestrate" checked />
+        <span><strong>🤖 Auto-orchestrate</strong> — Planner 拆 sub-phase + 每 phase auto-loop fix（最多 2 次）+ Telegram 通知</span>
+      </label>
+
+      <label class="checkbox-label">
+        <input type="checkbox" id="smart-route" checked />
+        <span><strong>🧠 Smart route</strong> — 先計 complexity，再自動決定 GLM / Opus 分工</span>
+      </label>
+
+      <label>Warning gate</label>
+      <select id="warning-policy">
+        <option value="strict" selected>Strict — WARN 會 refill + re-review，必要時再 fix</option>
+        <option value="soft">Soft — WARN 只 refill 一次，之後收工</option>
+      </select>
+
+      <label>Models</label>
+      <div class="models-grid models-grid-5">
+        <div><div class="muted small">Planner</div><select id="model-planner"></select></div>
+        <div><div class="muted small">Coding</div><select id="model-coding"></select></div>
+        <div><div class="muted small">Refill</div><select id="model-refill"></select></div>
+        <div><div class="muted small">Review</div><select id="model-review"></select></div>
+        <div><div class="muted small">Summary</div><select id="model-finalSummary"></select></div>
+      </div>
+
+      <label>Guidelines (Review phase 自動 load)</label>
+      <div class="guidelines-list" id="guidelines-list">
+        <div class="placeholder">(loading…)</div>
+      </div>
+
+      <div class="setup-footer">
+        <button id="btn-create" class="primary">🚀 Run Mission</button>
+        <span id="create-status" class="muted small"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- RIGHT: Live phase log -->
+  <section class="card log-card">
+    <div class="card-header">
+      <span>📡 <span id="active-mission-title">Live log</span></span>
+      <span class="log-header-actions">
+        <button class="ghost small resume-btn" id="btn-resume" style="display:none">▶ 繼續呢一步</button>
+        <span id="active-mission-status" class="status-pill">idle</span>
+      </span>
+    </div>
+    <div class="mission-overview" id="mission-overview" style="display:none">
+      <div class="overview-main">
+        <div class="complexity-orb" id="complexity-orb">
+          <strong id="complexity-score">--</strong>
+          <span id="complexity-band">complexity</span>
+        </div>
+        <div class="route-card">
+          <div class="micro-label">Model Route</div>
+          <div class="route-line" id="route-line">等待 mission</div>
+          <div class="route-note" id="route-note">Smart route 會喺 mission 建立後顯示</div>
+        </div>
+        <div class="budget-card">
+          <div class="micro-label">Token Budget</div>
+          <div class="budget-line"><span id="budget-tokens">--</span> est. tokens</div>
+          <div class="budget-note" id="budget-note">saving estimate pending</div>
+        </div>
+      </div>
+      <div class="agent-board-wrap">
+        <div class="agent-board-header">
+          <span class="micro-label">Agent Board</span>
+          <span id="agent-count" class="muted small">0 agents</span>
+        </div>
+        <div class="agent-board" id="agent-board"></div>
+      </div>
+    </div>
+    <div class="subphase-bar" id="subphase-bar" style="display:none">
+      <div class="subphase-bar-header">
+        <span class="muted small">Sub-phases</span>
+        <span id="subphase-summary" class="muted small"></span>
+      </div>
+      <div class="subphase-list" id="subphase-list"></div>
+    </div>
+    <div class="phase-tabs" id="phase-tabs">
+      <button class="phase-tab active" data-phase="preflight"><span class="phase-dot"></span>Preflight</button>
+      <button class="phase-tab" data-phase="coding"><span class="phase-dot"></span>Coding</button>
+      <button class="phase-tab" data-phase="refill"><span class="phase-dot"></span>Refill</button>
+      <button class="phase-tab" data-phase="review"><span class="phase-dot"></span>Review</button>
+    </div>
+    <div class="progress-strip" id="progress-strip" style="display:none">
+      <div class="progress-row">
+        <span id="progress-pulse" class="pulse-dot"></span>
+        <span id="progress-elapsed" class="mono small">--</span>
+        <span class="progress-sep">·</span>
+        <span id="progress-cpu" class="mono small">--% CPU</span>
+        <span class="progress-sep">·</span>
+        <span id="progress-commits" class="small">0 commits</span>
+        <span class="progress-sep">·</span>
+        <span id="progress-modified" class="small">0 modified</span>
+      </div>
+      <div class="progress-row progress-row-2">
+        <span class="muted small">recent:</span>
+        <span id="progress-recent" class="mono small">(none yet)</span>
+      </div>
+    </div>
+    <div class="log-stream" id="log-stream">
+      <div class="placeholder">未有 mission 在跑。撳左邊「Run Mission」開始。</div>
+    </div>
+    <div class="log-footer" id="log-footer" style="display:none">
+      <button class="ghost small" id="btn-view-findings">📋 Findings</button>
+      <button class="ghost small" id="btn-view-summary">📑 Final Summary</button>
+      <button class="ghost small" id="btn-rerun">↻ Rerun…</button>
+      <span id="log-summary" class="muted small"></span>
+    </div>
+  </section>
+
+  <!-- BOTTOM: Missions list -->
+  <section class="card missions-card">
+    <div class="card-header">
+      <span>🗂 Missions (近期)</span>
+      <button class="ghost small" id="btn-refresh-missions">↻</button>
+    </div>
+    <div class="missions-body" id="missions-body">
+      <div class="placeholder">Loading…</div>
+    </div>
+  </section>
+</main>
+
+<!-- Findings modal -->
+<div class="modal-overlay" id="findings-overlay" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <span>📋 Review findings</span>
+      <button class="ghost small" id="findings-close">✕</button>
+    </div>
+    <pre class="modal-body" id="findings-body"></pre>
+  </div>
+</div>
+
+<!-- Rerun modal -->
+<div class="modal-overlay" id="rerun-overlay" style="display:none">
+  <div class="modal small-modal">
+    <div class="modal-header">
+      <span>↻ Rerun from which phase?</span>
+      <button class="ghost small" id="rerun-close">✕</button>
+    </div>
+    <div class="modal-body" style="padding: 16px;">
+      <button class="ghost rerun-choice" data-phase="coding">↻ Coding (重頭嚟)</button>
+      <button class="ghost rerun-choice" data-phase="refill">↻ Refill (只重 polish)</button>
+      <button class="ghost rerun-choice" data-phase="review">↻ Review (只重 review)</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

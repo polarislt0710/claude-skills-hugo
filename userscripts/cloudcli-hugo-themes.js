@@ -120,10 +120,14 @@
     return `${location.protocol}//${host}:${SWARM_PORT}/mirofish/`;
   }
 
+  function getAutomationUrl() {
+    const host = location.hostname || "187.127.115.235";
+    return `${location.protocol}//${host}:${SWARM_PORT}/automation/`;
+  }
+
   function getMissionUrl() {
     const host = location.hostname || "187.127.115.235";
-    const theme = document.documentElement.dataset.hugoCloudcliTheme || getStoredTheme() || "cozy";
-    return `${location.protocol}//${host}:${SWARM_PORT}/mission?theme=${encodeURIComponent(theme)}`;
+    return `${location.protocol}//${host}:${SWARM_PORT}/mission/`;
   }
 
   function inferCloudCliTopic(text) {
@@ -321,7 +325,7 @@
   function ensureMissionButton() {
     if (!document.body || document.getElementById("hugo-mission-button-wrap")) return;
 
-    var anchor = document.getElementById("hugo-mirofish-button-wrap") || document.getElementById("hugo-swarm-button-wrap");
+    var anchor = document.getElementById("hugo-automation-button-wrap") || document.getElementById("hugo-mirofish-button-wrap") || document.getElementById("hugo-swarm-button-wrap");
     if (!anchor || !anchor.parentElement) {
       var chatButton = [...document.querySelectorAll("button")].find(function (btn) {
         var text = (btn.textContent || "").trim();
@@ -339,7 +343,8 @@
     var button = document.createElement("button");
     button.id = "hugo-mission-button";
     button.type = "button";
-    button.innerHTML = '<span aria-hidden="true">\u{1F3AF}</span><span>Mission</span>';
+    button.title = "Mission Control — 由 handoff plan 自動走 coding → refill → review pipeline";
+    button.innerHTML = '<span aria-hidden="true">🎯</span><span>Mission</span>';
     button.addEventListener("click", function () {
       window.open(getMissionUrl(), "_blank", "noopener,noreferrer");
     });
@@ -348,168 +353,35 @@
     anchor.parentElement.insertBefore(wrap, anchor.nextSibling);
   }
 
-  // ─── Send-to-Mission button + modal ──────────────────────────────────
-  function ensureSendButton() {
-    if (!document.body || document.getElementById("hugo-send-button-wrap")) return;
+  function ensureAutomationButton() {
+    if (!document.body || document.getElementById("hugo-automation-button-wrap")) return;
 
-    var anchor = document.getElementById("hugo-mission-button-wrap");
-    if (!anchor || !anchor.parentElement) return;
+    var anchor = document.getElementById("hugo-mirofish-button-wrap") || document.getElementById("hugo-swarm-button-wrap");
+    if (!anchor || !anchor.parentElement) {
+      var chatButton = [...document.querySelectorAll("button")].find(function (btn) {
+        var text = (btn.textContent || "").trim();
+        var rect = btn.getBoundingClientRect();
+        return /^(Chat|聊天)$/.test(text) && rect.width > 20 && rect.height > 20 && rect.y < 90;
+      });
+      if (!chatButton || !chatButton.parentElement || !chatButton.parentElement.parentElement) return;
+      anchor = chatButton.parentElement;
+    }
 
     var wrap = document.createElement("span");
-    wrap.id = "hugo-send-button-wrap";
+    wrap.id = "hugo-automation-button-wrap";
     wrap.className = "relative inline-block";
 
     var button = document.createElement("button");
-    button.id = "hugo-send-button";
+    button.id = "hugo-automation-button";
     button.type = "button";
-    button.title = "將呢度傾出嚟嘅 plan 飛去 Mission Control";
-    button.innerHTML = '<span aria-hidden="true">\u{1F4E4}</span>';
-    button.addEventListener("click", openSendModal);
+    button.title = "Automation Designer — 同 AI 設計定時 automation，寫入 Cronicle";
+    button.innerHTML = '<span aria-hidden="true">⚙️</span><span>Automation</span>';
+    button.addEventListener("click", function () {
+      window.open(getAutomationUrl(), "_blank", "noopener,noreferrer");
+    });
 
     wrap.appendChild(button);
     anchor.parentElement.insertBefore(wrap, anchor.nextSibling);
-  }
-
-  // Try to extract the latest substantive assistant message from page
-  function extractLatestPlanText() {
-    // Strategy: find all elements that look like rendered markdown (have multiple
-    // children, contain headings or paragraphs) and pick the longest one near
-    // the bottom of the scroll area.
-    var candidates = [].slice.call(document.querySelectorAll(".prose, [class*='prose' i], [class*='markdown' i]"))
-      .filter(function (el) {
-        var text = (el.innerText || "").trim();
-        return text.length > 200;
-      })
-      .map(function (el) {
-        return {
-          el: el,
-          text: (el.innerText || "").trim(),
-          y: el.getBoundingClientRect().top + window.scrollY,
-        };
-      })
-      .sort(function (a, b) { return b.y - a.y; });  // bottom first
-    if (candidates.length === 0) return "";
-    return candidates[0].text;
-  }
-
-  // Try to extract topic from page (first H1/H2 or title)
-  function extractTopicHint() {
-    var heading = [].slice.call(document.querySelectorAll("h1, h2"))
-      .map(function (n) { return (n.textContent || "").trim(); })
-      .find(function (t) { return t.length > 4 && t.length < 100; });
-    return heading || (document.title || "").split("·")[0].trim();
-  }
-
-  function ensureSendModal() {
-    if (document.getElementById("hugo-send-modal")) return;
-    var modal = document.createElement("div");
-    modal.id = "hugo-send-modal";
-    modal.style.display = "none";
-    modal.innerHTML = ''
-      + '<div id="hugo-send-modal-card">'
-      +   '<div class="hugo-send-head">'
-      +     '<strong>📤 Send Plan → Mission Control</strong>'
-      +     '<button type="button" id="hugo-send-close" aria-label="關閉">✕</button>'
-      +   '</div>'
-      +   '<p class="hugo-send-help">將你同 Opus 傾出嚟嘅 plan 直接變成新 Mission，<strong>skip Opus 嘅 planning 階段</strong>，直接入 approval mode 由你 confirm。</p>'
-      +   '<label>Topic</label>'
-      +   '<input id="hugo-send-topic" type="text" placeholder="例：ORCA 評分系統 MVP">'
-      +   '<div class="hugo-send-plan-row">'
-      +     '<label style="margin: 0;">Plan content（建議用 mission.md 格式 + ```phase``` blocks）</label>'
-      +     '<button type="button" id="hugo-send-autofill" class="hugo-send-mini">🔍 自動 capture</button>'
-      +   '</div>'
-      +   '<textarea id="hugo-send-plan" rows="14" placeholder="貼喺度…\n\n## 🎯 Goal\n…\n\n## ✅ Success Criteria\n- …\n\n## 📦 Phases\n```phase\n{\n  \"id\": 1, \"title\": \"…\", \"scope\": \"…\",\n  \"targetFiles\": [], \"successCheck\": \"…\",\n  \"coderModel\": \"glm-5.1\"\n}\n```"></textarea>'
-      +   '<label>Target Project</label>'
-      +   '<input id="hugo-send-target" type="text" value="/home/hugo-orca/orca-platform-mvp">'
-      +   '<div class="hugo-send-models">'
-      +     '<div><label>Planner</label><select id="hugo-send-planner"><option value="claude">Opus</option><option value="glm-5.1">GLM-5.1</option></select></div>'
-      +     '<div><label>Coder（預設）</label><select id="hugo-send-coder"><option value="glm-5.1">GLM-5.1</option><option value="glm-4.6">GLM-4.6</option><option value="glm-4.5-air">GLM-4.5-Air</option><option value="claude">Opus</option></select></div>'
-      +     '<div><label>Reviewer</label><select id="hugo-send-reviewer"><option value="claude">Opus</option><option value="glm-5.1">GLM-5.1</option></select></div>'
-      +   '</div>'
-      +   '<p class="hugo-send-warn">⚠️ 如果 plan 入面冇 ```phase``` JSON blocks，phases 會係 0 — 你可以喺 Mission 嘅 approval panel 用 feedback 叫 Opus 「format 返呢個 plan 加 phase blocks」。</p>'
-      +   '<div class="hugo-send-actions">'
-      +     '<button type="button" id="hugo-send-cancel" class="hugo-send-cancel">取消</button>'
-      +     '<button type="button" id="hugo-send-submit" class="hugo-send-submit">🚀 Create Mission</button>'
-      +   '</div>'
-      + '</div>';
-    document.body.appendChild(modal);
-
-    modal.querySelector("#hugo-send-close").addEventListener("click", closeSendModal);
-    modal.querySelector("#hugo-send-cancel").addEventListener("click", closeSendModal);
-    modal.addEventListener("click", function (e) { if (e.target === modal) closeSendModal(); });
-
-    modal.querySelector("#hugo-send-autofill").addEventListener("click", function () {
-      var text = extractLatestPlanText();
-      if (!text) {
-        alert("自動 capture 失敗 — 喺 page 度搵唔到夠長嘅 plan content。請手動貼喺 textarea 入面。");
-        return;
-      }
-      document.getElementById("hugo-send-plan").value = text;
-    });
-
-    modal.querySelector("#hugo-send-submit").addEventListener("click", submitSendModal);
-  }
-
-  function openSendModal() {
-    ensureSendModal();
-    var modal = document.getElementById("hugo-send-modal");
-    modal.style.display = "flex";
-
-    // Pre-fill topic + auto-capture plan as best effort
-    var topicInput = document.getElementById("hugo-send-topic");
-    var planArea = document.getElementById("hugo-send-plan");
-    if (!topicInput.value) topicInput.value = extractTopicHint();
-    if (!planArea.value) planArea.value = extractLatestPlanText();
-  }
-
-  function closeSendModal() {
-    var modal = document.getElementById("hugo-send-modal");
-    if (modal) modal.style.display = "none";
-  }
-
-  async function submitSendModal() {
-    var topic = document.getElementById("hugo-send-topic").value.trim();
-    var planMarkdown = document.getElementById("hugo-send-plan").value.trim();
-    var target = document.getElementById("hugo-send-target").value.trim();
-    if (!topic) { alert("要填 Topic"); return; }
-    if (!planMarkdown || planMarkdown.length < 50) { alert("Plan content 太短，貼多啲嚟"); return; }
-
-    var submitBtn = document.getElementById("hugo-send-submit");
-    submitBtn.disabled = true;
-    submitBtn.textContent = "送緊…";
-
-    try {
-      var payload = {
-        topic: topic,
-        planMarkdown: planMarkdown,
-        targetProject: target || "/home/hugo-orca/orca-platform-mvp",
-        sourceUrl: location.href,
-        models: {
-          planner: document.getElementById("hugo-send-planner").value,
-          coder: document.getElementById("hugo-send-coder").value,
-          reviewer: document.getElementById("hugo-send-reviewer").value,
-        },
-      };
-      var res = await fetch(getSwarmUrl() + "/mission/api/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      var data = await res.json();
-      if (!data.ok) throw new Error(data.error || "unknown");
-      closeSendModal();
-      // Open mission page focused on the new mission
-      var theme = document.documentElement.dataset.hugoCloudcliTheme || getStoredTheme() || "cozy";
-      window.open(getSwarmUrl() + "/mission?focus=" + encodeURIComponent(data.mission.id) + "&theme=" + encodeURIComponent(theme), "_blank", "noopener,noreferrer");
-      // Reset form for next use
-      document.getElementById("hugo-send-topic").value = "";
-      document.getElementById("hugo-send-plan").value = "";
-    } catch (err) {
-      alert("Error: " + (err.message || err));
-    } finally {
-      submitBtn.disabled = false;
-      submitBtn.textContent = "🚀 Create Mission";
-    }
   }
 
   applyTheme(getStoredTheme());
@@ -530,8 +402,8 @@
     ensureSwitcher();
     ensureSwarmButton();
     ensureMiroFishButton();
+    ensureAutomationButton();
     ensureMissionButton();
-    ensureSendButton();
     positionSwitcher();
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });

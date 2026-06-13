@@ -1,3 +1,6 @@
 node_modules/
 *.log
 .DS_Store
+
+# swarm-server runtime state (runs / overseer memory) — never commit
+services/swarm-server/data/

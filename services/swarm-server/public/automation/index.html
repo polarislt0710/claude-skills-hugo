@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Automation Designer</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-icon">⚙️</span>
+    <div>
+      <div class="brand-title">Automation Designer</div>
+      <div class="brand-sub">同 AI 傾完，自動寫入 Cronicle</div>
+    </div>
+  </div>
+  <div class="topbar-actions">
+    <button id="btn-sessions" class="ghost">🗂 Sessions</button>
+    <button id="btn-new" class="ghost">＋ 新 automation</button>
+    <a class="ghost" href="http://187.127.115.235:3012" target="_blank" rel="noopener">Cronicle ↗</a>
+  </div>
+</header>
+
+<main class="grid">
+  <!-- LEFT: Chat -->
+  <section class="card chat-card">
+    <div class="card-header">
+      <span>💬 對話設計</span>
+      <span id="chat-status" class="muted small"></span>
+    </div>
+    <div id="chat-messages" class="chat-messages">
+      <div class="msg ai">
+        <div class="msg-body">你好。
+描述一下你想要嘅 automation — 例如：「每朝 9 點同 9 點拉 ORCA repo 啲未 merge PR，summarise 之後 send 落 Telegram」。我會同你一齊 nail 落 spec。</div>
+      </div>
+    </div>
+    <div class="chat-input">
+      <textarea id="chat-input" rows="3" placeholder="描述你想要嘅 automation… (Cmd/Ctrl+Enter 發送)"></textarea>
+      <div class="chat-input-buttons">
+        <button id="btn-send" class="primary">發送</button>
+        <button id="btn-cancel" class="ghost" style="display:none">⏹ 停</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- RIGHT: Spec + Schedule -->
+  <section class="right-col">
+    <div class="card spec-card" id="spec-card">
+      <div class="card-header"><span>📋 Spec</span><span id="spec-status" class="muted small">未 lock</span></div>
+      <div class="spec-body" id="spec-body">
+        <div class="placeholder">同 AI 傾完，佢會喺度出 spec。</div>
+      </div>
+    </div>
+
+    <div class="card sched-card" id="sched-card">
+      <div class="card-header"><span>📅 Schedule</span><span id="sched-preview" class="muted small mono"></span></div>
+      <div class="sched-body">
+        <div class="mode-tabs" role="tablist">
+          <button class="tab active" data-mode="daily">每日</button>
+          <button class="tab" data-mode="weekly">每週</button>
+          <button class="tab" data-mode="monthly">每月</button>
+          <button class="tab" data-mode="yearly">每年</button>
+        </div>
+
+        <!-- DAILY -->
+        <div class="mode-panel active" data-mode="daily">
+          <label>時段（可多選，HKT）</label>
+          <div class="time-chips" id="daily-times"></div>
+          <div class="time-add">
+            <input type="time" id="daily-time-input" value="09:00" />
+            <button class="ghost small" id="daily-time-add">＋ 加時段</button>
+          </div>
+        </div>
+
+        <!-- WEEKLY -->
+        <div class="mode-panel" data-mode="weekly">
+          <label>星期幾（可多選）</label>
+          <div class="weekday-grid" id="weekday-grid"></div>
+          <label>時段（可多選）</label>
+          <div class="time-chips" id="weekly-times"></div>
+          <div class="time-add">
+            <input type="time" id="weekly-time-input" value="09:00" />
+            <button class="ghost small" id="weekly-time-add">＋ 加時段</button>
+          </div>
+        </div>
+
+        <!-- MONTHLY -->
+        <div class="mode-panel" data-mode="monthly">
+          <label>邊幾日（可多選）</label>
+          <div class="day-grid" id="month-day-grid"></div>
+          <label>時段（可多選）</label>
+          <div class="time-chips" id="monthly-times"></div>
+          <div class="time-add">
+            <input type="time" id="monthly-time-input" value="09:00" />
+            <button class="ghost small" id="monthly-time-add">＋ 加時段</button>
+          </div>
+        </div>
+
+        <!-- YEARLY -->
+        <div class="mode-panel" data-mode="yearly">
+          <label>邊個月</label>
+          <div class="month-grid" id="year-month-grid"></div>
+          <label>邊一日</label>
+          <div class="day-grid" id="year-day-grid"></div>
+          <label>時間</label>
+          <div class="time-chips" id="yearly-times"></div>
+          <div class="time-add">
+            <input type="time" id="yearly-time-input" value="09:00" />
+            <button class="ghost small" id="yearly-time-add">＋ 加時段</button>
+          </div>
+        </div>
+
+        <div class="tz-row">
+          <label>Timezone</label>
+          <select id="tz-select">
+            <option value="Asia/Hong_Kong" selected>Asia/Hong_Kong</option>
+            <option value="Asia/Singapore">Asia/Singapore</option>
+            <option value="Asia/Tokyo">Asia/Tokyo</option>
+            <option value="Europe/London">Europe/London</option>
+            <option value="America/New_York">America/New_York</option>
+            <option value="UTC">UTC</option>
+          </select>
+        </div>
+      </div>
+      <div class="sched-footer">
+        <button id="btn-save" class="primary" disabled>💾 寫入 Cronicle</button>
+        <span id="save-status" class="muted small"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- BOTTOM: Existing jobs -->
+  <section class="card jobs-card">
+    <div class="card-header">
+      <span>🗂 已建立 automation</span>
+      <button id="btn-refresh-jobs" class="ghost small">↻ refresh</button>
+    </div>
+    <div class="jobs-body" id="jobs-body">
+      <div class="placeholder">Loading…</div>
+    </div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -8,6 +8,8 @@ const { Server } = require('socket.io');
 
 // Load .env (Cronicle API key, etc.) before any module reads process.env
 require('./lib/env').loadEnv(path.join(__dirname, '.env'));
+// 額外 load ~/.perplexity_secrets（`export KEY=` 格式，loadEnv 會 strip export）→ PERPLEXITY_API_KEY
+require('./lib/env').loadEnv(path.join(require('os').homedir(), '.perplexity_secrets'));
 
 const app = express();
 const server = http.createServer(app);
@@ -35,6 +37,59 @@ const SWARM_REVIEW_GATE = process.env.SWARM_REVIEW_GATE === '1';
 const SWARM_REVIEW_GATE_MAX = Number(process.env.SWARM_REVIEW_GATE_MAX || 1);
 const SWARM_REVIEW_GATE_STRICT = process.env.SWARM_REVIEW_GATE_STRICT === '1';
 const SWARM_GATE_TIME_BUDGET_MS = Number(process.env.SWARM_GATE_TIME_BUDGET_MS || 0);
+
+// ─── Telegram 通知（銜接舊 bot;lib/telegram 喺 TG_BOT_TOKEN/TG_CHAT_ID 未設時 graceful no-op）───
+// 只喺關鍵節點 ping：review 閘、御准閘（等你批）、完成（議會收斂 / plan 落實）、agent 失敗。
+const telegram = require('./lib/telegram');
+const SWARM_DASH_URL = process.env.SWARM_DASH_URL || 'http://187.127.115.235:3010';
+
+// ─── Council research（Perplexity，B 模式：三模提角度 → 集中 call 一次 → 結果派返）───
+const { runResearch } = require('./lib/perplexity-research');
+const PPLX_BUDGET = Number(process.env.PPLX_BUDGET || 5);
+const PPLX_MODEL = process.env.PPLX_MODEL || 'sonar';
+const COUNCIL_RESEARCH_MAX_ANGLES = Number(process.env.COUNCIL_RESEARCH_MAX_ANGLES || 8);
+const tgNotifiedKeys = new Set(); // dedup「完成」通知（per run + milestone），避免同一 run 報多次
+function tgEsc(s) {
+  return String(s == null ? '' : s).replace(/[_*`\[\]]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 280);
+}
+function tgNotify(text, replyMarkup) {
+  try {
+    const opts = replyMarkup ? { replyMarkup } : {};
+    Promise.resolve(telegram.sendMessage(text, opts)).catch((e) => console.warn('[telegram] send failed:', e.message));
+  } catch (e) { console.warn('[telegram] notify threw:', e.message); }
+}
+function notifyCouncilGate(run, p, reason) {
+  const disputes = p.councilOpenDisputes == null ? 0 : p.councilOpenDisputes;
+  tgNotify(
+    `⏸ *御准閘 · 等你批准*\n\n🏛 ${tgEsc(run.topic)}\n${tgEsc(reason)}｜Plan v${p.councilPlanVersion}｜未解爭議 ${disputes}\n\n撳掣批准／再改,或開 [Swarm Dashboard](${SWARM_DASH_URL})`,
+    { inline_keyboard: [[{ text: '✅ 批准', callback_data: 'approve' }], [{ text: '✍️ 再改', callback_data: 'revise_hint' }]] }
+  );
+}
+function notifyCouncilReviewGate(run, reviews) {
+  const disagreements = (reviews || []).filter((r) => !r.agree).length;
+  tgNotify(
+    `🔎 *三模獨立 review 完成*\n\n🏛 ${tgEsc(run.topic)}\n已收到 ${reviews.length} 份 review｜有異議 ${disagreements}\n\n撳「開始拗」進入 moderator 收斂,或開 [Swarm Dashboard](${SWARM_DASH_URL}) 睇全文。`,
+    { inline_keyboard: [[{ text: '🥊 開始拗', callback_data: 'debate' }]] }
+  );
+}
+function notifyRunComplete(run, tag) {
+  if (!run || !run.id) return;
+  const key = `${run.id}:${tag}`;
+  if (tgNotifiedKeys.has(key)) return;
+  tgNotifiedKeys.add(key);
+  const title = tag === 'pipeline' ? '✅ *Plan 落實完成*' : '✅ *議會收斂完成*';
+  const note = tag === 'pipeline'
+    ? 'build → review → fix 跑完,去睇改咗咩 + 驗證結果'
+    : '人話講解 + plan 終稿已出,可以開始落實';
+  const markup = tag === 'synthesis'
+    ? { inline_keyboard: [[{ text: '▶ 落實 plan', callback_data: 'execute' }]] }
+    : null;
+  tgNotify(`${title}\n\n🏛 ${tgEsc(run.topic)}\n${note}\n\n→ 開 [Swarm Dashboard](${SWARM_DASH_URL})`, markup);
+}
+function notifyAgentFailed(run, agent, preset) {
+  const name = (preset && preset.name) || (agent && agent.name) || 'Agent';
+  tgNotify(`⚠️ *Agent 失敗* · ${tgEsc(run && run.topic)}\n\n${tgEsc(name)}：${tgEsc(agent && agent.summary)}\n\n→ 開 [Swarm Dashboard](${SWARM_DASH_URL}) 睇 log`);
+}
 // ─── Swarm Council (三模議會 · Phase 2-4): 三模共識收斂 + 人手御准閘 + 人話講解 ───
 // 三個你揀嘅 model 讀真 project + plan,互相博弈到零爭議,moderator 改寫 plan.vN;
 // 收斂(或用盡 round)後停低交人手御准,批准後 explainer 用人話講解。全程沿用 CLI spawn
@@ -163,6 +218,14 @@ const EXECUTION_PRESETS = [
     role: '後端開發',
     skill: 'API / persistence / server workflow',
     scope: '負責 server API、資料模型、持久化、job orchestration，避免無關 UI 重構。',
+  },
+  {
+    key: 'database',
+    name: 'Database Agent',
+    layer: 'delivery',
+    role: 'DB / Migration',
+    skill: 'schema / migrations / RLS / data integrity',
+    scope: '只負責 DB 層:schema、migration 檔、RLS / index / 約束、資料完整性。改 schema 前先睇返現有 migration 嘅命名同序號(唔好撞號),migration 要可重跑 / 可回滾。唔好掂 UI 或無關 API。需要改 data shape 而會影響 backend contract 嘅,清楚 flag 出嚟畀 Backend Agent。',
   },
   {
     key: 'test',
@@ -348,6 +411,7 @@ const AGENT_SKILL_MAP = {
   planner:     ['architect', 'brainstormers'],
   frontend:    ['typography', 'color', 'layout', 'components', 'taste-skill', 'performance-engineer'],
   backend:     ['architect', 'debugger', 'performance-engineer'],
+  database:    ['architect', 'security-auditor', 'debugger'],
   test:        ['debugger', 'reviewer-persona'],
   reviewer:    ['reviewer-persona', 'security-auditor', 'refactor-engineer'],
   fixer:       ['debugger', 'refactor-engineer'],
@@ -361,6 +425,7 @@ const AGENT_SKILL_MAP = {
   council_c:   ['brainstormers', 'refactor-engineer', 'reviewer-persona'],
   moderator:   ['architect', 'reviewer-persona'],
   explainer:   [],  // 只靠 execution-discipline + tone prompt,免污染人話 tone
+  overseer:    ['brainstormers', 'architect', 'reviewer-persona'],  // 總管:點子 + 系統思維 + 批判 review
 };
 
 function getSkillContent(presetKey) {
@@ -621,6 +686,7 @@ function makeAgent(name, layer, role, skill, index, extra = {}) {
 // ─── Model catalog (which CLI + model each sub-agent can run on) ───
 const MODEL_CATALOG = [
   { cli: 'claude', model: 'opus',    label: 'Claude Opus 4.8', short: 'opus',   color: '#c8993f', tier: '旗艦 · 規劃腦' },
+  { cli: 'claude', model: 'claude-fable-5', label: 'Claude Fable 5', short: 'fable', color: '#d8a3ff', tier: '至尊 · 仲裁腦' },
   { cli: 'claude', model: 'sonnet',  label: 'Claude Sonnet', short: 'sonnet', color: '#87b7ff', tier: '均衡 · 預設' },
   { cli: 'claude', model: 'haiku',   label: 'Claude Haiku',  short: 'haiku',  color: '#5fb89a', tier: '快 · 輕量' },
   { cli: 'codex',  model: 'gpt-5.5', label: 'Codex gpt-5.5', short: 'codex',  color: '#9aa7b2', tier: 'OpenAI' },
@@ -1132,6 +1198,44 @@ function spawnChatTurn(run, picked, chatCwd, finalize) {
   });
 }
 
+// ─── Opus 完善 prompt（俾 Telegram bot：粗略請求 → 結構化 brief，過目後先落）───
+const MISSION_REFINE_PROMPT = [
+  '你係資深 tech lead,幫手完善開發任務嘅 brief。',
+  '將用戶粗略嘅需求,整理成一份清晰、可以直接落手做嘅 implementation brief,包含：',
+  '【背景與目標】、【範圍（明確要做 ＋ 明確唔做乜）】、【建議步驟】、【驗收標準】。',
+  '保留用戶原意,補返佢可能漏咗嘅技術細節同 edge case;唔好擅自加佢冇要求嘅 feature 或者過度膨脹。',
+].join('\n');
+const COUNCIL_REFINE_PROMPT = [
+  '你係資深顧問,幫手完善一個要交俾三個 AI model 評審／討論嘅議題 brief。',
+  '將用戶粗略嘅請求,整理成清晰嘅 review brief,包含：',
+  '【要評審／討論乜】、【關注點同風險】、【評審準則】、【期望輸出】。',
+  '保留用戶原意,唔好擴大範圍。',
+].join('\n');
+
+// One-shot model call: prompt → text（唔耦合 run / chatThread）。
+function spawnOneShot(prompt, picked, label = 'swarm-oneshot', timeoutMs = 90000) {
+  return new Promise((resolve, reject) => {
+    const cmd = buildAgentCommand(picked.cli, picked.model);
+    let cwd;
+    try { cwd = safeProjectPath(SWARM_WORKSPACE); } catch (e) { return reject(e); }
+    let out = '', err = '', killed = false;
+    const child = spawn('bash', ['-ic', cmd.shell, label, cwd, prompt], {
+      cwd, env: { ...process.env, TERM: process.env.TERM || 'xterm-256color' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const timer = setTimeout(() => { killed = true; try { child.kill('SIGTERM'); } catch (_) {} }, timeoutMs);
+    child.stdout.on('data', (c) => { out += c.toString(); });
+    child.stderr.on('data', (c) => { err += c.toString(); });
+    child.on('error', (e) => { clearTimeout(timer); reject(e); });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (killed) return reject(new Error('完善超時'));
+      if (code !== 0) return reject(new Error(`${cmd.label} exit ${code}: ${stripChatNoise(err || out).slice(-200)}`));
+      resolve(stripChatNoise(out) || '');
+    });
+  });
+}
+
 // ─── Sessions (Plan → Session → Agent nesting) ───
 function createSession(run, { title, kind, model, cli } = {}) {
   if (!Array.isArray(run.sessions)) run.sessions = [];
@@ -1298,11 +1402,14 @@ function parseCouncilReviews(run, session) {
     const logs = a.logs || '';
     const verdict = (logs.match(/CONSENSUS\s*[:：]\s*(AGREE|DISPUTE)/i) || [])[1] || 'DISPUTE';
     const issues = (logs.match(/OPEN_ISSUES:\s*\n([\s\S]*?)(?:\nPROPOSED_CHANGES:|\n```|$)/i) || [, ''])[1];
+    const anglesRaw = (logs.match(/RESEARCH_ANGLES\s*[:：]\s*\n([\s\S]*?)(?:\n\s*\n|\n```|\nRESEARCH_QUERY|\nCONSENSUS|\nPROPOSED_CHANGES|$)/i) || [, ''])[1];
+    const angles = (anglesRaw || '').split('\n').map((s) => s.replace(/^[-*\d.\s]+/, '').trim()).filter(Boolean).slice(0, 6);
+    const queryHint = ((logs.match(/RESEARCH_QUERY\s*[:：]\s*(.+)/i) || [, ''])[1] || '').trim();
     return {
       name: a.name, model: a.model || '',
       agree: /AGREE/i.test(verdict),
       failed: a.status === 'failed' || a.status === 'interrupted',
-      issuesRaw: (issues || '').trim(), logs,
+      issuesRaw: (issues || '').trim(), angles, queryHint, logs,
     };
   });
 }
@@ -1382,8 +1489,16 @@ function advanceCouncil(run, p, stage, session) {
       `\n\n## 各評審摘要（索引用，完整內容請 Read 上面 file）\n` +
       present.map((r) => `### ${r.name}${r.model ? ` (${r.model})` : ''}\n${truncate(r.logs, 1800)}`).join('\n\n'),
       MAX_CONTEXT_CHARS);
-    // 第一輪三模獨立 review 完 → 停低俾用戶睇齊三份 + 撳「開始拗」先入辯論收斂
+    // 第一輪三模獨立 review 完 → 收集三模提出嘅 research 角度（撳「開始拗」後集中查一次）→ 停低俾用戶睇
     if (p.councilRound === 1 && !p.councilDebateStarted) {
+      const allAngles = [];
+      let queryHint = '';
+      present.forEach((r) => {
+        (r.angles || []).forEach((a) => { if (a && !allAngles.includes(a)) allAngles.push(a); });
+        if (!queryHint && r.queryHint) queryHint = r.queryHint;
+      });
+      p.pendingResearchAngles = allAngles.slice(0, COUNCIL_RESEARCH_MAX_ANGLES);
+      p.pendingResearchQuery = queryHint || run.topic || '';
       pauseForReviewGate(run, p, reviews);
       return;
     }
@@ -1430,6 +1545,35 @@ function advanceCouncil(run, p, stage, session) {
   advancePipeline(run);
 }
 
+// 撳「開始拗」後：三模角度合併 → 集中 call Perplexity 一次 → 結果做 artifact + Telegram 通知 + 派返議會，然後先入仲裁。
+async function runCouncilResearch(run, p, angles, query) {
+  addArtifact(run, { type: 'note', title: '🔍 議會上網 research 緊…', content: `查詢：${query}\n角度：\n${angles.map((a) => `- ${a}`).join('\n')}` });
+  io.emit('run-updated', publicRun(run));
+  tgNotify(`🔍 *議會上網 research 緊*\n${tgEsc(run.topic)}\n查：${tgEsc(query)}\n角度：${tgEsc(angles.join(' / '))}`);
+  let research;
+  try {
+    research = await runResearch(query, angles, { runId: String(run.id), budget: PPLX_BUDGET, model: PPLX_MODEL, logDir: COUNCIL_DIR(run.id) });
+  } catch (e) { research = { ok: false, error: e.message }; }
+  if (research.ok) {
+    run.councilResearch = { query, angles, text: research.text, citations: research.citations || [], usedAt: new Date().toISOString() };
+    try { fs.writeFileSync(path.join(COUNCIL_DIR(run.id), 'research-1.md'), `# 議會 Research\n查詢：${query}\n角度：${angles.join(' / ')}\n\n${research.text}`); } catch (_) {}
+    const tldr = (research.text || '').split('\n').map((l) => l.trim()).filter(Boolean)[0] || '';
+    addArtifact(run, {
+      type: 'council-research',
+      title: `🔍 議會 research 完成（${research.used}/${research.budget} · ~$${(research.estCost || 0).toFixed(3)}）`,
+      content: `**查詢**：${query}\n**角度**：${angles.join(' / ')}\n\n${research.text}\n\n${(research.citations || []).slice(0, 8).map((c, i) => `[${i + 1}] ${c}`).join('\n')}`,
+    });
+    tgNotify(`✅ *research 完成*（${research.used}/${research.budget} · ~$${(research.estCost || 0).toFixed(3)}）\n${tgEsc(run.topic)}\n🔍 查咗：${tgEsc(query)}\n📋 ${tgEsc(tldr.slice(0, 200))}`);
+  } else {
+    addArtifact(run, { type: 'note', title: '⚠ 議會 research 未成事', content: research.capped ? `已用滿 ${research.used}/${research.budget} 次` : `失敗：${research.error || ''}` });
+    tgNotify(`⚠ research ${research.capped ? '已達上限' : '失敗'}：${tgEsc(research.error || '')}\n照樣開拗。`);
+  }
+  p.stopped = false;
+  io.emit('run-updated', publicRun(run));
+  scheduleSave();
+  advancePipeline(run);
+}
+
 // Phase 3 御准閘:收斂(或用盡 round)後停低,唔自動 advance,等用戶撳批准 / 再改。
 function pauseForHumanGate(run, p, why) {
   p.stopped = true;
@@ -1445,6 +1589,7 @@ function pauseForHumanGate(run, p, why) {
   run.status = 'active';
   io.emit('run-updated', publicRun(run));
   io.emit('council-paused', { runId: run.id, planVersion: p.councilPlanVersion, openDisputes: p.councilOpenDisputes });
+  notifyCouncilGate(run, p, reason);
   scheduleSave();
 }
 
@@ -1466,6 +1611,7 @@ function pauseForReviewGate(run, p, reviews) {
   run.status = 'active';
   io.emit('run-updated', publicRun(run));
   io.emit('council-review-paused', { runId: run.id, reviewCount: reviews.length });
+  notifyCouncilReviewGate(run, reviews);
   scheduleSave();
 }
 
@@ -1493,7 +1639,7 @@ function maybeAdvancePipeline(run, session) {
   // ── Plan decompose: planner output → dynamic build waves spliced after plan ──
   if (SWARM_PLAN_DECOMPOSE && stage.decompose && !stage.decomposed) {
     stage.decomposed = true;
-    const fixedBuild = { key: 'build', title: '建造 Build', kind: 'code', deliveryMode: 'code', agentKeys: ['frontend', 'backend', 'test'], status: 'pending', sessionId: null };
+    const fixedBuild = { key: 'build', title: '建造 Build', kind: 'code', deliveryMode: 'code', agentKeys: buildAgentKeys(run.taskBrief || ''), status: 'pending', sessionId: null };
     const phases = parsePlannerSubphases(run, session);
     if (!phases) {
       addArtifact(run, { type: 'execution-error', title: '⚠ Planner 拆解失敗', content: 'Planner 冇輸出有效 subphases JSON,fallback 用固定 build (frontend/backend/test)。' });
@@ -1572,6 +1718,34 @@ const PLANNER_DECOMPOSE_PROMPT = [
   '```',
 ].join('\n');
 
+// ─── Council research prompts（B 模式：三模提角度 → 集中 call → 結果派返）───
+const COUNCIL_RESEARCH_ANGLES_PROMPT = [
+  '',
+  '## 上網 research（淨係有需要先用）',
+  '如果你認為議會要查證某啲**最新／外部事實**先評得準（例如新科目或考卷嘅結構、課程大綱、評核準則、政策，或你 training 之後先有嘅嘢），',
+  '請喺你輸出**最後**加呢個 block：',
+  'RESEARCH_QUERY: <一句核心要查嘅問題>',
+  'RESEARCH_ANGLES:',
+  '- <想覆蓋嘅角度 1>',
+  '- <想覆蓋嘅角度 2>',
+  '三模嘅角度會合併，撳「開始拗」後集中上網查一次，結果喺辯論時派返大家。',
+  '**唔需要查證就唔好加呢個 block**（慳資源）。',
+].join('\n');
+
+function councilResearchBlock(research) {
+  if (!research || !research.text) return '';
+  return [
+    '',
+    '## 議會上網 research 結果（供評審 / 辯論參考）',
+    `查詢：${research.query || ''}`,
+    (research.angles && research.angles.length) ? `角度：${research.angles.join(' / ')}` : '',
+    '',
+    truncate(research.text, 6000),
+    (research.citations && research.citations.length) ? `\n來源：\n${research.citations.slice(0, 10).join('\n')}` : '',
+    '↑ 呢啲係議會夾出角度後上網查返嘅資料，參考之餘要自己判斷可信度。',
+  ].filter(Boolean).join('\n');
+}
+
 function buildExecutionPrompt(run, preset, agent, options = {}) {
   const contexts = run.contextHistory
     .slice(-3)
@@ -1633,6 +1807,10 @@ function buildExecutionPrompt(run, preset, agent, options = {}) {
       'WARN / FAIL 時請具體列出要修嘅項目,俾 Fix agent 跟進。',
     ].join('\n')] : []),
     ...(preset.key === 'planner' ? [PLANNER_DECOMPOSE_PROMPT] : []),
+    ...(['council_a', 'council_b', 'council_c'].includes(preset.key) && run.pipeline && !run.pipeline.councilDebateStarted
+      ? [COUNCIL_RESEARCH_ANGLES_PROMPT] : []),
+    ...(['council_a', 'council_b', 'council_c', 'moderator'].includes(preset.key) && run.councilResearch
+      ? [councilResearchBlock(run.councilResearch)] : []),
   ].join('\n');
 }
 
@@ -1802,6 +1980,7 @@ function spawnAgentNow(run, preset, agent, agentCommand, options = {}) {
     agent.pid = null;
     agent.completedAt = new Date().toISOString();
     addArtifact(run, { type: 'execution-error', title: `${preset.name} failed to start`, content: error.stack || error.message, agentId: agent.id });
+    notifyAgentFailed(run, agent, preset);
     updateSessionStatus(run, agent.sessionId);
     io.emit('execution-agent-complete', { runId: run.id, agent });
     io.emit('run-updated', publicRun(run));
@@ -1822,9 +2001,11 @@ function spawnAgentNow(run, preset, agent, agentCommand, options = {}) {
       content: agent.logs || agent.summary,
       agentId: agent.id,
     });
+    if (agent.status === 'failed') notifyAgentFailed(run, agent, preset);
     updateSessionStatus(run, agent.sessionId);
     if (!run.pipeline && !run.agents.some((item) => ['delivery', 'review'].includes(item.layer) && item.status === 'running')) {
       run.status = run.synthesis ? 'complete' : 'active';
+      if (run.status === 'complete') notifyRunComplete(run, 'synthesis');
       pumpRunQueue();
     }
     run.updatedAt = agent.completedAt;
@@ -1917,8 +2098,21 @@ function startExecutionAgents(run, keys, options = {}) {
   });
 }
 
+// Build roster is task-aware: core FE/BE/Test always; the DB/Migration agent is
+// added only when the task touches schema/migrations. Verify always runs last as a
+// final evidence stage (run acceptance commands, paste real output — no gate loop).
+const DB_TASK_SIGNAL = /(migration|schema|supabase|\bRLS\b|\bDDL\b|create table|alter table|遷移|資料表|資料庫)/i;
+function buildAgentKeys(taskBrief = '') {
+  const keys = ['frontend', 'backend', 'test'];
+  if (DB_TASK_SIGNAL.test(String(taskBrief || ''))) keys.push('database');
+  return keys;
+}
+function verifyStage() {
+  return { key: 'verify', title: '實測驗證 Verify', kind: 'code', deliveryMode: 'code', agentKeys: ['verifier'] };
+}
+
 // ─── Staged fan-out pipeline: research → build → review, each wave parallel, waves in order ───
-function defaultStages(mode) {
+function defaultStages(mode, options = {}) {
   if (mode === 'council') {
     // Swarm Council:consensus(3 reviewer 並行)→ moderate(仲裁改寫 plan)→ explain(人話講解)。
     // consensus+moderate 會被 advanceCouncil rewind 重入,循環到收斂 / maxRounds;
@@ -1943,19 +2137,21 @@ function defaultStages(mode) {
       { key: 'plan', title: '規劃拆解 Plan', kind: 'research', deliveryMode: 'thinking', agentKeys: ['planner'], decompose: true },
       { key: 'review', title: '覆核 Review', kind: 'review', deliveryMode: 'code', agentKeys: ['reviewer'], gate: true },
       { key: 'fix', title: '修正 Fix', kind: 'code', deliveryMode: 'code', agentKeys: ['fixer'], isFix: true },
+      verifyStage(),
     ];
   }
   return [
     { key: 'research', title: '研究 Research', kind: 'research', deliveryMode: 'thinking', agentKeys: ['researcher'] },
-    { key: 'build', title: '建造 Build', kind: 'code', deliveryMode: 'code', agentKeys: ['frontend', 'backend', 'test'] },
+    { key: 'build', title: '建造 Build', kind: 'code', deliveryMode: 'code', agentKeys: buildAgentKeys(options.taskBrief) },
     { key: 'review', title: '覆核 Review', kind: 'review', deliveryMode: 'code', agentKeys: ['reviewer'], gate: true },
     { key: 'fix', title: '修正 Fix', kind: 'code', deliveryMode: 'code', agentKeys: ['fixer'], isFix: true },
+    verifyStage(),
   ];
 }
 
 function startPipeline(run, options = {}) {
   const mode = options.deliveryMode || 'code';
-  const stages = (Array.isArray(options.stages) && options.stages.length ? options.stages : defaultStages(mode))
+  const stages = (Array.isArray(options.stages) && options.stages.length ? options.stages : defaultStages(mode, options))
     .map((s) => ({ ...s, status: 'pending', sessionId: null }));
   run.pipeline = {
     mode,
@@ -2004,6 +2200,7 @@ function advancePipeline(run) {
     p.current = p.stages.length;
     run.status = run.synthesis ? 'complete' : 'active';
     addArtifact(run, { type: 'note', title: 'Pipeline 完成 ✓', content: '所有 stage（研究 → 建造 → 覆核）已順序完成。' });
+    notifyRunComplete(run, 'pipeline');
     io.emit('run-updated', publicRun(run));
     scheduleSave();
     pumpRunQueue();
@@ -2112,6 +2309,87 @@ app.get('/api/runs', (req, res) => {
 
 app.get('/api/models', (req, res) => {
   res.json({ defaultCli: DEFAULT_AGENT_CLI, models: MODEL_CATALOG });
+});
+
+// Opus 完善 prompt → 結構化 brief（Telegram bot 過目 gate 用；同步 spawn，等完返 refined）。
+// 初次：傳 text（粗略需求）；迭代修訂：傳 base（上一版）+ note（用戶改善意見），可重複。
+app.post('/api/refine', async (req, res) => {
+  const body = req.body || {};
+  const text = String(body.text || '').trim();
+  const base = String(body.base || '').trim();
+  const note = String(body.note || '').trim();
+  if (!text && !(base && note)) return res.status(400).json({ error: 'text (或 base+note) required' });
+  const kind = body.kind === 'council' ? 'council' : 'mission';
+  const sys = kind === 'council' ? COUNCIL_REFINE_PROMPT : MISSION_REFINE_PROMPT;
+  const picked = { cli: body.cli || 'claude', model: body.model || 'opus' };
+  const prompt = (base && note)
+    ? `${sys}\n\n以下係現有 brief：\n${base}\n\n---\n用戶想改善／補充嘅位：\n${note}\n\n---\n出修訂後嘅完整 brief（繁體中文 markdown）：保留冇提及要改嘅部分,只就用戶意見調整／補充。唔好加任何前言、解釋或「以下是」之類引導句：`
+    : `${sys}\n\n---\n用戶原文：\n${text}\n\n---\n直接輸出完善版本身（繁體中文 markdown）,唔好加任何前言、解釋或「以下是」之類引導句：`;
+  try {
+    const refined = await spawnOneShot(prompt, picked, 'swarm-refine', 90000);
+    res.json({ ok: true, refined: (refined || '').trim(), kind });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Overseer:總管對話 AI（plain text → 帶全局 digest 嘅 Claude turn）───
+// Tier 1 唯讀問答 + review；Tier 2 動作經 ACTION: 行(由 bot confirm-gate 守破壞性動作)。
+const OVERSEER_SYSTEM = [
+  '你係用戶嘅 Swarm 總管 AI(overseer)。下面會俾你而家所有 run / project 嘅實況。',
+  '用繁體中文 / 廣東話、簡短、結果導向答用戶:總結、review、比較、指風險、建議下一步。',
+  '唔好作數據;淨係根據俾你嘅實況答,唔夠料就照講「要 /show X 睇全文」。',
+  '',
+  '淨係當用戶明確想你代佢做動作,先喺答覆**最後獨立一行**輸出一個機器指令(冇就唔好輸出,一次最多一個):',
+  'ACTION: approve            # 批准當前御准閘',
+  'ACTION: debate             # 開拗收斂',
+  'ACTION: execute            # 落實當前議會終稿',
+  'ACTION: stop               # 中途停止當前 run',
+  'ACTION: revise: <一句指示>  # 叫議會就意見再收斂一 round',
+  'ACTION: council: <題目>     # 開一個新三模議會',
+  'ACTION: mission: <plan>     # 開一個新 mission 落 code',
+  '純粹問狀態 / 總結 / 意見,唔好輸出 ACTION。',
+].join('\n');
+
+function buildOverseerDigest(light = false) {
+  const cur = getCurrentRun();
+  const runs = store.runs.slice(light ? -6 : -12).reverse().map((r) => {
+    const p = r.pipeline || {};
+    const gate = p.councilPaused ? 'GATE=等御准' : (p.councilReviewPaused ? 'GATE=等開拗' : '');
+    const arts = light ? '' : (r.artifacts || []).slice(-2).map((a) => a.title || a.type).filter(Boolean).join('; ');
+    const mode = p.mode || (r.metrics && r.metrics.deliveryMode) || '-';
+    return `- [${r.id}] "${truncate(r.topic || '', 80)}" status=${r.status} stage=${r.stage || '-'} mode=${mode} ${gate}${p.councilPlanVersion ? ' planv' + p.councilPlanVersion : ''}${arts ? ' | 近產出: ' + arts : ''}`;
+  }).join('\n');
+  const projects = (knownProjects() || []).map((p) => (typeof p === 'string' ? p : (p.path || p.name || ''))).filter(Boolean).join(', ');
+  return { runs, projects, currentRunId: cur && cur.id ? cur.id : null };
+}
+
+function parseOverseerReply(raw) {
+  const text = String(raw || '').trim();
+  const m = text.match(/^ACTION:\s*(approve|debate|execute|revise|council|mission|stop)\b\s*(?::\s*([\s\S]+?))?\s*$/im);
+  if (!m) return { reply: text || '(冇內容)', action: null };
+  const reply = text.replace(m[0], '').trim();
+  return { reply: reply || '(已建議動作)', action: { type: m[1].toLowerCase(), arg: (m[2] || '').trim() } };
+}
+
+app.post('/api/overseer', async (req, res) => {
+  const body = req.body || {};
+  const message = String(body.message || '').trim();
+  if (!message) return res.status(400).json({ error: 'message required' });
+  const deep = body.mode === 'deep';
+  const picked = { cli: 'claude', model: safeModelFlag(body.model) || (deep ? 'opus' : 'sonnet') };
+  const d = buildOverseerDigest(!deep); // 快答用輕量 digest（少 run、無 artifacts）
+  const hist = Array.isArray(body.history)
+    ? body.history.slice(-6).map((h) => `【${h.role === 'user' ? '用戶' : '總管'}】${truncate(String(h.content || ''), 800)}`).join('\n')
+    : '';
+  const skills = deep ? getSkillContent('overseer') : ''; // 快答唔注入 skill（細 prompt = 快）
+  const modeNote = deep
+    ? '\n\n（深入模式:可以詳細 review、引用實況、用埋你嘅 skill 深入分析。）'
+    : '\n\n（快答模式:簡短、直接俾 idea / 意見即可,唔好為咗周全而長篇大論,亦唔使去 review code,除非用戶明確叫你深入。）';
+  const prompt = `${OVERSEER_SYSTEM}${modeNote}${skills}\n\n=== 而家 Swarm 實況 ===\n當前 run: ${d.currentRunId || '(冇)'}\nProjects: ${d.projects || '-'}\nRuns(新→舊):\n${d.runs || '(冇)'}\n\n${hist ? `=== 之前對話 ===\n${hist}\n\n` : ''}=== 用戶而家講 ===\n${message}\n\n答用戶:`;
+  try {
+    const raw = await spawnOneShot(prompt, picked, 'swarm-overseer', deep ? 150000 : 70000);
+    const parsed = parseOverseerReply(raw);
+    res.json({ ok: true, reply: parsed.reply, action: parsed.action, model: picked.model });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/runs/:id', (req, res) => {
@@ -2497,11 +2775,20 @@ app.post('/api/runs/:id/council/debate', (req, res) => {
   p.councilDebateStarted = true;
   p.stopped = false;
   run.status = 'executing';
-  addArtifact(run, { type: 'note', title: '🥊 開始辯論 → moderator 收斂', content: '三模獨立 review 完,用戶開拗。' });
+  const angles = (p.pendingResearchAngles || []).filter(Boolean);
   scheduleSave();
   io.emit('run-updated', publicRun(run));
-  advancePipeline(run);
-  res.json({ ok: true });
+  res.json({ ok: true, research: angles.length > 0 });
+  // 有角度 → 背景集中 call Perplexity 一次,攞到資料先入仲裁;冇 → 直接開拗。
+  if (angles.length) {
+    runCouncilResearch(run, p, angles, p.pendingResearchQuery || run.topic || '').catch((e) => {
+      console.warn('[council] research threw:', e.message);
+      try { addArtifact(run, { type: 'note', title: '⚠ research 例外', content: e.message }); advancePipeline(run); } catch (_) {}
+    });
+  } else {
+    addArtifact(run, { type: 'note', title: '🥊 開始辯論 → moderator 收斂', content: '三模獨立 review 完，冇提出要 research，直接開拗。' });
+    advancePipeline(run);
+  }
 });
 
 // 落實:批准後將議會終稿 plan 交 code pipeline(build→review→fix)真正喺 project 實作。
@@ -2514,7 +2801,15 @@ app.post('/api/runs/:id/council/execute', (req, res) => {
   }
   const body = req.body || {};
   const model = body.model || 'sonnet';
-  const perAgentModels = body.perAgentModels || { reviewer: { cli: 'claude', model: 'opus' } };
+  const perAgentModels = body.perAgentModels || {
+    frontend: { cli: 'codex', model: 'gpt-5.5' },
+    backend: { cli: 'codex', model: 'gpt-5.5' },
+    database: { cli: 'codex', model: 'gpt-5.5' },
+    test: { cli: 'codex', model: 'gpt-5.5' },
+    fixer: { cli: 'codex', model: 'gpt-5.5' },
+    reviewer: { cli: 'claude', model: 'opus' },
+    verifier: { cli: 'claude', model: 'sonnet' },
+  };
   const taskBrief = `# 落實以下已通過三模議會審議嘅 plan（v${plan.v}）\n\n按呢個 plan 直接喺 project 落手實作,完成後跑驗證 / 測試。唔好重新爭論 plan 本身,佢已經三模收斂 + 人手批准。\n\n${plan.md}`;
   try {
     const pipeline = startPipeline(run, {
@@ -2523,9 +2818,10 @@ app.post('/api/runs/:id/council/execute', (req, res) => {
       perAgentModels,
       // 跳過 research(plan 已係研究成果),直接 build → review → fix
       stages: [
-        { key: 'build', title: '建造 Build', kind: 'code', deliveryMode: 'code', agentKeys: ['frontend', 'backend', 'test'] },
+        { key: 'build', title: '建造 Build', kind: 'code', deliveryMode: 'code', agentKeys: buildAgentKeys(plan.md) },
         { key: 'review', title: '覆核 Review', kind: 'review', deliveryMode: 'code', agentKeys: ['reviewer'], gate: true },
         { key: 'fix', title: '修正 Fix', kind: 'code', deliveryMode: 'code', agentKeys: ['fixer'], isFix: true },
+        verifyStage(),
       ],
       taskBrief,
     });
@@ -2650,6 +2946,24 @@ app.post('/api/reset', (req, res) => {
   res.json({ ok: true });
 });
 
+// 中途停止一個 run:先 set p.stopped(advancePipeline / stage guard 會 bail,唔再前進),
+// 再 SIGTERM 晒佢所有 running agent 嘅 child(close handler 自己 cleanup)。
+app.post('/api/runs/:id/stop', (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  if (run.pipeline) run.pipeline.stopped = true;
+  let killed = 0;
+  for (const agent of (run.agents || [])) {
+    const child = liveJobs.get(agent.id);
+    if (child) { try { child.kill('SIGTERM'); killed += 1; } catch (_) {} }
+  }
+  run.status = 'stopped';
+  addArtifact(run, { type: 'note', title: '⏹ 已停止 (Stop)', content: `手動停止:殺咗 ${killed} 個 running agent,pipeline 暫停前進。` });
+  scheduleSave();
+  io.emit('run-updated', publicRun(run));
+  res.json({ ok: true, killed });
+});
+
 // Legacy event API kept for existing skills / one-liners.
 app.post('/events/swarm-start', (req, res) => {
   const { topic, personas } = req.body || {};
@@ -2702,6 +3016,7 @@ app.post('/events/synthesis-complete', (req, res) => {
   run.stage = 'complete';
   run.completedAt = new Date().toISOString();
   addArtifact(run, { type: 'synthesis', title: '收斂決策', content });
+  notifyRunComplete(run, 'synthesis');
   scheduleSave();
   io.emit('synthesis-complete', { runId: run.id, content, run: publicRun(run) });
   res.json({ ok: true });
@@ -2759,4 +3074,13 @@ io.on('connection', (socket) => {
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Swarm V3 dashboard server on http://0.0.0.0:${PORT}`);
   console.log(`[store] ${store.runs.length} saved runs; current=${store.currentRunId || 'none'}`);
+  if (telegram.tgEnabled()) {
+    require('./lib/telegram-bot').startBot({
+      apiBase: `http://127.0.0.1:${PORT}`,
+      chatId: process.env.TG_CHAT_ID,
+      ownerUsers: (process.env.TG_OWNER_USERS || '').split(',').map((s) => s.trim()).filter(Boolean),
+      allowedUsers: (process.env.TG_ALLOWED_USERS || '').split(',').map((s) => s.trim()).filter(Boolean),
+      log: (m) => console.log('[tg-bot]', m),
+    });
+  }
 });
