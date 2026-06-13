@@ -4,3 +4,7 @@ node_modules/
 
 # swarm-server runtime state (runs / overseer memory) — never commit
 services/swarm-server/data/
+
+# MiroFish lives in its own repos — not embedded here
+tools/MiroFish-web/
+tools/mirofish-cli/
