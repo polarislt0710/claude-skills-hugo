@@ -205,7 +205,7 @@ const state={
   models:[], projects:[], tgUsers:[], logBuf:{}, feed:[],
   missionSub:'overview', activityView:'log', logFilter:'all', search:'',
   sprites:[], spritesLoaded:false, theme:localStorage.getItem('swarm-theme')||'ink',
-  overseer:{history:[],thinking:false}, sortOrder:'newest', dayFilter:'all',
+  overseer:{history:[],thinking:false}, sortOrder:'newest', dayFilter:'all', loadingRun:null,
 };
 document.documentElement.setAttribute('data-theme',state.theme);
 
@@ -227,7 +227,7 @@ async function loadAll(){
   if(state.focusRunId)loadRun(state.focusRunId);
   scheduleRender();
 }
-async function loadRun(id){try{state.byId[id]=await api('/api/runs/'+id);}catch(e){}scheduleRender();}
+async function loadRun(id){if(state.loadingRun===id)return;state.loadingRun=id;try{state.byId[id]=await api('/api/runs/'+id);}catch(e){console.warn('loadRun fail',id,e.message);}finally{if(state.loadingRun===id)state.loadingRun=null;scheduleRender();}}
 function ingestRun(run){if(!run||!run.id)return;state.byId[run.id]=run;const sm=state.runs.find(r=>r.id===run.id);if(sm){sm.status=run.status;sm.stage=run.stage;sm.agentCount=(run.agents||[]).length;sm.runningAgents=(run.agents||[]).filter(a=>a.status==='running').length;sm.topic=run.topic;}}
 
 /* ───────── KPI ───────── */
@@ -348,7 +348,17 @@ function openMission(id){state.focusRunId=id;state.tab='mission';state.missionSu
 /* ───────── Tab 2: Mission ───────── */
 function renderMission(){
   const v=$('#view');const r=focusedRun();
-  if(!r){v.classList.remove('has-actionbar');v.innerHTML='<div class="empty">未揀計畫。<br>去 Plans tab 揀一個 mission。</div>';return;}
+  if(!r){
+    v.classList.remove('has-actionbar');
+    if(state.focusRunId){
+      if(!state.byId[state.focusRunId]&&state.loadingRun!==state.focusRunId)loadRun(state.focusRunId);  // 確保觸發 load（防重複）
+      const sm=state.runs.find(x=>x.id===state.focusRunId);
+      v.innerHTML='<div class="empty">⏳ 載入緊'+(sm?' 「'+esc(tailTopic(sm.topic))+'」':'')+'…<br><span style="font-size:11px;color:var(--faint)">手機網絡慢嘅話畀多一兩秒</span></div>';
+    }else{
+      v.innerHTML='<div class="empty">未揀計畫。<br>去 Plans tab 揀一個 mission。</div>';
+    }
+    return;
+  }
   const p=r.pipeline||{};
   let html=`<div class="seg">
     <button class="${state.missionSub==='overview'?'on':''}" onclick="state.missionSub='overview';scheduleRender()">Overview</button>
