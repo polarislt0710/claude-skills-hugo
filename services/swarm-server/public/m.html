@@ -1,0 +1,556 @@
+<!DOCTYPE html>
+<html lang="zh-HK" data-theme="ink">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<title>Swarm Mission</title>
+<style>
+:root{ --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace; --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang HK","Microsoft JhengHei",sans-serif;
+  --m-r-card:16px; --m-r-chip:20px; --m-r-sheet:22px; --tabbar-h:58px; --header-h:54px; --actionbar-h:62px;
+  --safe-b:env(safe-area-inset-bottom,0px); --safe-t:env(safe-area-inset-top,0px); }
+html[data-theme="ink"]{ --bg:#0a0f17; --panel:rgba(20,28,40,.62); --panel-2:rgba(28,38,54,.8); --panel-solid:#121a26;
+  --line:rgba(228,200,140,.16); --line-2:rgba(228,200,140,.32); --text:#ede3cf; --muted:#9aa0ad; --faint:#69707e;
+  --gold:#e6b769; --blue:#7fb0ff; --cyan:#5fd6e0; --green:#6fd6a2; --red:#ff7a72; --amber:#f2b65a; --violet:#bd96ff; --gray:#94a0ad; --run:#5fd6e0;
+  --bubble-bg:rgba(16,24,36,.96); --bubble-line:rgba(230,183,105,.4); }
+html[data-theme="forest"]{ --bg:#ece2cd; --panel:rgba(255,250,238,.88); --panel-2:rgba(255,252,245,.95); --panel-solid:#fbf7ec;
+  --line:rgba(120,96,60,.24); --line-2:rgba(120,96,60,.42); --text:#3c3320; --muted:#7c715a; --faint:#a0937c;
+  --gold:#b8852f; --blue:#4f7cc4; --cyan:#2f9a96; --green:#5a9a52; --red:#c4564a; --amber:#cf982f; --violet:#8a6fc0; --gray:#8d8470; --run:#2f9a96;
+  --bubble-bg:rgba(255,252,244,.97); --bubble-line:rgba(120,96,60,.45); }
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%}
+body{font-family:var(--sans);color:var(--text);background:var(--bg);font-size:14px;-webkit-font-smoothing:antialiased}
+html[data-theme="ink"] body{background:radial-gradient(800px 500px at 80% -8%,rgba(230,183,105,.14),transparent 60%),linear-gradient(180deg,#0a0f17,#070b12) fixed}
+html[data-theme="forest"] body{background:linear-gradient(180deg,#bfe0ee,#cfe6e0 24%,#e7ddc0 60%,#d8c99f) fixed}
+#mapp{height:100dvh;display:flex;flex-direction:column;overflow:hidden}
+/* ── header ── */
+.m-header{flex:none;height:calc(var(--header-h) + var(--safe-t));padding:var(--safe-t) 14px 0;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line);background:var(--panel);backdrop-filter:blur(14px)}
+.m-header .hav{width:34px;height:34px;border-radius:9px;background:var(--panel-2);border:1px solid var(--line);display:grid;place-items:center;overflow:hidden;flex:none}
+.m-header .htit{display:flex;flex-direction:column;line-height:1.15;min-width:0;flex:1}
+.m-header .htit b{font-size:15px;font-weight:800;letter-spacing:.3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.m-header .htit small{font-size:9.5px;letter-spacing:1.6px;text-transform:uppercase;color:var(--faint)}
+.m-header .hbtn{width:36px;height:36px;border-radius:10px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font-size:16px;display:grid;place-items:center;flex:none}
+.m-back{width:34px;height:34px;border-radius:9px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font-size:17px;display:grid;place-items:center;flex:none}
+.conn-dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}
+.conn-dot.off{background:var(--red);box-shadow:0 0 8px var(--red)}
+/* ── view ── */
+#view{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 12px calc(var(--tabbar-h) + var(--safe-b) + 16px)}
+#view.has-actionbar{padding-bottom:calc(var(--tabbar-h) + var(--actionbar-h) + var(--safe-b) + 16px)}
+/* ── KPI chips ── */
+.kpi-row{display:flex;gap:8px;margin-bottom:12px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
+.kpi-row::-webkit-scrollbar{display:none}
+.kpi{flex:1;min-width:74px;border:1px solid var(--line);border-radius:var(--m-r-card);padding:9px 11px;background:var(--panel);display:flex;flex-direction:column;gap:1px}
+.kpi b{font-family:var(--mono);font-size:19px;font-weight:700;line-height:1}
+.kpi span{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:var(--faint)}
+.kpi.live b{color:var(--run)} .kpi.done b{color:var(--green)}
+/* ── search ── */
+.search-row{display:flex;gap:8px;margin-bottom:12px}
+.m-search{flex:1;background:color-mix(in srgb,var(--text) 6%,transparent);border:1px solid var(--line);border-radius:12px;color:var(--text);padding:10px 13px;font-size:14px;font-family:var(--sans)}
+.m-search:focus{outline:none;border-color:var(--blue)}
+.fbtn{padding:0 14px;border-radius:12px;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);font-size:13px}
+/* ── cards ── */
+.card{border:1px solid var(--line);border-radius:var(--m-r-card);padding:13px;margin-bottom:10px;background:var(--panel);position:relative;overflow:hidden}
+.card.running::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--run);box-shadow:0 0 12px var(--run)}
+.card.tap:active{transform:scale(.992);transition:transform .1s}
+.cat-chip{display:inline-flex;align-items:center;font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:var(--m-r-chip);letter-spacing:.3px;margin-bottom:7px}
+.ctitle{font-weight:700;font-size:15px;line-height:1.3;margin-bottom:4px}
+.cdesc{font-size:12.5px;color:var(--muted);line-height:1.45;margin-bottom:9px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.cmeta{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.chip{display:inline-flex;align-items:center;gap:4px;font-family:var(--mono);font-size:10.5px;padding:2px 9px;border-radius:var(--m-r-chip);border:1px solid var(--line);color:var(--muted)}
+.chip.run{color:var(--run);border-color:color-mix(in srgb,var(--run) 42%,transparent);background:color-mix(in srgb,var(--run) 10%,transparent)}
+.chip.complete{color:var(--green);border-color:color-mix(in srgb,var(--green) 38%,transparent);background:color-mix(in srgb,var(--green) 9%,transparent)}
+.chip.failed,.chip.interrupted,.chip.stopped{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 42%,transparent);background:color-mix(in srgb,var(--amber) 9%,transparent)}
+.chip.gold{color:var(--gold);border-color:color-mix(in srgb,var(--gold) 45%,transparent);background:color-mix(in srgb,var(--gold) 10%,transparent)}
+.chevron{position:absolute;right:13px;top:14px;color:var(--faint);font-size:13px}
+.prog{height:6px;border-radius:6px;background:color-mix(in srgb,var(--text) 9%,transparent);overflow:hidden;margin-top:9px}
+.prog>span{display:block;height:100%;background:linear-gradient(90deg,var(--green),var(--cyan));border-radius:6px}
+.summary{margin-top:10px;padding-top:10px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted);line-height:1.5}
+.sumrow{display:flex;justify-content:space-between;font-size:11px;color:var(--faint);margin-top:7px;font-family:var(--mono)}
+/* ── stage accordion ── */
+.stage-row{border:1px solid var(--line);border-radius:14px;margin-bottom:9px;background:var(--panel);overflow:hidden}
+.stage-head{display:flex;align-items:center;gap:10px;padding:13px 13px}
+.stage-head .si{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;font-size:15px;background:color-mix(in srgb,var(--gold) 14%,transparent);flex:none}
+.stage-head .sn{flex:1;min-width:0}
+.stage-head .sn b{font-size:14px;font-weight:700} .stage-head .sn small{display:block;font-size:10px;color:var(--faint);text-transform:uppercase;letter-spacing:1px}
+.sdot{width:9px;height:9px;border-radius:50%;flex:none}
+.stage-body{padding:0 11px 12px;display:none} .stage-row.open .stage-body{display:block}
+.agent-scroll{display:flex;gap:10px;overflow-x:auto;padding:3px 1px 6px;scrollbar-width:none}
+.agent-scroll::-webkit-scrollbar{display:none}
+.amini{flex:none;width:140px;border:1px solid var(--line);border-radius:13px;padding:10px;background:var(--panel-2);display:flex;flex-direction:column;align-items:center;gap:5px}
+.amini canvas{width:54px;height:54px;image-rendering:pixelated}
+.amini .an{font-size:12px;font-weight:700;text-align:center;line-height:1.2}
+.mbadge{font-family:var(--mono);font-size:9.5px;padding:1px 7px;border-radius:10px;border:1px solid var(--line);color:var(--muted);display:inline-flex;align-items:center;gap:4px}
+/* ── activity log ── */
+.seg{display:flex;gap:0;border:1px solid var(--line);border-radius:11px;overflow:hidden;margin-bottom:12px;background:var(--panel)}
+.seg button{flex:1;padding:9px;border:0;background:transparent;color:var(--muted);font-size:13px;font-weight:600;font-family:var(--sans)}
+.seg button.on{background:color-mix(in srgb,var(--blue) 16%,transparent);color:var(--text)}
+.filters{display:flex;gap:7px;overflow-x:auto;margin-bottom:11px;scrollbar-width:none;padding-bottom:2px}
+.filters::-webkit-scrollbar{display:none}
+.fchip{flex:none;padding:5px 12px;border-radius:var(--m-r-chip);border:1px solid var(--line);background:var(--panel);color:var(--muted);font-size:12px}
+.fchip.on{color:var(--text);border-color:var(--blue);background:color-mix(in srgb,var(--blue) 14%,transparent)}
+.log-entry{border:1px solid var(--line);border-radius:12px;margin-bottom:9px;background:var(--panel);overflow:hidden}
+.log-entry .lh{display:flex;align-items:center;gap:8px;padding:9px 12px;font-size:12px}
+.log-entry .lk{font-weight:700;color:var(--gold)} .log-entry .lt{margin-left:auto;font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+.log-entry pre{margin:0;padding:0 12px 11px;font-family:var(--mono);font-size:11px;line-height:1.5;color:var(--muted);white-space:pre-wrap;word-break:break-word;max-height:230px;overflow:auto}
+.logbox{font-family:var(--mono);font-size:11.5px;line-height:1.55;white-space:pre-wrap;word-break:break-word;padding:12px;border:1px solid var(--line);border-radius:12px;background:var(--panel);max-height:60vh;overflow:auto}
+/* ── bubble (chat) ── */
+.bubble{max-width:86%;padding:9px 12px;border-radius:14px;margin-bottom:9px;font-size:13.5px;line-height:1.5;border:1px solid var(--bubble-line);background:var(--bubble-bg)}
+.bubble.user{margin-left:auto;border-color:color-mix(in srgb,var(--gold) 50%,transparent);background:color-mix(in srgb,var(--gold) 12%,transparent)}
+.bubble.assistant{margin-right:auto;border-color:color-mix(in srgb,var(--blue) 45%,transparent)}
+.bubble.system{margin:0 auto 9px;text-align:center;font-size:12px;color:var(--muted);background:transparent;border:0}
+.bubble .bmeta{font-size:10px;color:var(--faint);margin-bottom:3px;font-family:var(--mono)}
+.bubble code{font-family:var(--mono);font-size:12px;background:color-mix(in srgb,var(--text) 10%,transparent);padding:1px 4px;border-radius:4px}
+/* ── settings ── */
+.sg{border:1px solid var(--line);border-radius:14px;background:var(--panel);margin-bottom:12px;overflow:hidden}
+.sg h4{margin:0;padding:11px 14px 7px;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--faint);font-weight:700}
+.sg .si-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 14px;border-top:1px solid var(--line)}
+.sg .si-row label{font-size:13.5px} .sg select,.sg .seg-sm{font-size:13px}
+.sg select{background:color-mix(in srgb,var(--text) 6%,transparent);border:1px solid var(--line);border-radius:9px;color:var(--text);padding:7px 10px;font-family:var(--mono);max-width:60%}
+/* ── tabbar ── */
+#tabbar{flex:none;height:calc(var(--tabbar-h) + var(--safe-b));padding-bottom:var(--safe-b);display:flex;border-top:1px solid var(--line);background:var(--panel);backdrop-filter:blur(16px)}
+#tabbar button{flex:1;border:0;background:transparent;color:var(--faint);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;font-size:10px;font-weight:600;font-family:var(--sans);position:relative}
+#tabbar button .ti{font-size:19px;line-height:1}
+#tabbar button.on{color:var(--gold)}
+#tabbar button.on::before{content:"";position:absolute;top:0;left:24%;right:24%;height:2.5px;border-radius:3px;background:var(--gold)}
+/* ── action bar ── */
+#actionbar{position:fixed;left:0;right:0;bottom:calc(var(--tabbar-h) + var(--safe-b));display:none;gap:8px;padding:9px 12px;background:var(--panel);backdrop-filter:blur(16px);border-top:1px solid var(--line);z-index:40}
+#actionbar.show{display:flex}
+.abtn{flex:1;border:1px solid var(--line-2);background:var(--panel-2);color:var(--text);border-radius:12px;padding:12px 6px;font-size:13px;font-weight:700;font-family:var(--sans);display:flex;align-items:center;justify-content:center;gap:5px}
+.abtn.go{background:linear-gradient(180deg,var(--gold),color-mix(in srgb,var(--gold) 72%,#000));color:#241a07;border:0}
+.abtn.green{background:linear-gradient(180deg,var(--green),color-mix(in srgb,var(--green) 72%,#000));color:#062416;border:0}
+.abtn:active{filter:brightness(1.08)}
+.abtn:disabled{opacity:.4}
+/* ── FAB ── */
+.fab{position:fixed;right:16px;bottom:calc(var(--tabbar-h) + var(--safe-b) + 16px);width:60px;height:60px;border-radius:50%;border:0;background:linear-gradient(180deg,var(--gold),color-mix(in srgb,var(--gold) 70%,#000));color:#241a07;font-size:13px;font-weight:800;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;box-shadow:0 8px 26px color-mix(in srgb,var(--gold) 40%,transparent);z-index:35}
+.fab .fi{font-size:19px}
+/* ── sheet ── */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:.2s;z-index:50}
+.scrim.show{opacity:1;pointer-events:auto}
+.sheet{position:fixed;left:0;right:0;bottom:0;background:var(--panel-solid);border-radius:var(--m-r-sheet) var(--m-r-sheet) 0 0;border-top:1px solid var(--line-2);transform:translateY(102%);transition:.25s cubic-bezier(.2,.8,.2,1);z-index:51;padding:16px 16px calc(16px + var(--safe-b));max-height:88dvh;overflow-y:auto}
+.sheet.show{transform:translateY(0)}
+.sheet h3{margin:2px 0 12px;font-size:16px}
+.sheet textarea{width:100%;min-height:90px;background:color-mix(in srgb,var(--text) 6%,transparent);border:1px solid var(--line);border-radius:11px;color:var(--text);padding:11px;font-size:14px;font-family:var(--sans);resize:vertical}
+.sheet textarea:focus{outline:none;border-color:var(--blue)}
+.empty{color:var(--faint);text-align:center;padding:40px 16px;line-height:1.7;font-size:13px}
+.toast{position:fixed;left:50%;top:calc(var(--safe-t) + 12px);transform:translateX(-50%) translateY(-120%);background:var(--panel-solid);border:1px solid var(--line-2);color:var(--text);padding:10px 16px;border-radius:12px;font-size:13px;z-index:90;transition:.25s;max-width:90vw;text-align:center;box-shadow:0 8px 30px rgba(0,0,0,.3)}
+.toast.show{transform:translateX(-50%) translateY(0)}
+.toast.err{border-color:var(--red);color:var(--red)}
+.row-btns{display:flex;gap:9px;margin-top:13px}
+.row-btns button{flex:1;padding:12px;border-radius:12px;font-size:14px;font-weight:700;font-family:var(--sans);border:1px solid var(--line-2);background:var(--panel-2);color:var(--text)}
+.row-btns button.go{background:linear-gradient(180deg,var(--gold),color-mix(in srgb,var(--gold) 72%,#000));color:#241a07;border:0}
+.mchips{display:flex;flex-wrap:wrap;gap:7px;margin-top:6px}
+.mchip{padding:7px 12px;border-radius:var(--m-r-chip);border:1px solid var(--line);background:var(--panel);color:var(--muted);font-size:12.5px}
+.mchip.on{color:var(--text);border-color:var(--blue);background:color-mix(in srgb,var(--blue) 14%,transparent)}
+.thinking{font-size:12px;color:var(--muted);padding:6px 2px;font-family:var(--mono)}
+/* ── overseer chat overlay ── */
+.chat-overlay{position:fixed;inset:0;z-index:60;background:var(--bg);display:none;flex-direction:column}
+.chat-overlay.show{display:flex}
+.co-head{flex:none;height:calc(var(--header-h) + var(--safe-t));padding:var(--safe-t) 14px 0;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line);background:var(--panel);backdrop-filter:blur(14px)}
+.co-msgs{flex:1;overflow-y:auto;padding:14px 12px;display:flex;flex-direction:column}
+.co-input{flex:none;display:flex;gap:8px;align-items:flex-end;padding:10px 12px calc(10px + var(--safe-b));border-top:1px solid var(--line);background:var(--panel)}
+.co-input textarea{flex:1;max-height:120px;min-height:44px;background:color-mix(in srgb,var(--text) 6%,transparent);border:1px solid var(--line);border-radius:12px;color:var(--text);padding:11px 13px;font-size:14px;font-family:var(--sans);resize:none}
+.co-input textarea:focus{outline:none;border-color:var(--blue)}
+.co-input button{flex:none;width:48px;height:44px;border-radius:12px;border:0;background:linear-gradient(180deg,var(--gold),color-mix(in srgb,var(--gold) 72%,#000));color:#241a07;font-size:17px;font-weight:800}
+.act-confirm{display:flex;gap:8px;margin:0 0 11px;max-width:86%;margin-right:auto}
+.act-confirm button{flex:1;padding:11px 8px;border-radius:11px;font-size:13px;font-weight:700;font-family:var(--sans);border:1px solid var(--line-2);background:var(--panel-2);color:var(--text)}
+.act-confirm button.go{background:linear-gradient(180deg,var(--gold),color-mix(in srgb,var(--gold) 72%,#000));color:#241a07;border:0}
+</style>
+</head>
+<body>
+<div id="mapp">
+  <header class="m-header" id="mhead"></header>
+  <main id="view"></main>
+  <div id="actionbar"></div>
+  <nav id="tabbar">
+    <button data-tab="plans" class="on"><span class="ti">📋</span>Plans</button>
+    <button data-tab="mission"><span class="ti">🛠️</span>Mission</button>
+    <button data-tab="activity"><span class="ti">📊</span>Activity</button>
+    <button data-tab="settings"><span class="ti">⚙️</span>Settings</button>
+  </nav>
+</div>
+<div class="scrim" id="scrim"></div>
+<div class="sheet" id="sheet"></div>
+<div class="toast" id="toast"></div>
+<div class="chat-overlay" id="chatOverlay">
+  <div class="co-head"><button class="m-back" onclick="closeChat()">‹</button><div class="htit"><b>總管 AI</b><small>Overseer · 睇晒所有 run / project</small></div></div>
+  <div class="co-msgs" id="coMsgs"></div>
+  <div class="co-input"><textarea id="coInput" rows="1" placeholder="問總管,或叫佢「根據呢份 report 去執行」…"></textarea><button onclick="sendOverseer()">▶</button></div>
+</div>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+/* ───────── helpers ───────── */
+const $=(s,r=document)=>r.querySelector(s);
+function el(t,c,h){const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;}
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function cssVar(n,fb){const v=getComputedStyle(document.documentElement).getPropertyValue(n).trim();return v||fb;}
+const STATUS_LABEL={pending:'待命',running:'工作中',completed:'已完成',failed:'失敗',interrupted:'已中斷',complete:'完成',skipped:'略過'};
+function statusColor(s){return s==='running'?cssVar('--run'):(s==='completed'||s==='complete')?cssVar('--green'):s==='failed'?cssVar('--red'):(s==='interrupted'||s==='stopped')?cssVar('--amber'):cssVar('--gray');}
+function modelMeta(cli,model){const m=state.models.find(x=>x.cli===cli&&x.model===model)||state.models.find(x=>x.cli===cli);return m||{cli:cli||'claude',model:model||'',label:cli||'claude',color:'#9aa7b2',short:model||cli||'?'};}
+function fmtElapsed(start,end){if(!start)return '--';const s=Math.max(0,Math.floor(((end?new Date(end):new Date())-new Date(start))/1000));const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),x=s%60;return (h?h+':':'')+String(m).padStart(2,'0')+':'+String(x).padStart(2,'0');}
+function progressOf(a){if(['completed','failed','interrupted','complete'].includes(a.status))return 100;if(a.status==='running')return 60;return 8;}
+function tail(s,n){s=String(s||'');return s.length>n?'…'+s.slice(-n):s;}
+function mdLite(src){let t=esc(src||'');t=t.replace(/```([\s\S]*?)```/g,(m,c)=>'<pre><code>'+c.replace(/^\n/,'')+'</code></pre>');t=t.replace(/`([^`]+)`/g,'<code>$1</code>');t=t.replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');t=t.replace(/^### (.+)$/gm,'<b>$1</b>').replace(/^## (.+)$/gm,'<b>$1</b>').replace(/^# (.+)$/gm,'<b>$1</b>');t=t.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" target="_blank" style="color:var(--blue)">$1</a>');return t.replace(/\n/g,'<br>');}
+async function api(path,opts={}){const r=await fetch(path,{headers:{'Content-Type':'application/json'},...opts});const ct=r.headers.get('content-type')||'';const data=ct.includes('json')?await r.json():await r.text();if(!r.ok)throw new Error((data&&data.error)||('HTTP '+r.status));return data;}
+function toast(msg,err){const t=$('#toast');t.textContent=msg;t.className='toast show'+(err?' err':'');clearTimeout(t._t);t._t=setTimeout(()=>t.className='toast',3000);}
+
+/* ───────── state ───────── */
+const socket=io();
+const state={
+  tab:'plans', runs:[], byId:{}, focusRunId:null, selAgentId:null,
+  models:[], projects:[], tgUsers:[], logBuf:{}, feed:[],
+  missionSub:'overview', activityView:'log', logFilter:'all', search:'',
+  sprites:[], spritesLoaded:false, theme:localStorage.getItem('swarm-theme')||'ink',
+  overseer:{history:[],thinking:false},
+};
+document.documentElement.setAttribute('data-theme',state.theme);
+
+let _pending=false;
+function scheduleRender(){if(_pending)return;_pending=true;requestAnimationFrame(()=>{_pending=false;render();});}
+function focusedRun(){return state.focusRunId?state.byId[state.focusRunId]:null;}
+function findAgentById(id){for(const r of Object.values(state.byId)){const a=(r.agents||[]).find(x=>x.id===id);if(a)return{a,run:r};}return null;}
+
+/* ───────── category 推導（best-effort，純展示）───────── */
+const CAT_MAP=[[/數學|math/i,'數學','#4f7cc4'],[/dse/i,'DSE','#8a6fc0'],[/grading|改卷|批改|rubric/i,'改卷','#cf982f'],[/共備|review brief|評審/i,'共備','#4f7cc4'],[/link|連結/i,'連結','#2f9a96'],[/physics|物理/i,'物理','#c4564a'],[/geo|地理/i,'地理','#5a9a52'],[/rbac|權限|auth/i,'權限','#8a6fc0'],[/dashboard|ia/i,'UI','#b8852f']];
+function catOf(run){const t=(run.topic||'')+' '+(run.projectPath||'');for(const[re,lab,col]of CAT_MAP)if(re.test(t))return{lab,col};const base=(run.projectPath||'').split('/').pop()||'';if(/orca/i.test(base))return{lab:'ORCA','col':'#b8852f'};return{lab:base.slice(0,6)||'task','col':'#7c715a'};}
+
+/* ───────── data load ───────── */
+async function loadAll(){
+  try{const r=await api('/api/runs');state.runs=r.runs||[];if(!state.focusRunId)state.focusRunId=r.currentRunId||(state.runs[0]&&state.runs[0].id);}catch(e){}
+  try{state.models=(await api('/api/models')).models||[];}catch(e){}
+  try{state.projects=(await api('/api/projects')).projects||[];}catch(e){}
+  try{state.tgUsers=(await api('/api/tg-users')).users||[];}catch(e){}
+  if(state.focusRunId)loadRun(state.focusRunId);
+  scheduleRender();
+}
+async function loadRun(id){try{state.byId[id]=await api('/api/runs/'+id);}catch(e){}scheduleRender();}
+function ingestRun(run){if(!run||!run.id)return;state.byId[run.id]=run;const sm=state.runs.find(r=>r.id===run.id);if(sm){sm.status=run.status;sm.stage=run.stage;sm.agentCount=(run.agents||[]).length;sm.runningAgents=(run.agents||[]).filter(a=>a.status==='running').length;sm.topic=run.topic;}}
+
+/* ───────── KPI ───────── */
+function kpis(){let live=0,sess=0,done=0;state.runs.forEach(r=>{live+=r.runningAgents||0;});Object.values(state.byId).forEach(r=>{(r.sessions||[]).forEach(s=>{if(s.status==='running')sess++;});(r.agents||[]).forEach(a=>{if(a.status==='completed')done++;});});
+  // 補返 list 已知嘅 session 數（detail 未 load 嗰啲）
+  const cur=focusedRun();if(cur)sess=Math.max(sess,(cur.sessions||[]).filter(s=>s.status==='running').length);
+  return {plans:state.runs.length,live,sess,done};}
+
+/* ───────── 像素人仔 mini ───────── */
+(async function loadSprites(){let names=[];try{const r=await fetch('/sprites/manifest.json');if(r.ok)names=((await r.json()).sprites)||[];}catch(e){}
+  if(!names.length)names=['1.png','2.png','3.png','4.png','5.png','6.png','7.png','8.png'];
+  for(const n of names){await new Promise(res=>{const im=new Image();im.onload=()=>{state.sprites.push(im);res();};im.onerror=()=>res();im.src='/sprites/'+n;});}
+  state.spritesLoaded=true;scheduleRender();})();
+function hashStr(s){let h=2166136261;s=String(s||'x');for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619);}return h>>>0;}
+const SKINS=['#f2cda7','#e8b487','#cf9a6b','#a06b46'],HAIRC=['#2b2119','#5a3823','#8a6a3a','#cbc6c0','#6e3a26','#1c1c24'];
+function drawMini(canvas,a){const ctx=canvas.getContext('2d');const D=54;canvas.width=D*2;canvas.height=D*2;ctx.setTransform(2,0,0,2,0,0);ctx.imageSmoothingEnabled=false;ctx.clearRect(0,0,D,D);
+  const mm=modelMeta(a.cli,a.model),col=mm.color,sc=statusColor(a.status),running=a.status==='running';
+  // shadow
+  ctx.globalAlpha=running?.3:.16;ctx.fillStyle=sc;ctx.beginPath();ctx.ellipse(D/2,D-6,16,4,0,0,7);ctx.fill();ctx.globalAlpha=1;
+  const spr=state.sprites.length?state.sprites[hashStr(a.id||a.name)%state.sprites.length]:null;
+  if(spr){const hh=44,ww=Math.round(hh*((spr.width/spr.height)||0.66));ctx.drawImage(spr,Math.round(D/2-ww/2),Math.round(D-8-hh),ww,hh);}
+  else{const h=hashStr(a.id||a.name);const skin=SKINS[h%4],hair=HAIRC[(h>>3)%6];const cx=D/2,hy=14;const blk=(x,y,w,hh,c)=>{ctx.fillStyle=c;ctx.fillRect(Math.round(x),Math.round(y),w,hh);};
+    blk(cx-11,D-18,22,16,col); // body
+    blk(cx-6,hy+1,12,11,skin); // head
+    blk(cx-7,hy-3,14,5,hair); // hair
+    blk(cx-4,hy+6,2,2,'#21303f');blk(cx+3,hy+6,2,2,'#21303f');} // eyes
+  // status ring
+  ctx.strokeStyle=sc;ctx.lineWidth=running?2:1;ctx.globalAlpha=running?(.6+.3*Math.sin(Date.now()/300)):.5;ctx.strokeRect(2,2,D-4,D-4);ctx.globalAlpha=1;
+}
+let _animReq=null;
+function animateMinis(){const cs=document.querySelectorAll('canvas[data-agent]');if(!cs.length){_animReq=null;return;}let anyRun=false;cs.forEach(c=>{const f=findAgentById(c.dataset.agent);if(f){drawMini(c,f.a);if(f.a.status==='running')anyRun=true;}});_animReq=anyRun?requestAnimationFrame(animateMinis):null;}
+function kickAnim(){if(!_animReq)_animReq=requestAnimationFrame(animateMinis);}
+
+/* ───────── stage 對應 ───────── */
+const STAGE_ICON={plan:'📋',research:'🔍',build:'🛠️',review:'🔎',consensus:'👥',moderate:'⚖️',moderator:'⚖️',explain:'💬',explainer:'💬',fix:'🔧',verify:'✅'};
+function stageIcon(s){return STAGE_ICON[s.key]||STAGE_ICON[s.kind]||'▣';}
+function sdotColor(st){return st==='complete'?cssVar('--green'):st==='running'?cssVar('--run'):(st==='failed'||st==='interrupted')?cssVar('--amber'):st==='skipped'?cssVar('--faint'):cssVar('--gray');}
+function stageStatusText(st){return {complete:'完成',running:'進行中',pending:'待命',interrupted:'中斷',failed:'失敗',skipped:'略過'}[st]||st||'';}
+
+/* ───────── render dispatch ───────── */
+function render(){
+  renderHeader();
+  ['plans','mission','activity','settings'].forEach(t=>$('#tabbar button[data-tab="'+t+'"]').classList.toggle('on',state.tab===t));
+  const v=$('#view');v.scrollTop=v.scrollTop; // keep
+  if(state.tab==='plans')renderPlans();
+  else if(state.tab==='mission')renderMission();
+  else if(state.tab==='activity')renderActivity();
+  else renderSettings();
+  renderActionbar();
+  kickAnim();
+}
+function renderHeader(){
+  const h=$('#mhead');const conn=socket.connected?'':' off';
+  if(state.tab==='mission'&&focusedRun()){
+    const r=focusedRun();
+    h.innerHTML=`<button class="m-back" onclick="state.tab='plans';scheduleRender()">‹</button>
+      <div class="htit"><b>${esc(tailTopic(r.topic))}</b><small>${esc(r.status||'')} · ${(r.agents||[]).length} agents</small></div>
+      <span class="conn-dot${conn}"></span>`;
+  }else{
+    const titles={plans:['Swarm Mission','Agent Control Room'],activity:['Activity','Agent Log'],settings:['Settings','偏好設定']};
+    const[t1,t2]=titles[state.tab]||titles.plans;
+    h.innerHTML=`<div class="hav"><canvas id="headav" width="34" height="34"></canvas></div>
+      <div class="htit"><b>${esc(t1)}</b><small>${esc(t2)}</small></div>
+      <button class="hbtn" onclick="openChat()" title="同總管 AI 傾 / 落執行指令">💬</button>
+      <span class="conn-dot${conn}" title="${socket.connected?'live':'offline'}"></span>`;
+    const c=$('#headav');if(c)drawMini(c,{id:'header',cli:'claude',model:'opus',status:'running',name:'S'});
+  }
+}
+function tailTopic(t){t=String(t||'').replace(/^#+\s*/,'').split('\n')[0];return t.length>26?t.slice(0,25)+'…':t;}
+
+/* ───────── Tab 1: Plans ───────── */
+function renderPlans(){
+  const v=$('#view');v.classList.remove('has-actionbar');
+  const k=kpis();
+  let html=`<div class="kpi-row">
+    <div class="kpi"><b>${k.plans}</b><span>Plans</span></div>
+    <div class="kpi live"><b>${k.live}</b><span>Agents Live</span></div>
+    <div class="kpi"><b>${k.sess}</b><span>Sessions</span></div>
+    <div class="kpi done"><b>${k.done}</b><span>Done</span></div></div>
+   <div class="search-row"><input class="m-search" id="msearch" placeholder="搜尋計畫或關鍵字" value="${esc(state.search)}"><button class="fbtn" onclick="cycleFilter()">${state.listFilter||'全部'}</button></div>`;
+  let list=state.runs.slice();
+  if(state.search){const q=state.search.toLowerCase();list=list.filter(r=>(r.topic||'').toLowerCase().includes(q));}
+  if(state.listFilter==='running')list=list.filter(r=>r.runningAgents>0||r.status==='executing');
+  else if(state.listFilter==='active')list=list.filter(r=>r.status==='active');
+  list=list.slice().reverse();
+  if(!list.length)html+='<div class="empty">冇符合嘅計畫。</div>';
+  list.forEach(r=>{
+    const cat=catOf(r);const running=r.runningAgents>0;
+    const stCls=running?'run':(r.status==='stopped'?'stopped':(r.status==='complete'?'complete':''));
+    const stTxt=running?'running':(r.status||'idle');
+    html+=`<div class="card tap${running?' running':''}" onclick="openMission('${r.id}')">
+      <span class="chevron">›</span>
+      <span class="cat-chip" style="color:${cat.col};background:color-mix(in srgb,${cat.col} 14%,transparent)"># ${esc(cat.lab)}</span>
+      <div class="ctitle">${esc(tailTopic(r.topic))}</div>
+      <div class="cmeta"><span class="chip ${stCls}">${esc(stTxt)}</span><span class="chip">👥 ${r.agentCount||0}</span><span class="chip">🕐 ${r.sessionCount||(r.sessions?r.sessions.length:0)||0} sess</span></div>
+    </div>`;
+  });
+  v.innerHTML=html;
+  const s=$('#msearch');if(s)s.oninput=e=>{state.search=e.target.value;clearTimeout(s._t);s._t=setTimeout(scheduleRender,250);};
+  if(!$('#fab')){const f=el('button','fab','<span class="fi">▶</span>Run');f.id='fab';f.onclick=openQuickRun;document.body.appendChild(f);}
+  $('#fab').style.display=state.tab==='plans'?'':'none';
+}
+function cycleFilter(){const o=['全部','running','active'];const i=o.indexOf(state.listFilter||'全部');state.listFilter=o[(i+1)%o.length];if(state.listFilter==='全部')state.listFilter=null;scheduleRender();}
+function openMission(id){state.focusRunId=id;state.tab='mission';state.missionSub='overview';if(!state.byId[id])loadRun(id);scheduleRender();}
+
+/* ───────── Tab 2: Mission ───────── */
+function renderMission(){
+  const v=$('#view');const r=focusedRun();
+  if(!r){v.classList.remove('has-actionbar');v.innerHTML='<div class="empty">未揀計畫。<br>去 Plans tab 揀一個 mission。</div>';return;}
+  const p=r.pipeline||{};
+  let html=`<div class="seg">
+    <button class="${state.missionSub==='overview'?'on':''}" onclick="state.missionSub='overview';scheduleRender()">Overview</button>
+    <button class="${state.missionSub==='agents'?'on':''}" onclick="state.missionSub='agents';scheduleRender()">Agents</button>
+    <button class="${state.missionSub==='activity'?'on':''}" onclick="state.tab='activity';scheduleRender()">Activity</button></div>`;
+  // summary
+  const stages=p.stages||[];const doneN=stages.filter(s=>s.status==='complete').length;const pct=stages.length?Math.round(doneN/stages.length*100):(r.status==='complete'?100:0);
+  html+=`<div class="card"><span class="cat-chip" style="color:var(--blue);background:color-mix(in srgb,var(--blue) 14%,transparent)">任務摘要</span>
+    <div class="cdesc" style="-webkit-line-clamp:3">${esc((r.taskBrief||r.background||r.topic||'').replace(/^#+\s*/,'').slice(0,180))}</div>
+    <div class="prog"><span style="width:${pct}%"></span></div>
+    <div class="sumrow"><span>進度 ${pct}%</span><span>${esc(p.mode||'')}${p.councilPlanVersion?' · plan v'+p.councilPlanVersion:''}</span></div></div>`;
+  if(state.missionSub==='agents'){
+    html+=renderAgentsList(r);
+  }else{
+    // stage accordion
+    if(!stages.length)html+='<div class="empty">未有 pipeline stage。</div>';
+    stages.forEach((s,i)=>{
+      const ags=(r.agents||[]).filter(a=>a.sessionId&&a.sessionId===s.sessionId);
+      const open=state.openStage===s.key;
+      const cn=s.title.split(' ');
+      html+=`<div class="stage-row${open?' open':''}">
+        <div class="stage-head" onclick="toggleStage('${s.key}')">
+          <div class="si">${stageIcon(s)}</div>
+          <div class="sn"><b>${esc(cn[0]||s.title)}</b><small>${esc(cn.slice(1).join(' ')||s.kind||'')} · ${ags.length||(s.agentKeys||[]).length} agents</small></div>
+          <span class="chip">${stageStatusText(s.status)}</span>
+          <span class="sdot" style="background:${sdotColor(s.status)}"></span>
+        </div>
+        <div class="stage-body">${ags.length?'<div class="agent-scroll">'+ags.map(a=>miniCard(a)).join('')+'</div>':'<div style="color:var(--faint);font-size:12px;padding:4px 2px">（未開波 / 冇 agent log）</div>'}</div>
+      </div>`;
+    });
+  }
+  v.innerHTML=html;
+  // push gate banner
+  v.classList.add('has-actionbar');
+  bindMinis();
+}
+function renderAgentsList(r){const ags=r.agents||[];if(!ags.length)return '<div class="empty">未有 agent。</div>';
+  return '<div class="agent-scroll" style="flex-wrap:wrap;overflow:visible">'+ags.map(a=>miniCard(a)).join('')+'</div>';}
+function miniCard(a){const mm=modelMeta(a.cli,a.model);
+  return `<div class="amini" onclick="selectAgent('${a.id}')"><canvas data-agent="${a.id}"></canvas>
+    <div class="an">${esc((a.name||'').replace(/ Agent$/,''))}</div>
+    <span class="mbadge"><span style="width:7px;height:7px;border-radius:50%;background:${mm.color};display:inline-block"></span>${esc(a.model||a.cli||'')}</span>
+    <span class="chip ${a.status==='running'?'run':(a.status==='completed'?'complete':a.status)}" style="font-size:9px">${esc(STATUS_LABEL[a.status]||a.status||'')}</span>
+    <div class="prog" style="width:100%;margin-top:2px"><span style="width:${progressOf(a)}%"></span></div></div>`;}
+function bindMinis(){document.querySelectorAll('canvas[data-agent]').forEach(c=>{const f=findAgentById(c.dataset.agent);if(f)drawMini(c,f.a);});kickAnim();}
+function toggleStage(k){state.openStage=state.openStage===k?null:k;scheduleRender();}
+function selectAgent(id){state.selAgentId=id;state.tab='activity';state.activityView='agent';scheduleRender();}
+
+/* ───────── Tab 3: Activity ───────── */
+function renderActivity(){
+  const v=$('#view');v.classList.remove('has-actionbar');
+  const r=focusedRun();
+  let html=`<div class="seg">
+    <button class="${state.activityView==='agent'?'on':''}" onclick="state.activityView='agent';scheduleRender()">Agent</button>
+    <button class="${state.activityView==='log'?'on':''}" onclick="state.activityView='log';scheduleRender()">Log</button></div>`;
+  if(state.activityView==='agent'){
+    const f=state.selAgentId?findAgentById(state.selAgentId):(r&&r.agents&&r.agents.find(a=>a.status==='running'));
+    if(!f&&!(r&&r.agents&&r.agents.length)){html+='<div class="empty">未揀 agent。<br>去 Mission tab 揀一個人仔。</div>';}
+    else{const a=(f&&f.a)||r.agents[0];const mm=modelMeta(a.cli,a.model);
+      const t=state.logBuf[a.id]!=null?state.logBuf[a.id]:(a.logs||'');
+      html+=`<div class="card"><div style="display:flex;align-items:center;gap:11px"><canvas data-agent="${a.id}" style="width:48px;height:48px;image-rendering:pixelated"></canvas>
+        <div style="flex:1;min-width:0"><div style="font-weight:700;font-size:15px">${esc((a.name||'').replace(/ Agent$/,''))}</div>
+        <div style="font-size:11px;color:var(--muted)">${esc(a.role||'')}</div></div>
+        <span class="chip ${a.status==='running'?'run':(a.status==='completed'?'complete':a.status)}">${esc(STATUS_LABEL[a.status]||a.status)}</span></div>
+        <div class="cmeta" style="margin-top:9px"><span class="mbadge"><span style="width:7px;height:7px;border-radius:50%;background:${mm.color};display:inline-block"></span>${esc(a.cli||'claude')} · ${esc(a.model||'')}</span>
+        <span class="chip">⏱ ${a.startedAt?fmtElapsed(a.startedAt,a.completedAt):'--'}</span></div>
+        <div class="aaction" style="margin-top:8px;font-size:12.5px;color:var(--muted)">${esc(a.action||'')}</div></div>
+        <div class="logbox">${t?mdLite(t):'<span style="color:var(--faint)">未有輸出…</span>'}</div>`;}
+  }else{
+    const cats=['all','feedback','verify','router','upload'];
+    html+='<div class="filters">'+cats.map(c=>`<button class="fchip ${state.logFilter===c?'on':''}" onclick="state.logFilter='${c}';scheduleRender()">${c==='all'?'All':c}</button>`).join('')+'</div>';
+    let fd=state.feed;if(state.logFilter!=='all')fd=fd.filter(e=>(e.kind||'').includes(state.logFilter)||(e.text||'').toLowerCase().includes(state.logFilter));
+    if(!fd.length)html+='<div class="empty">未有 activity log。<br>開一個 mission 就會見到 agent 做緊乜。</div>';
+    fd.slice(0,80).forEach(e=>{html+=`<div class="log-entry"><div class="lh"><span class="lk">${esc(e.kind||'log')}</span><span class="lt">${esc(e.ts||'')}</span></div>${e.body?'<pre>'+esc(e.body)+'</pre>':''}<div style="padding:0 12px 10px;font-size:12.5px">${e.text||''}</div></div>`;});
+  }
+  v.innerHTML=html;
+  bindMinis();
+}
+
+/* ───────── Tab 4: Settings ───────── */
+function renderSettings(){
+  const v=$('#view');v.classList.remove('has-actionbar');
+  const projOpts=state.projects.map(p=>`<option value="${esc(p.path)}">${esc(p.label||p.path)}</option>`).join('');
+  v.innerHTML=`
+   <div class="sg"><h4>外觀</h4>
+     <div class="si-row"><label>主題</label><div class="seg" style="margin:0;width:auto"><button class="${state.theme==='ink'?'on':''}" style="padding:7px 14px" onclick="setTheme('ink')">🌙 深</button><button class="${state.theme==='forest'?'on':''}" style="padding:7px 14px" onclick="setTheme('forest')">☀ 淺</button></div></div>
+   </div>
+   <div class="sg"><h4>預設</h4>
+     <div class="si-row"><label>Project</label><select id="setProj">${projOpts}</select></div>
+     <div class="si-row"><label>寫 code model</label><select id="setModel">${state.models.map(m=>`<option value="${m.cli}|${m.model}">${esc(m.short||m.label)}</option>`).join('')}</select></div>
+   </div>
+   <div class="sg"><h4>通知</h4>
+     <div class="si-row"><label>Telegram 對象</label><select id="setTg"><option value="">（預設 owner）</option>${state.tgUsers.map(u=>`<option value="${esc(u.username||u.chatId)}">${esc(u.username?'@'+u.username:(u.name||u.chatId))}</option>`).join('')}</select></div>
+   </div>
+   <div class="sg"><h4>系統</h4>
+     <div class="si-row"><label>連線</label><span class="chip ${socket.connected?'run':'failed'}">${socket.connected?'live':'offline'}</span></div>
+     <div class="si-row"><label>切返桌面版</label><button class="mchip" onclick="goDesktop()">前往 →</button></div>
+   </div>`;
+  const sp=$('#setProj');if(sp){sp.value=localStorage.getItem('m-proj')||(state.projects[0]&&state.projects[0].path)||'';sp.onchange=e=>localStorage.setItem('m-proj',e.target.value);}
+  const sm=$('#setModel');if(sm){sm.value=localStorage.getItem('m-model')||'codex|gpt-5.5';sm.onchange=e=>localStorage.setItem('m-model',e.target.value);}
+  const st=$('#setTg');if(st){st.value=localStorage.getItem('swarm-tguser')||'';st.onchange=e=>localStorage.setItem('swarm-tguser',e.target.value);}
+}
+function setTheme(t){state.theme=t;document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('swarm-theme',t);}catch(e){}scheduleRender();}
+function goDesktop(){try{localStorage.setItem('m-prefer-desktop','1');}catch(e){}location.href='/';}
+
+/* ───────── 操作 bar（gate-driven）───────── */
+function renderActionbar(){
+  const bar=$('#actionbar');const r=focusedRun();
+  if(state.tab==='plans'||state.tab==='settings'||!r){bar.className='';bar.innerHTML='';return;}
+  const p=r.pipeline||{};const pp=r.pendingPush;const btns=[];
+  if(pp&&['awaiting','pushing','failed'].includes(pp.status)){
+    btns.push(`<button class="abtn green" ${pp.status==='pushing'?'disabled':''} onclick="actPushConfirm()">⬆️ ${pp.status==='pushing'?'Pushing…':(pp.status==='failed'?'再試 Push':'Confirm Push')}</button>`);
+    btns.push(`<button class="abtn" onclick="actPushBranch()">✏️ ${esc(pp.branch||'branch')}</button>`);
+    btns.push(`<button class="abtn" onclick="actPushDecline()">✋</button>`);
+  }else if(p.councilReviewPaused){
+    btns.push(`<button class="abtn go" onclick="actDebate()">🥊 開始拗</button>`);
+  }else if(p.councilPaused){
+    btns.push(`<button class="abtn green" onclick="actApprove()">✅ 批准</button>`);
+    btns.push(`<button class="abtn" onclick="actRevise()">✍️ 再改</button>`);
+  }else if(p.mode==='council'&&p.councilPlanVersion>0){
+    btns.push(`<button class="abtn go" onclick="actExecute()">▶ 落實 / Apply Code</button>`);
+  }else if(p.stopped||(p.stages||[]).some(s=>s.status==='interrupted'||s.status==='failed')){
+    btns.push(`<button class="abtn" onclick="actResume()">▶ 續行</button>`);
+  }
+  if(r.status==='active'||r.status==='executing'){btns.push(`<button class="abtn" onclick="actStop()">⏹</button>`);}
+  if(!btns.length){bar.className='';bar.innerHTML='';$('#view').classList.remove('has-actionbar');return;}
+  bar.className='show';bar.innerHTML=btns.join('');$('#view').classList.add('has-actionbar');
+}
+/* ───────── actions ───────── */
+async function actApprove(){const r=focusedRun();try{await api('/api/runs/'+r.id+'/council/approve',{method:'POST',body:'{}'});toast('✅ 已批准,出緊人話講解');}catch(e){toast(e.message,true);}}
+async function actDebate(){const r=focusedRun();try{await api('/api/runs/'+r.id+'/council/debate',{method:'POST',body:'{}'});toast('🥊 開始收斂');}catch(e){toast(e.message,true);}}
+async function actRevise(){const r=focusedRun();const note=prompt('想點改?（可留空就未解爭議再收斂）')||'';try{await api('/api/runs/'+r.id+'/council/revise',{method:'POST',body:JSON.stringify({note})});toast('✍️ 重跑共識');}catch(e){toast(e.message,true);}}
+async function actResume(){const r=focusedRun();try{await api('/api/runs/'+r.id+'/resume',{method:'POST',body:'{}'});toast('▶ 續行緊');}catch(e){toast(e.message,true);}}
+async function actStop(){const r=focusedRun();if(!confirm('停止呢個 run?'))return;try{await api('/api/runs/'+r.id+'/stop',{method:'POST',body:'{}'});toast('⏹ 已停');}catch(e){toast(e.message,true);}}
+function actExecute(){const r=focusedRun();const mv=(localStorage.getItem('m-model')||'codex|gpt-5.5').split('|');openSheet('▶ 落實 plan',`<p style="font-size:13px;color:var(--muted)">將議會終稿交 code pipeline,喺 project 真正改 code（build → review → fix → verify）。</p>
+   <label style="font-size:12px;color:var(--faint)">寫 code model</label>
+   <div class="mchips" id="exModels">${state.models.map(m=>`<span class="mchip ${m.model===mv[1]?'on':''}" data-cli="${m.cli}" data-model="${m.model}">${esc(m.short||m.label)}</span>`).join('')}</div>
+   <div class="row-btns"><button onclick="closeSheet()">取消</button><button class="go" onclick="doExecute()">▶ 落實</button></div>`);
+  let pick={cli:mv[0],model:mv[1]};setTimeout(()=>{document.querySelectorAll('#exModels .mchip').forEach(c=>c.onclick=()=>{document.querySelectorAll('#exModels .mchip').forEach(x=>x.classList.remove('on'));c.classList.add('on');pick={cli:c.dataset.cli,model:c.dataset.model};});},0);
+  window._execPick=()=>pick;}
+async function doExecute(){const r=focusedRun();const pick=window._execPick();const build={cli:pick.cli,model:pick.model};closeSheet();try{await api('/api/runs/'+r.id+'/council/execute',{method:'POST',body:JSON.stringify({model:build.model,perAgentModels:{frontend:build,backend:build,database:build,test:build,fixer:build,reviewer:{cli:'claude',model:'opus'},verifier:{cli:'claude',model:'sonnet'}}})});toast('▶ 落實開波');}catch(e){toast(e.message,true);}}
+async function actPushConfirm(){const r=focusedRun();const pp=r.pendingPush;if(!confirm('Push 上 GitHub?\nProject: '+String(pp.project||'').split('/').pop()+'\nBranch: '+pp.branch))return;try{await api('/api/runs/'+r.id+'/push',{method:'POST',body:JSON.stringify({confirm:true})});toast('⬆️ Push 緊…');}catch(e){toast(e.message,true);}}
+async function actPushBranch(){const r=focusedRun();const b=prompt('Push 去邊個 branch?',r.pendingPush.branch);if(b===null||!b.trim())return;try{await api('/api/runs/'+r.id+'/push/retarget',{method:'POST',body:JSON.stringify({branch:b.trim()})});toast('🌿 已轉 branch');}catch(e){toast(e.message,true);}}
+async function actPushDecline(){const r=focusedRun();try{await api('/api/runs/'+r.id+'/push/decline',{method:'POST',body:'{}'});toast('✋ 取消 push');}catch(e){toast(e.message,true);}}
+
+/* ───────── Quick Run sheet ───────── */
+function openQuickRun(){const proj=localStorage.getItem('m-proj')||(state.projects[0]&&state.projects[0].path)||'';
+  openSheet('▶ Quick Run',`<textarea id="qrTask" placeholder="例如:幫 grading 頁加 rubric 預覽 modal,要 responsive"></textarea>
+   <div class="row-btns"><button onclick="closeSheet()">取消</button><button class="go" onclick="doQuickRun()">🔀 分波開工</button></div>
+   <p style="font-size:11px;color:var(--faint);margin-top:8px">→ ${esc((proj||'').split('/').pop())} · research→build→review→fix</p>`);}
+async function doQuickRun(){const task=$('#qrTask').value.trim();if(!task){toast('寫低任務先',true);return;}const proj=localStorage.getItem('m-proj')||(state.projects[0]&&state.projects[0].path)||undefined;const mv=(localStorage.getItem('m-model')||'codex|gpt-5.5').split('|');const tg=localStorage.getItem('swarm-tguser')||undefined;closeSheet();try{const r=await api('/api/plans/run',{method:'POST',body:JSON.stringify({staged:true,taskBrief:task,projectPath:proj,deliveryMode:'code',cli:mv[0],model:mv[1],tgUser:tg})});toast('🔀 開工!');if(r.run){state.focusRunId=r.run.id;state.byId[r.run.id]=r.run;state.tab='mission';}await loadAll();}catch(e){toast(e.message,true);}}
+
+/* ───────── sheet ───────── */
+function openSheet(title,html){$('#sheet').innerHTML='<h3>'+esc(title)+'</h3>'+html;$('#sheet').classList.add('show');$('#scrim').classList.add('show');}
+function closeSheet(){$('#sheet').classList.remove('show');$('#scrim').classList.remove('show');}
+$('#scrim').onclick=closeSheet;
+
+/* ───────── tabbar ───────── */
+document.querySelectorAll('#tabbar button').forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;scheduleRender();});
+
+/* ───────── feed（activity log）───────── */
+function pushFeed(kind,text,body){const d=new Date();const ts=[d.getHours(),d.getMinutes(),d.getSeconds()].map(n=>String(n).padStart(2,'0')).join(':');state.feed.unshift({kind,text,body,ts});if(state.feed.length>200)state.feed.pop();if(state.tab==='activity')scheduleRender();}
+
+/* ───────── socket ───────── */
+socket.on('connect',()=>scheduleRender());
+socket.on('disconnect',()=>scheduleRender());
+socket.on('state-snapshot',run=>{if(run&&run.id){ingestRun(run);if(!state.focusRunId)state.focusRunId=run.id;}scheduleRender();});
+socket.on('run-updated',run=>{ingestRun(run);scheduleRender();});
+socket.on('swarm-start',run=>{if(run&&run.id)ingestRun(run);loadAll();pushFeed('start',`新 plan <b>${esc(run.topic||'')}</b> 啟動`);});
+socket.on('swarm-reset',()=>{state.focusRunId=null;loadAll();});
+socket.on('execution-agent-started',d=>{const r=state.byId[d.runId];if(r){const i=r.agents.findIndex(a=>a.id===d.agent.id);if(i>=0)r.agents[i]=d.agent;else r.agents.push(d.agent);}pushFeed('router',`<b>${esc(d.agent.name)}</b> 開工`);scheduleRender();});
+socket.on('execution-agent-log',d=>{state.logBuf[d.agentId]=((state.logBuf[d.agentId]||'')+(d.chunk||'')).slice(-8000);const f=findAgentById(d.agentId);if(f&&d.action)f.a.action=d.action;if(state.tab==='activity'&&state.activityView==='agent'&&state.selAgentId===d.agentId)scheduleRender();});
+socket.on('execution-agent-complete',d=>{const r=state.byId[d.runId];if(r){const i=r.agents.findIndex(a=>a.id===d.agent.id);if(i>=0)r.agents[i]=d.agent;}const ok=d.agent.status==='completed';pushFeed(ok?'verify':'feedback',`<b>${esc(d.agent.name)}</b> ${ok?'完成':'失敗'}`);scheduleRender();});
+socket.on('artifact-added',d=>{const r=state.byId[d.runId];if(r){r.artifacts=r.artifacts||[];r.artifacts.unshift(d.artifact);}pushFeed('upload',`artifact <b>${esc(d.artifact.title||'')}</b>`,truncBody(d.artifact.content));});
+socket.on('council-paused',d=>{const r=state.byId[d.runId];if(r&&r.pipeline)r.pipeline.councilPaused=true;toast('⏸ 議會收斂完,等你御准');scheduleRender();});
+socket.on('council-review-paused',d=>{const r=state.byId[d.runId];if(r&&r.pipeline)r.pipeline.councilReviewPaused=true;toast('🔎 三模 review 完,撳「開始拗」');scheduleRender();});
+socket.on('synthesis-complete',d=>{if(d.run)ingestRun(d.run);toast('★ 收斂決策完成,可落實');scheduleRender();});
+socket.on('push-gate',d=>{const r=state.byId[d.runId];if(r)r.pendingPush=d.pendingPush;const st=d.pendingPush&&d.pendingPush.status;if(st==='awaiting')toast('⬆️ 待你確認 push 上 GitHub');else if(st==='done')toast('✅ Push 完成');else if(st==='failed')toast('⚠️ Push 失敗',true);scheduleRender();});
+function truncBody(s){s=String(s||'');return s.length>500?s.slice(0,500)+'…':s;}
+
+/* ───────── 鍵盤 / safe-area（visualViewport）───────── */
+if(window.visualViewport){window.visualViewport.addEventListener('resize',()=>{document.documentElement.style.setProperty('--vvh',window.visualViewport.height+'px');});}
+
+/* ───────── overseer chat（手機 chat 直接落執行指令 + 接 AI action）───────── */
+function openChat(){$('#chatOverlay').classList.add('show');renderChatMsgs();setTimeout(()=>{const i=$('#coInput');if(i)i.focus();},150);}
+function closeChat(){$('#chatOverlay').classList.remove('show');}
+function renderChatMsgs(){const box=$('#coMsgs');if(!box)return;state.overseer.pending=[];
+  let html=state.overseer.history.map(m=>{
+    if(m.role==='user')return `<div class="bubble user">${mdLite(m.content)}</div>`;
+    let h=`<div class="bubble assistant"><div class="bmeta">總管${m.model?' · '+esc(m.model):''}</div>${mdLite(m.content)}</div>`;
+    if(m.action){const idx=state.overseer.pending.push(m.action)-1;h+=actionConfirmHTML(m.action,idx);}
+    return h;}).join('');
+  if(state.overseer.thinking)html+='<div class="thinking">⏱ 總管諗緊…</div>';
+  if(!state.overseer.history.length)html='<div class="empty">同總管 AI 傾偈 —— 佢睇晒你所有 run / project。<br>叫佢「根據呢份 report 去執行」就會幫你落實。</div>';
+  box.innerHTML=html;box.scrollTop=box.scrollHeight;}
+function actionConfirmHTML(a,idx){const lbl={approve:'✅ 批准御准閘',debate:'🥊 開拗收斂',execute:'▶ 落實議會終稿',revise:'✍️ 議會再改',stop:'⏹ 停止 run',council:'🗳 開新議會',mission:'⚙️ 開新 mission'}[a.type]||a.type;
+  return `<div class="act-confirm"><button class="go" onclick="runOverseerAction(${idx})">${esc(lbl)}</button><button onclick="this.parentNode.remove()">✋ 算</button></div>`;}
+async function sendOverseer(){const inp=$('#coInput');const msg=inp.value.trim();if(!msg)return;inp.value='';inp.style.height='44px';
+  state.overseer.history.push({role:'user',content:msg});state.overseer.thinking=true;renderChatMsgs();
+  try{const r=await api('/api/overseer',{method:'POST',body:JSON.stringify({message:msg,mode:'auto',history:state.overseer.history.slice(-6).map(m=>({role:m.role,content:m.content}))})});
+    state.overseer.history.push({role:'assistant',content:r.reply||'(冇內容)',action:r.action,model:r.model});}
+  catch(e){state.overseer.history.push({role:'assistant',content:'⚠️ '+e.message});}
+  state.overseer.thinking=false;renderChatMsgs();}
+async function runOverseerAction(idx){const a=state.overseer.pending[idx];if(!a)return;const r=focusedRun();const t=a.type;
+  if(['approve','debate','revise','stop','execute'].includes(t)&&!r){toast('未揀 run（去 Plans 揀一個）',true);return;}
+  try{
+    if(t==='approve'){await api('/api/runs/'+r.id+'/council/approve',{method:'POST',body:'{}'});toast('✅ 已批准');closeChat();}
+    else if(t==='debate'){await api('/api/runs/'+r.id+'/council/debate',{method:'POST',body:'{}'});toast('🥊 開拗');closeChat();}
+    else if(t==='revise'){await api('/api/runs/'+r.id+'/council/revise',{method:'POST',body:JSON.stringify({note:a.arg||''})});toast('✍️ 再改');closeChat();}
+    else if(t==='stop'){await api('/api/runs/'+r.id+'/stop',{method:'POST',body:'{}'});toast('⏹ 已停');closeChat();}
+    else if(t==='execute'){closeChat();state.tab='mission';scheduleRender();actExecute();}
+    else {toast('「'+t+'」請喺 Telegram 落（手機 chat 支援 approve/debate/revise/execute/stop）',true);}
+  }catch(e){toast(e.message,true);}
+}
+
+/* ───────── boot ───────── */
+const _coInput=$('#coInput');if(_coInput)_coInput.addEventListener('input',e=>{e.target.style.height='44px';e.target.style.height=Math.min(120,e.target.scrollHeight)+'px';});
+loadAll();
+setInterval(()=>{if(state.tab==='activity'||state.tab==='mission')kickAnim();},1000);
+</script>
+</body>
+</html>

@@ -2,6 +2,7 @@
 <html lang="zh-HK" data-theme="ink">
 <head>
 <meta charset="utf-8" />
+<script>/* 真.手機/平板（touch + 窄）自動入 mobile-first 頁；desktop（無 touch）即使細 window 都唔 redirect；m.html「切返桌面版」set m-prefer-desktop opt-out */(function(){try{var touch=('ontouchstart'in window)||navigator.maxTouchPoints>0;if(touch&&window.innerWidth<=900&&!localStorage.getItem('m-prefer-desktop')&&(location.pathname==='/'||/index\.html$/.test(location.pathname))){location.replace('/m.html');}}catch(e){}})();</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
 <title>Swarm Desktop · Agent Control Room</title>
 <style>
@@ -400,6 +401,7 @@ canvas#office{display:block;width:100%;height:480px;image-rendering:pixelated}
             <div class="fldwrap"><label>議員 A</label><select class="fld" id="csA"></select></div>
             <div class="fldwrap"><label>議員 B</label><select class="fld" id="csB"></select></div>
             <div class="fldwrap"><label>議員 C</label><select class="fld" id="csC"></select></div>
+            <div class="fldwrap"><label>📣 通知 TG</label><select class="fld" id="csUser"></select></div>
             <button class="btn go sm" id="councilGoBtn">🗳 開議會</button>
           </div>
         </div>
@@ -422,6 +424,13 @@ canvas#office{display:block;width:100%;height:480px;image-rendering:pixelated}
           <button class="btn go sm" id="councilApproveBtn" style="display:none" title="批准三模議會終稿 → 出人話講解">✅ 批准</button>
           <button class="btn ghost sm" id="councilReviseBtn" style="display:none" title="加指示,叫議會再收斂多一 round">✍️ 再改</button>
           <button class="btn go sm" id="councilExecuteBtn" style="display:none" title="將議會終稿 plan 交 code pipeline 真正喺 project 實作">▶ 落實 plan</button>
+          <span id="pushGate" style="display:none;align-items:center;gap:6px">
+            <span class="pill" id="pushGateLabel" style="border-color:var(--gold);color:var(--gold)">⬆️ 待 push</span>
+            <button class="btn go sm" id="pushConfirmBtn" title="push 上 GitHub">⬆️ Confirm Push</button>
+            <button class="btn ghost sm" id="pushBranchBtn" title="改 push 去邊個 branch">✏️ Branch</button>
+            <button class="btn ghost sm" id="pushProjectBtn" title="改 push 去邊個 project">📁 Project</button>
+            <button class="btn ghost sm" id="pushCancelBtn" title="唔 push">✋</button>
+          </span>
         </div>
         <div id="executePickRow" class="row" style="display:none;padding:8px 14px;border-bottom:1px solid var(--line);align-items:flex-end;gap:10px">
           <div class="fldwrap"><label>建造 model</label><select class="fld" id="exBuild"></select></div>
@@ -593,6 +602,7 @@ function renderPipeStrip(run){
   if(vb)vb.style.display=paused?'':'none';
   if(db)db.style.display=reviewPaused?'':'none';
   const xb=$('#councilExecuteBtn');const planReady=!!(p&&p.mode==='council'&&p.councilPlanVersion>0&&!paused&&!reviewPaused);if(xb)xb.style.display=planReady?'':'none';
+  const pp=run&&run.pendingPush;const pgEl=$('#pushGate');if(pgEl){const onGate=!!(pp&&['awaiting','pushing','failed'].includes(pp.status));pgEl.style.display=onGate?'inline-flex':'none';if(onGate){const lbl=$('#pushGateLabel');if(lbl)lbl.textContent=pp.status==='pushing'?'⬆️ Pushing…':(pp.status==='failed'?('⚠️ Push 失敗: '+(pp.branch||'')):('⬆️ 待 push: '+(pp.branch||'')));const cf=$('#pushConfirmBtn');if(cf){cf.disabled=pp.status==='pushing';cf.textContent=pp.status==='failed'?'🔁 再試':'⬆️ Confirm Push';}}}
   if(!p||!p.stages){ps.style.display='none';if(rb)rb.style.display='none';return;}
   ps.style.display='';
   const tag=reviewPaused?' · 🔎 三模 review 完,待開拗':(paused?' · ⏸ 待御准':'');
@@ -808,6 +818,11 @@ async function startDebate(){const run=focusedRun();if(!run){toast('未揀 plan'
 function executePlan(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}const row=$('#executePickRow');if(!row)return;const show=row.style.display==='none';row.style.display=show?'':'none';if(show)fillExecuteSelectors();}
 function fillExecuteSelectors(){[['exBuild','gpt-5.5'],['exReviewer','opus']].forEach(([sid,defModel])=>{const sel=$('#'+sid);if(!sel||sel._filled)return;sel._filled=true;state.models.forEach(m=>{const o=el('option');o.value=m.cli+'|'+m.model;o.textContent=m.short||m.label;if(m.model===defModel)o.selected=true;sel.appendChild(o);});});}
 async function confirmExecute(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}const pick=sid=>{const v=($('#'+sid).value||'').split('|');return{cli:v[0]||'claude',model:v[1]||'sonnet'};};const build=pick('exBuild');const rev=pick('exReviewer');if(!confirm('將議會終稿 plan 交 code pipeline 真正落手實作?\n建造='+build.model+'，覆核='+rev.model+'\n會喺 '+(run.projectPath||'')+' 改 code（build → review → fix）。'))return;try{const r=await api('/api/runs/'+run.id+'/council/execute',{method:'POST',body:JSON.stringify({model:build.model,perAgentModels:{frontend:build,backend:build,test:build,reviewer:rev,fixer:build}})});toast('▶ 落實 plan v'+r.executingVersion+' 開波，build→review→fix 跑緊…');$('#executePickRow').style.display='none';}catch(e){toast('落實失敗:'+e.message,true);}}
+// ─── 任務一:Push gate（dashboard 側,同 Telegram 共用同一 run.pendingPush）───
+async function pushConfirm(){const run=focusedRun();if(!run||!run.pendingPush){toast('冇待確認 push',true);return;}const pp=run.pendingPush;if(!confirm('Push 上 GitHub?\nProject: '+String(pp.project||'').split('/').pop()+'\nBranch: '+pp.branch+'\n（push 去生產線,確認清楚）'))return;try{await api('/api/runs/'+run.id+'/push',{method:'POST',body:JSON.stringify({confirm:true})});toast('⬆️ Push 緊…');}catch(e){toast('Push 失敗:'+e.message,true);}}
+async function pushBranch(){const run=focusedRun();if(!run||!run.pendingPush){toast('冇待確認 push',true);return;}const b=prompt('Push 去邊個 branch?',run.pendingPush.branch||'feature/mvp-sprint');if(b===null)return;const branch=b.trim();if(!branch){toast('branch 唔可以空',true);return;}try{await api('/api/runs/'+run.id+'/push/retarget',{method:'POST',body:JSON.stringify({branch})});toast('🌿 已轉 branch: '+branch);}catch(e){toast('改 branch 失敗:'+e.message,true);}}
+async function pushProject(){const run=focusedRun();if(!run||!run.pendingPush){toast('冇待確認 push',true);return;}let list=state.projects;if(!list||!list.length){try{const r=await api('/api/projects');list=r.projects||[];}catch(e){}}if(!list||!list.length){toast('冇可揀 project',true);return;}const menu=list.map((p,i)=>i+': '+(p.label||p.path)).join('\n');const pick=prompt('揀 project push 去（輸入編號）:\n'+menu,'0');if(pick===null)return;const idx=Number(pick);if(!Number.isInteger(idx)||!list[idx]){toast('編號無效',true);return;}try{await api('/api/runs/'+run.id+'/push/retarget',{method:'POST',body:JSON.stringify({projectIdx:idx})});toast('📁 已轉 project: '+(list[idx].label||list[idx].path));}catch(e){toast('改 project 失敗:'+e.message,true);}}
+async function pushDecline(){const run=focusedRun();if(!run||!run.pendingPush){toast('冇待確認 push',true);return;}try{await api('/api/runs/'+run.id+'/push/decline',{method:'POST',body:'{}'});toast('✋ 已取消 push');}catch(e){toast('失敗:'+e.message,true);}}
 
 function buildAgentsPayload(){const sel=state.agentSel[state.mode]||{};const out=[];PRESETS[state.mode].forEach(p=>{const s=sel[p.key];if(s&&s.on){const o={key:p.key};if(s.model){const mm=state.models.find(m=>m.model===s.model)||{};o.model=s.model;o.cli=mm.cli||state.defModel.cli;}out.push(o);}});return out;}
 function profilePerAgent(){
@@ -871,8 +886,9 @@ async function ensureChatRun(){let run=focusedRun();if(run&&run.id)return run.id
 async function sendChat(){const msg=$('#chatInput').value.trim();if(!msg){toast('寫低你想做乜先',true);return;}let runId;try{runId=await ensureChatRun();}catch(e){toast('開 session 失敗:'+e.message,true);return;}const body={message:msg,modelOverride:state.chat.model||state.defModel,projectPath:$('#chatProjSelect').value||''};$('#chatInput').value='';state.chat.thinking=true;renderChat();try{await api('/api/runs/'+runId+'/chat',{method:'POST',body:JSON.stringify(body)});}catch(e){state.chat.thinking=false;renderChat();toast('傾偈失敗:'+e.message,true);}}
 async function finalizeChat(){const run=focusedRun();if(!run){toast('未開始傾偈',true);return;}if(!confirm('將呢段傾偈定稿成 mission brief?之後可以撳「交議會」開三模議會。'))return;state.chat.thinking=true;renderChat();try{await api('/api/runs/'+run.id+'/chat/finalize',{method:'POST',body:'{}'});toast('定稿中…（10-40s）');}catch(e){state.chat.thinking=false;renderChat();toast('定稿失敗:'+e.message,true);}}
 function toggleCouncilPick(){const row=$('#councilPickRow');if(!row)return;const show=row.style.display==='none';row.style.display=show?'':'none';if(show)fillCouncilSelectors();}
-function fillCouncilSelectors(){[['csA','opus'],['csB','gpt-5.5'],['csC','glm-5.1']].forEach(([sid,defModel])=>{const sel=$('#'+sid);if(!sel||sel._filled)return;sel._filled=true;state.models.forEach(m=>{const o=el('option');o.value=m.cli+'|'+m.model;o.textContent=m.short||m.label;if(m.model===defModel)o.selected=true;sel.appendChild(o);});});}
-async function startCouncilFromChat(){const run=focusedRun();if(!run){toast('未揀 run',true);return;}const pick=sid=>{const v=($('#'+sid).value||'').split('|');return{cli:v[0]||'claude',model:v[1]||'opus'};};const perAgentModels={council_a:pick('csA'),council_b:pick('csB'),council_c:pick('csC')};try{await api('/api/runs/'+run.id+'/council/start',{method:'POST',body:JSON.stringify({perAgentModels})});toast('🗳 三模議會開波!');$('#councilPickRow').style.display='none';}catch(e){toast('開議會失敗:'+e.message,true);}}
+function fillCouncilSelectors(){[['csA','opus'],['csB','gpt-5.5'],['csC','glm-5.1']].forEach(([sid,defModel])=>{const sel=$('#'+sid);if(!sel||sel._filled)return;sel._filled=true;state.models.forEach(m=>{const o=el('option');o.value=m.cli+'|'+m.model;o.textContent=m.short||m.label;if(m.model===defModel)o.selected=true;sel.appendChild(o);});});fillTgUserSelector();}
+async function fillTgUserSelector(){const sel=$('#csUser');if(!sel||sel._filled)return;sel._filled=true;try{const r=await api('/api/tg-users');const saved=localStorage.getItem('swarm-tguser')||'';sel.innerHTML='<option value="">（預設 owner）</option>'+(r.users||[]).map(u=>{const key=u.username||u.name||u.chatId;const lbl=u.username?('@'+u.username):(u.name||u.chatId);return `<option value="${esc(key)}"${key===saved?' selected':''}>${esc(lbl)}</option>`;}).join('');}catch(e){}}
+async function startCouncilFromChat(){const run=focusedRun();if(!run){toast('未揀 run',true);return;}const pick=sid=>{const v=($('#'+sid).value||'').split('|');return{cli:v[0]||'claude',model:v[1]||'opus'};};const perAgentModels={council_a:pick('csA'),council_b:pick('csB'),council_c:pick('csC')};const tgUser=($('#csUser')&&$('#csUser').value)||'';if(tgUser)localStorage.setItem('swarm-tguser',tgUser);try{await api('/api/runs/'+run.id+'/council/start',{method:'POST',body:JSON.stringify({perAgentModels,tgUser})});toast(tgUser?('🗳 開波!通知→'+tgUser):'🗳 三模議會開波!');$('#councilPickRow').style.display='none';}catch(e){toast('開議會失敗:'+e.message,true);}}
 function renderTaskPicker(){const sel=$('#taskPicker');if(!sel)return;sel.innerHTML='<option value="">📂 任務檔…</option>'+state.tasks.map((t,i)=>`<option value="${i}">${t.source==='mission'?'◆ ':'• '}${esc(t.title)}</option>`).join('');}
 
 // ─── theme ───
@@ -905,6 +921,7 @@ socket.on('persona-added',d=>{if(d.run)ingestRun(d.run);scheduleRender();});
 socket.on('context-update',d=>{if(d.run)ingestRun(d.run);scheduleRender();});
 socket.on('cloudcli-context',d=>{if(d.run){ingestRun(d.run);if(!state.focus)state.focus=d.run.id;}scheduleRender();});
 socket.on('synthesis-complete',d=>{if(d.run)ingestRun(d.run);pushFeed('done','★','收斂決策完成');scheduleRender();});
+socket.on('push-gate',d=>{const run=state.byId[d.runId];if(run)run.pendingPush=d.pendingPush;const st=d.pendingPush&&d.pendingPush.status;if(st==='awaiting')toast('⬆️ 待你確認 push 上 GitHub');else if(st==='done')toast('✅ Push 完成');else if(st==='failed')toast('⚠️ Push 失敗',true);if(d.runId===state.focus)scheduleRender();});
 
 // ─── wiring ───
 $('#heroToggle').onclick=e=>{e.stopPropagation();$('#hero').classList.toggle('collapsed');$('#heroToggle').textContent=$('#hero').classList.contains('collapsed')?'展開':'收起';};
@@ -917,6 +934,10 @@ $('#councilApproveBtn').onclick=()=>approveCouncil();
 $('#councilReviseBtn').onclick=()=>reviseCouncil();
 $('#councilDebateBtn').onclick=()=>startDebate();
 $('#councilExecuteBtn').onclick=()=>executePlan();
+$('#pushConfirmBtn').onclick=()=>pushConfirm();
+$('#pushBranchBtn').onclick=()=>pushBranch();
+$('#pushProjectBtn').onclick=()=>pushProject();
+$('#pushCancelBtn').onclick=()=>pushDecline();
 $('#executeGoBtn').onclick=()=>confirmExecute();
 $('#chatSendBtn').onclick=()=>sendChat();
 $('#chatFinalizeBtn').onclick=()=>finalizeChat();

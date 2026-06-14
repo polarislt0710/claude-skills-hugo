@@ -18,11 +18,15 @@ const { execFileSync } = require('child_process');
 const SESSION_NOISE_RE = /(^|\/)(HANDOFF\.md|SESSION-LOG\.md|\.session[^/]*|[^/]*\.wip)$/;
 
 function git(repo, args, opts = {}) {
+  const { env: optsEnv, ...restOpts } = opts;
   return execFileSync('git', ['-C', repo, ...args], {
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe'],
-    ...opts,
+    ...restOpts,
+    // GIT_TERMINAL_PROMPT=0 → never block on a credential prompt (would hang the
+    // non-interactive execFileSync). Push auth must be via SSH key / cached token.
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0', ...(optsEnv || {}) },
   });
 }
 
@@ -38,6 +42,39 @@ function gitSafe(repo, args) {
 function headSha(repo) {
   const r = gitSafe(repo, ['rev-parse', 'HEAD']);
   return r.ok ? r.out : null;
+}
+
+// Push the current HEAD (the local merge result of a finished pipeline) to
+// origin/<targetBranch>. NON-FORCE only: a non-fast-forward push is reported,
+// never overwritten — this protects the live production branch's history.
+// Uses a refspec (HEAD:refs/heads/<branch>) so we never have to checkout / rename
+// the ephemeral swarm/* branches; the remote branch is auto-created if missing.
+// Returns { ok, remoteBranch, pushedSha, err, conflict }.
+function pushBranch({ repo, targetBranch, sourceRef = 'HEAD', remote = 'origin' }) {
+  const branch = String(targetBranch || '').trim();
+  // 1) sanitise branch name (reject anything that could break the refspec)
+  if (!branch || !/^[A-Za-z0-9._/-]+$/.test(branch) || branch.includes('..')
+      || branch.startsWith('-') || branch.startsWith('/') || branch.endsWith('/')) {
+    return { ok: false, err: `invalid branch name: ${targetBranch}`, remoteBranch: branch };
+  }
+  // 2) refuse to push a half-finished merge state
+  if (gitSafe(repo, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok) {
+    return { ok: false, err: 'repo is mid-merge (MERGE_HEAD exists)', remoteBranch: branch };
+  }
+  // 3) remote must exist + be resolvable
+  if (!gitSafe(repo, ['remote', 'get-url', remote]).ok) {
+    return { ok: false, err: `no '${remote}' remote configured`, remoteBranch: branch };
+  }
+  // 4) resolve the sha we are about to push (for reporting)
+  const shaR = gitSafe(repo, ['rev-parse', sourceRef]);
+  const pushedSha = shaR.ok ? shaR.out : null;
+  // 5) push HEAD -> refs/heads/<branch> (non-force)
+  const r = gitSafe(repo, ['push', remote, `${sourceRef}:refs/heads/${branch}`]);
+  if (r.ok) {
+    return { ok: true, remoteBranch: branch, pushedSha, remote };
+  }
+  const conflict = /non-fast-forward|\brejected\b|fetch first|tip of your current branch is behind/i.test(r.err || '');
+  return { ok: false, conflict, err: r.err, remoteBranch: branch, pushedSha, remote };
 }
 
 function isClean(repo) {
@@ -145,4 +182,5 @@ module.exports = {
   pruneWorktrees,
   headSha,
   isClean,
+  pushBranch,
 };

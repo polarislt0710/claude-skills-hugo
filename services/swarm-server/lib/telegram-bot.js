@@ -45,6 +45,7 @@ const HELP = [
   '直接打一句 → 總管 AI 睇晒所有 run/project 答你。',
   '預設 *自動*：傾 idea 快答(Sonnet)，叫佢 review/查 bug 先深入(Opus+skill)。',
   '`/auto` `/fast` `/deep` 揀模式｜`/brain opus|fable` 切深入腦',
+  '📷 直接傳截圖（可加文字）→ 總管睇圖分析 error/bug/UI，仲可交去議會',
   '',
   '*睇嘢*',
   '`/status` — 當前 run 狀態',
@@ -60,6 +61,7 @@ const HELP = [
   '`/approve` — 批准當前御准閘',
   '`/execute` — 將議會終稿落實（揀 build model）',
   '`/stop` — 中途停止當前 run（殺晒 running agent）',
+  '`/resume` — 由上次未完成 stage 重跑（修咗 code 後用嚟重試 verifier）',
   '',
   '御准／收斂通知會帶掣，直接撳就得。',
 ].join('\n');
@@ -86,6 +88,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
   const states = new Map();
   function blankState() {
     return { pendingMission: null, pendingCouncil: null, pendingRefine: null, awaitingRefineNote: false,
+      pendingPush: null, awaitingPushBranch: false,
       pendingOverseerRevise: null, overseerHistory: [], overseerModel: 'opus', overseerMode: 'auto' };
   }
   function stateFor(key) { if (!states.has(key)) states.set(key, blankState()); return states.get(key); }
@@ -93,16 +96,19 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
   // 當前 dispatch 嘅 working set（updates 係 sequential 處理,逐個 await,唔會 race）
   let replyChatId = OWNER, currentRole = 'owner';
   let pendingMission, pendingCouncil, pendingRefine, awaitingRefineNote, pendingOverseerRevise, overseerHistory, overseerModel, overseerMode;
+  let pendingPush, awaitingPushBranch;
   function loadState(key) {
     const s = stateFor(key);
     pendingMission = s.pendingMission; pendingCouncil = s.pendingCouncil; pendingRefine = s.pendingRefine;
     awaitingRefineNote = s.awaitingRefineNote; pendingOverseerRevise = s.pendingOverseerRevise;
+    pendingPush = s.pendingPush; awaitingPushBranch = s.awaitingPushBranch;
     overseerHistory = s.overseerHistory; overseerModel = s.overseerModel; overseerMode = s.overseerMode;
   }
   function saveState(key) {
     const s = stateFor(key);
     s.pendingMission = pendingMission; s.pendingCouncil = pendingCouncil; s.pendingRefine = pendingRefine;
     s.awaitingRefineNote = awaitingRefineNote; s.pendingOverseerRevise = pendingOverseerRevise;
+    s.pendingPush = pendingPush; s.awaitingPushBranch = awaitingPushBranch;
     s.overseerHistory = overseerHistory; s.overseerModel = overseerModel; s.overseerMode = overseerMode;
     persistMem();
   }
@@ -132,6 +138,28 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
   function say(text, opts = {}) { return tg.sendMessage(text, { ...opts, chatId: replyChatId }); }
   function ownerOnly() { return currentRole === 'owner'; }
   async function denyGuest() { await say('🔒 呢個動作淨係 owner 做到。你而家係 guest——可以同總管傾偈 + 睇嘢（/runs /show /status /projects）。'); }
+
+  // 記低每個接觸過 bot 嘅人:username / first_name → chatId,存 data/tg-users.json。
+  // 用嚟畀 console（dashboard）揀「通知邊個」——server resolve username→chatId→run.tgChatId。
+  // 連未授權嘅都記（淨係攞 chatId 嚟發通知,唔等於畀佢落指令）。
+  const USERS_FILE = require('path').join(__dirname, '..', 'data', 'tg-users.json');
+  function recordUser(from, chat) {
+    try {
+      if (!from || !chat || chat.id == null) return;
+      const fs = require('fs');
+      let reg = {};
+      try { reg = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8')); } catch (_) {}
+      const cid = String(chat.id);
+      const prev = reg[cid] || {};
+      reg[cid] = {
+        chatId: cid,
+        username: from.username ? String(from.username) : (prev.username || null),
+        name: from.first_name ? String(from.first_name) : (prev.name || null),
+        ts: Date.now(),
+      };
+      fs.writeFileSync(USERS_FILE, JSON.stringify(reg));
+    } catch (e) { log('recordUser: ' + e.message); }
+  }
 
   // 快答/深入:auto = 自己判斷（message 含 review/audit/bug/深入… → deep，否則 fast）；/fast /deep 係人手 sticky override。
   const DEEP_HINT = /review|audit|security|安全|\bbug\b|race|漏洞|refactor|重構|architect|架構|深入|睇.{0,4}code|檢查|核實|trace|root\s*cause|點解.{0,6}(錯|fail|crash|爆)/i;
@@ -172,24 +200,32 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     return r.json && r.json.id ? r.json : null;
   }
 
+  // 由 run id 尾段搵返個 run（push gate callback 用 <runTail> 鎖死目標 run，唔靠「當前 run」）。
+  async function findRunByTail(tail) {
+    const r = await api('GET', '/api/runs');
+    const arr = Array.isArray(r.json) ? r.json : (r.json && r.json.runs) || [];
+    return arr.find((x) => String(x.id).endsWith(String(tail))) || null;
+  }
+
   function modelKeyboard(prefix) {
     return { inline_keyboard: MODEL_CHOICES.map((m, i) => [{ text: (i === 0 ? '✅ ' : '') + m.label, callback_data: `${prefix}:${m.cli}:${m.model}` }]) };
   }
 
-  // council 落實：build agents = 揀嘅 model；reviewer 維持 Opus。
+  // council 落實：build agents = 揀嘅 model；reviewer/verifier 維持 Claude（verifier 一定要明設,否則 cli 跌 claude+gpt model 唔夾炸）。
   function execPerAgent(cli, model) {
     const build = { cli, model };
-    return { frontend: build, backend: build, test: build, fixer: build, reviewer: { cli: 'claude', model: 'opus' } };
+    return { frontend: build, backend: build, database: build, test: build, fixer: build, reviewer: { cli: 'claude', model: 'opus' }, verifier: { cli: 'claude', model: 'sonnet' } };
   }
 
-  // mission：寫 code 嘅 agent = 揀嘅 model；研究／規劃／覆核固定 Opus。
+  // mission：寫 code 嘅 agent = 揀嘅 model；研究／規劃／覆核／驗證固定 Claude。
   function missionPerAgent(cli, model) {
     const build = { cli, model };
     return {
       researcher: { cli: 'claude', model: 'opus' },
       planner: { cli: 'claude', model: 'opus' },
       reviewer: { cli: 'claude', model: 'opus' },
-      frontend: build, backend: build, test: build, fixer: build,
+      verifier: { cli: 'claude', model: 'sonnet' },
+      frontend: build, backend: build, database: build, test: build, fixer: build,
     };
   }
 
@@ -246,7 +282,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
   }
 
   async function startCouncil(taskBrief, councilModels) {
-    const cr = await api('POST', '/api/runs', { topic: taskBrief.slice(0, 70), taskBrief });
+    const cr = await api('POST', '/api/runs', { topic: taskBrief.slice(0, 70), taskBrief, tgChatId: replyChatId });
     const run = cr.json && cr.json.run;
     if (!run) { await say(`⚠️ 開 run 失敗：${(cr.json && cr.json.error) || cr.status}`); return; }
     const sr = await api('POST', `/api/runs/${run.id}/council/start`, councilModels ? { perAgentModels: councilModels } : {});
@@ -284,6 +320,14 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     else await say(`⚠️ 停止失敗：${(r.json && r.json.error) || r.status}`);
   }
 
+  async function doResume() {
+    const run = await currentRun();
+    if (!run) { await say('冇 run 可 resume。'); return; }
+    const r = await api('POST', `/api/runs/${run.id}/resume`, {}, 60000);
+    if ((r.json && r.json.ok) || r.status === 200) await say(`▶️ 已 resume「${tgline(run.topic)}」——由上次未完成 stage 用最新 code 重跑。`);
+    else await say(`⚠️ resume 失敗：${(r.json && r.json.error) || r.status}`);
+  }
+
   async function doExecute(cli, model) {
     const run = await currentRun();
     if (!run) { await say('冇 run 可落實。'); return; }
@@ -298,20 +342,20 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     pendingMission = null;
     const r = await api('POST', '/api/plans/run', {
       taskBrief, topic, deliveryMode: 'code', staged: true,
-      cli, model, perAgentModels: missionPerAgent(cli, model),
+      cli, model, perAgentModels: missionPerAgent(cli, model), tgChatId: replyChatId,
     });
     if (r.json && r.json.ok) await say(`⚙️ Mission 開波（寫 code=${model}）：*${tgline(topic)}*${r.json.queued ? `（排隊中 #${r.json.position}）` : '（research → build → review → fix 跑緊）'}`);
     else await say(`⚠️ Mission 失敗：${(r.json && r.json.error) || r.status}`);
   }
 
   // ── Overseer:plain text → 帶全局 digest 嘅總管 AI（Tier 1 唯讀 + Tier 2 confirm-gate 動作）──
-  async function handleOverseer(message) {
-    const mode = pickMode(message);
+  async function handleOverseer(message, forceMode) {
+    const mode = forceMode || pickMode(message);
     const deep = mode === 'deep';
     await say(deep ? '🧠 總管深入諗緊（會 review，慢啲）…' : '💬 諗緊…');
     overseerHistory.push({ role: 'user', content: message });
     const model = deep ? overseerModel : 'sonnet';
-    const r = await api('POST', '/api/overseer', { message, model, mode, history: overseerHistory.slice(-6) }, deep ? 160000 : 80000);
+    const r = await api('POST', '/api/overseer', { message, model, mode, history: overseerHistory.slice(-6) }, deep ? 620000 : 255000);
     if (!(r.json && r.json.ok)) { await say(`⚠️ 總管出錯：${(r.json && r.json.error) || r.status}`); return; }
     const reply = r.json.reply || '(冇內容)';
     overseerHistory.push({ role: 'assistant', content: reply });
@@ -342,6 +386,19 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     );
   }
 
+  // 收到圖（screenshot of error/bug/UI）→ 下載 → 餵總管 deep 模式（vision 睇圖）。caption 做問題。
+  async function handlePhoto(fileId, caption) {
+    await say('🖼 收到圖，下載 + 分析緊（deep）…');
+    const fs = require('fs'); const path = require('path');
+    const dir = path.join(__dirname, '..', 'data', 'tg-uploads');
+    try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {}
+    const dest = path.join(dir, `${Date.now()}_${String(fileId).slice(-8)}.jpg`);
+    const ok = await tg.downloadFile(fileId, dest);
+    if (!ok) { await say('⚠️ 下載圖片失敗。'); return; }
+    const msg = `${caption || '睇下呢張截圖有咩 error / bug，或者想點改 UI？'}\n\n[用戶附咗一張截圖，絕對路徑：${dest} —— 請用 Read tool 打開嚟睇，再答；若要交去 swarm 議會就出 ACTION: council:<題>]`;
+    await handleOverseer(msg, 'deep'); // 圖一定要 vision + 深入
+  }
+
   async function handleCommand(text) {
     const trimmed = text.trim();
 
@@ -352,6 +409,19 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       return;
     }
     if (awaitingRefineNote) awaitingRefineNote = false; // 打咗新指令 → 放棄等意見
+
+    // 任務一:push gate 等緊 branch 名、又唔係新指令 → 當作 retarget branch。
+    if (awaitingPushBranch && pendingPush && pendingPush.runTail && !trimmed.startsWith('/')) {
+      awaitingPushBranch = false;
+      const tail = pendingPush.runTail; pendingPush = null;
+      const run = await findRunByTail(tail);
+      if (!run) { await say('搵唔到對應嘅 run（gate 可能過咗期）。'); return; }
+      const r = await api('POST', `/api/runs/${run.id}/push/retarget`, { branch: trimmed });
+      if (r.json && r.json.ok) await say(`🌿 已轉 branch：*${tgline(trimmed)}*，gate 重發咗,確認 push。`);
+      else await say(`⚠️ 改 branch 失敗：${(r.json && r.json.error) || r.status}`);
+      return;
+    }
+    if (awaitingPushBranch) awaitingPushBranch = false; // 打咗新指令 → 放棄等 branch
 
     // 唔係指令（冇 /）→ 同總管 AI 傾偈。
     if (trimmed && !trimmed.startsWith('/')) { await handleOverseer(trimmed); return; }
@@ -426,6 +496,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     }
 
     if (c === '/stop') { if (!ownerOnly()) { await denyGuest(); return; } await doStop(); return; }
+    if (c === '/resume') { if (!ownerOnly()) { await denyGuest(); return; } await doResume(); return; }
 
     if (c === '/runs') {
       const r = await api('GET', '/api/runs');
@@ -518,7 +589,46 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       else await say(`⚠️ 再改失敗：${(r.json && r.json.error) || r.status}`);
       return;
     }
-    if (dataStr.startsWith('mm:')) { const p = dataStr.split(':'); await doMission(p[1], p[2]); }
+    if (dataStr.startsWith('mm:')) { const p = dataStr.split(':'); await doMission(p[1], p[2]); return; }
+
+    // 任務一:Push gate 確認（pg:<action>:<runTail>[:idx]）
+    if (dataStr.startsWith('pg:')) {
+      const parts = dataStr.split(':'); // pg : action : tail [: idx]
+      const action = parts[1], tail = parts[2];
+      if (!ownerOnly()) { await denyGuest(); return; }
+      if (action === 'branch') {
+        pendingPush = { runTail: tail }; awaitingPushBranch = true;
+        await say('✏️ 直接打你想 push 去邊個 branch（例 `feature/mvp-sprint` 或一個新 branch 名）：');
+        return;
+      }
+      if (action === 'project') {
+        const r = await api('GET', '/api/projects');
+        const ps = (r.json && r.json.projects) || [];
+        const kb = ps.slice(0, 12).map((pr, i) => {
+          const lab = typeof pr === 'string' ? pr : (pr.label || pr.path || '');
+          return [{ text: tgline(String(lab).split('/').pop() || lab), callback_data: `pg:proj:${tail}:${i}` }];
+        });
+        if (!kb.length) { await say('冇可揀 project。'); return; }
+        await say('📁 揀 project push 去：', { replyMarkup: { inline_keyboard: kb } });
+        return;
+      }
+      const run = await findRunByTail(tail);
+      if (!run) { await say('搵唔到對應嘅 run（gate 可能過咗期）。'); return; }
+      if (action === 'confirm') {
+        const r = await api('POST', `/api/runs/${run.id}/push`, { confirm: true });
+        if (r.json && r.json.ok) await say('⬆️ Push 緊…完成會 ping 你。');
+        else await say(`⚠️ Push 觸發失敗：${(r.json && r.json.error) || r.status}`);
+      } else if (action === 'cancel') {
+        await api('POST', `/api/runs/${run.id}/push/decline`, {});
+        await say('✋ 已取消 push。');
+      } else if (action === 'proj') {
+        const idx = Number(parts[3]);
+        const r = await api('POST', `/api/runs/${run.id}/push/retarget`, { projectIdx: idx });
+        if (r.json && r.json.ok) await say('📁 已轉 project，gate 重發咗,確認 push。');
+        else await say(`⚠️ 改 project 失敗：${(r.json && r.json.error) || r.status}`);
+      }
+      return;
+    }
   }
 
   // owner(chat.id 對得上) → 全權；username 喺 guest 白名單 → 唯讀；其餘忽略。
@@ -533,13 +643,24 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
   }
 
   async function dispatch(u) {
-    if (u.message && u.message.text) {
+    if (u.message && Array.isArray(u.message.photo) && u.message.photo.length) {
+      recordUser(u.message.from, u.message.chat);
+      const id = identify(u.message.from, u.message.chat);
+      if (!id.role) { log(`ignored photo from ${id.key || u.message.chat.id}`); return; }
+      replyChatId = id.chatId; currentRole = id.role; loadState(id.key);
+      try {
+        const ph = u.message.photo; // 最後一張 = 最大尺寸
+        await handlePhoto(ph[ph.length - 1].file_id, (u.message.caption || '').trim());
+      } finally { saveState(id.key); }
+    } else if (u.message && u.message.text) {
+      recordUser(u.message.from, u.message.chat);
       const id = identify(u.message.from, u.message.chat);
       if (!id.role) { log(`ignored message from ${id.key || u.message.chat.id}`); return; }
       replyChatId = id.chatId; currentRole = id.role; loadState(id.key);
       try { await handleCommand(u.message.text); } finally { saveState(id.key); }
     } else if (u.callback_query) {
       const cb = u.callback_query;
+      recordUser(cb.from, cb.message && cb.message.chat);
       const id = identify(cb.from, cb.message && cb.message.chat);
       if (!id.role) { await tg.answerCallbackQuery(cb.id, '未授權'); return; }
       replyChatId = id.chatId; currentRole = id.role; loadState(id.key);
@@ -547,15 +668,29 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     }
   }
 
+  // 處理同 polling 解耦：poll loop 淨係 fetch + enqueue（永不 await handling），
+  // 背景 pump 逐個 sequential 處理（per-user state 安全）。一個慢/卡嘅 turn 唔會再 freeze polling
+  // → bot 永遠 alive、收到晒 message（之前 await dispatch 令一個慢 overseer turn 凍死成個 bot）。
+  const updateQueue = [];
+  let pumping = false;
+  async function pumpUpdates() {
+    if (pumping) return;
+    pumping = true;
+    try {
+      while (updateQueue.length) {
+        const u = updateQueue.shift();
+        try { await dispatch(u); } catch (e) { log('dispatch error: ' + e.message); }
+      }
+    } finally { pumping = false; }
+  }
+
   async function loop() {
     while (running) {
       try {
         const res = await tg.getUpdates(offset, 25);
         if (res && res.ok && Array.isArray(res.result)) {
-          for (const u of res.result) {
-            offset = u.update_id + 1;
-            try { await dispatch(u); } catch (e) { log('dispatch error: ' + e.message); }
-          }
+          for (const u of res.result) { offset = u.update_id + 1; updateQueue.push(u); }
+          if (updateQueue.length) pumpUpdates(); // 唔 await：polling 繼續，handling 喺背景
         } else if (res && (res.error || res.ok === false)) {
           await sleep(3000);
         }
@@ -563,15 +698,24 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     }
   }
 
-  // Drain backlog first (skip stale pre-boot updates), then start the loop.
+  // Boot backlog：只跳過**真.stale**（>120s，e.g. 重啟前好耐嘅舊 /mission），
+  // 但**保留近期訊息**（deploy/restart 嗰幾秒間 user 發嘅）→ 唔好再食咗 partner 嘅 message。
   (async () => {
     try {
       const res = await tg.getUpdates(0, 0);
       if (res && res.ok && Array.isArray(res.result) && res.result.length) {
-        offset = res.result[res.result.length - 1].update_id + 1;
+        const nowSec = Math.floor(Date.now() / 1000);
+        let recent = 0;
+        for (const u of res.result) {
+          offset = u.update_id + 1;
+          const ts = (u.message && u.message.date)
+            || (u.callback_query && u.callback_query.message && u.callback_query.message.date) || 0;
+          if (ts && (nowSec - ts) <= 120) { updateQueue.push(u); recent += 1; }
+        }
+        if (recent) { log(`backlog: ${recent} 條近期訊息 re-queue（唔食咗佢）`); pumpUpdates(); }
       }
     } catch (_) { /* ignore */ }
-    log('inbound bot started (long-poll, backlog drained)');
+    log('inbound bot started (long-poll, gentle drain)');
     loop();
   })();
 

@@ -52,9 +52,11 @@ const tgNotifiedKeys = new Set(); // dedup「完成」通知（per run + milesto
 function tgEsc(s) {
   return String(s == null ? '' : s).replace(/[_*`\[\]]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 280);
 }
-function tgNotify(text, replyMarkup) {
+function tgNotify(text, replyMarkup, chatId) {
   try {
-    const opts = replyMarkup ? { replyMarkup } : {};
+    const opts = {};
+    if (replyMarkup) opts.replyMarkup = replyMarkup;
+    if (chatId) opts.chatId = chatId; // 指定 → send 返開 run 嗰個 user;冇 → 預設 owner
     Promise.resolve(telegram.sendMessage(text, opts)).catch((e) => console.warn('[telegram] send failed:', e.message));
   } catch (e) { console.warn('[telegram] notify threw:', e.message); }
 }
@@ -62,14 +64,16 @@ function notifyCouncilGate(run, p, reason) {
   const disputes = p.councilOpenDisputes == null ? 0 : p.councilOpenDisputes;
   tgNotify(
     `⏸ *御准閘 · 等你批准*\n\n🏛 ${tgEsc(run.topic)}\n${tgEsc(reason)}｜Plan v${p.councilPlanVersion}｜未解爭議 ${disputes}\n\n撳掣批准／再改,或開 [Swarm Dashboard](${SWARM_DASH_URL})`,
-    { inline_keyboard: [[{ text: '✅ 批准', callback_data: 'approve' }], [{ text: '✍️ 再改', callback_data: 'revise_hint' }]] }
+    { inline_keyboard: [[{ text: '✅ 批准', callback_data: 'approve' }], [{ text: '✍️ 再改', callback_data: 'revise_hint' }]] },
+    run && run.tgChatId
   );
 }
 function notifyCouncilReviewGate(run, reviews) {
   const disagreements = (reviews || []).filter((r) => !r.agree).length;
   tgNotify(
     `🔎 *三模獨立 review 完成*\n\n🏛 ${tgEsc(run.topic)}\n已收到 ${reviews.length} 份 review｜有異議 ${disagreements}\n\n撳「開始拗」進入 moderator 收斂,或開 [Swarm Dashboard](${SWARM_DASH_URL}) 睇全文。`,
-    { inline_keyboard: [[{ text: '🥊 開始拗', callback_data: 'debate' }]] }
+    { inline_keyboard: [[{ text: '🥊 開始拗', callback_data: 'debate' }]] },
+    run && run.tgChatId
   );
 }
 function notifyRunComplete(run, tag) {
@@ -84,11 +88,118 @@ function notifyRunComplete(run, tag) {
   const markup = tag === 'synthesis'
     ? { inline_keyboard: [[{ text: '▶ 落實 plan', callback_data: 'execute' }]] }
     : null;
-  tgNotify(`${title}\n\n🏛 ${tgEsc(run.topic)}\n${note}\n\n→ 開 [Swarm Dashboard](${SWARM_DASH_URL})`, markup);
+  tgNotify(`${title}\n\n🏛 ${tgEsc(run.topic)}\n${note}\n\n→ 開 [Swarm Dashboard](${SWARM_DASH_URL})`, markup, run && run.tgChatId);
+  if (tag === 'pipeline') autoReviewOnComplete(run);
+}
+// 完成自動覆核:TG 開嘅 mission build→review→fix→verify 完,總管讀產出 → send 簡短 feedback 返開 run 嗰位
+// （補返「等結果返嚟自己 review」嗰橛）。SWARM_AUTO_REVIEW=0 可關。
+function autoReviewOnComplete(run) {
+  if (process.env.SWARM_AUTO_REVIEW === '0') return;
+  if (!run || !run.tgChatId) return; // 只自動覆核 Telegram 開嘅 run
+  const arts = (run.artifacts || []).slice(-8)
+    .map((a) => `### ${a.title || a.type}\n${truncate(String(a.content || ''), 1200)}`).join('\n\n');
+  const prompt = [
+    `你係用戶嘅 Swarm 總管。一個喺 project ${run.projectPath || ''} 跑嘅 mission「${run.topic}」啱啱 build→review→fix→verify 完成。`,
+    '下面係佢嘅產出 / log。用繁體中文 / 廣東話俾**簡短** feedback（最多 6-8 句）：',
+    '做咗咩、質素好唔好、有冇🔴紅旗（verify FAIL/BLOCKED、reviewer 未解 FIX_NEEDED、未跑真 e2e、改錯範圍）、建議下一步。唔好覆述全部 log。',
+    '', '=== 產出 ===', arts || '(冇 artifact)',
+  ].join('\n');
+  spawnOneShot(prompt, { cli: 'claude', model: 'opus' }, 'swarm-autoreview', 420000)
+    .then((txt) => tgNotify(`🔎 *自動覆核* · ${tgEsc(run.topic)}\n\n${(txt || '').trim()}`, null, run.tgChatId))
+    .catch((e) => console.warn('[autoreview]', e.message));
 }
 function notifyAgentFailed(run, agent, preset) {
   const name = (preset && preset.name) || (agent && agent.name) || 'Agent';
-  tgNotify(`⚠️ *Agent 失敗* · ${tgEsc(run && run.topic)}\n\n${tgEsc(name)}：${tgEsc(agent && agent.summary)}\n\n→ 開 [Swarm Dashboard](${SWARM_DASH_URL}) 睇 log`);
+  tgNotify(`⚠️ *Agent 失敗* · ${tgEsc(run && run.topic)}\n\n${tgEsc(name)}：${tgEsc(agent && agent.summary)}\n\n→ 開 [Swarm Dashboard](${SWARM_DASH_URL}) 睇 log`, null, run && run.tgChatId);
+}
+
+// ─── 任務一:Push gate（code pipeline 完 → Telegram/UI 確認 → git push origin）───
+// SWARM_PUSH_GATE=0 緊急回退（回復「只 merge 去 local、唔 push」舊行為）。
+const SWARM_PUSH_GATE = process.env.SWARM_PUSH_GATE !== '0';
+const PUSH_DEFAULT_BRANCH = process.env.SWARM_PUSH_DEFAULT_BRANCH || 'feature/mvp-sprint';
+function shouldOfferPush(run) {
+  if (!SWARM_PUSH_GATE) return false;
+  const p = run && run.pipeline;
+  if (!p || p.mode !== 'code') return false;                                   // 只對 code pipeline（council/execute + mission 都係 code mode）
+  if (run.pendingPush && ['awaiting', 'pushing'].includes(run.pendingPush.status)) return false; // 已有 gate 行緊
+  try {
+    const repo = safeProjectPath(run.projectPath || DEFAULT_PROJECT_ROOT);
+    return fs.existsSync(path.join(repo, '.git'));                             // 要係 git repo
+  } catch (_) { return false; }
+}
+function enterPushGate(run) {
+  let repo;
+  try { repo = safeProjectPath(run.projectPath || DEFAULT_PROJECT_ROOT); } catch (_) { return; }
+  run.pendingPush = {
+    status: 'awaiting',
+    project: repo,
+    branch: PUSH_DEFAULT_BRANCH,
+    defaultBranch: PUSH_DEFAULT_BRANCH,
+    runIdTail: String(run.id).slice(-8),
+    createdAt: new Date().toISOString(),
+    decidedAt: null,
+    result: null,
+  };
+  addArtifact(run, { type: 'push-gate', title: '⬆️ 待確認 Push', content: `Project: ${path.basename(repo)}\nBranch: ${PUSH_DEFAULT_BRANCH}\n\n喺 Telegram 或 dashboard 確認先 push 上 GitHub。` });
+  io.emit('push-gate', { runId: run.id, pendingPush: run.pendingPush });
+  io.emit('run-updated', publicRun(run));
+  notifyPushGate(run);
+  scheduleSave();
+}
+function doGitPush(run) {
+  const pp = run.pendingPush;
+  if (!pp || !['awaiting', 'failed'].includes(pp.status)) return;             // 容許失敗後「再試」
+  pp.status = 'pushing';
+  io.emit('push-gate', { runId: run.id, pendingPush: pp });
+  io.emit('run-updated', publicRun(run));
+  let repo;
+  try { repo = safeProjectPath(pp.project || run.projectPath); }
+  catch (e) {
+    pp.status = 'failed'; pp.result = { ok: false, err: e.message };
+    notifyPushResult(run, pp.result); io.emit('run-updated', publicRun(run)); scheduleSave(); return;
+  }
+  setImmediate(() => {                                                        // 背景跑,唔 block REST
+    const r = worktreeMgr.pushBranch({ repo, targetBranch: pp.branch });
+    pp.status = r.ok ? 'done' : 'failed';
+    pp.decidedAt = new Date().toISOString();
+    pp.result = r;
+    addArtifact(run, {
+      type: r.ok ? 'note' : 'execution-error',
+      title: r.ok ? `✅ Push 完成 → ${r.remoteBranch}` : `⚠️ Push 失敗 → ${pp.branch}`,
+      content: r.ok
+        ? `${path.basename(repo)} @ ${(r.pushedSha || '').slice(0, 7)} → origin/${r.remoteBranch}`
+        : (r.err || 'unknown error'),
+    });
+    notifyPushResult(run, r);
+    io.emit('push-gate', { runId: run.id, pendingPush: pp });
+    io.emit('run-updated', publicRun(run));
+    scheduleSave();
+  });
+}
+function notifyPushGate(run) {
+  const pp = run.pendingPush; if (!pp) return;
+  const tail = pp.runIdTail;
+  tgNotify(
+    `⬆️ *準備 Push 上 GitHub*\n\n🏛 ${tgEsc(run.topic)}\n📁 Project: ${tgEsc(path.basename(pp.project))}\n🌿 Branch: ${tgEsc(pp.branch)}\n\n確認 push?或改 project / branch。`,
+    { inline_keyboard: [
+      [{ text: '✅ Confirm Push', callback_data: `pg:confirm:${tail}` }],
+      [{ text: '✏️ 改 Branch', callback_data: `pg:branch:${tail}` }, { text: '📁 改 Project', callback_data: `pg:project:${tail}` }],
+      [{ text: '✋ 唔 push', callback_data: `pg:cancel:${tail}` }],
+    ] },
+    run && run.tgChatId
+  );
+}
+function notifyPushResult(run, r) {
+  const tail = run.pendingPush && run.pendingPush.runIdTail;
+  if (r && r.ok) {
+    tgNotify(`✅ *Push 完成*\n\n🏛 ${tgEsc(run.topic)}\n🌿 ${tgEsc(r.remoteBranch)} · ${tgEsc((r.pushedSha || '').slice(0, 7))}\nGitHub 已更新。`, null, run && run.tgChatId);
+  } else {
+    tgNotify(
+      `⚠️ *Push 失敗*\n\n🏛 ${tgEsc(run.topic)}\n🌿 ${tgEsc(run.pendingPush && run.pendingPush.branch)}\n${tgEsc((r && r.err) || '')}${r && r.conflict ? '\n（遠端行先咗 non-fast-forward;改個新 branch push 或手動處理）' : ''}`,
+      { inline_keyboard: [[{ text: '🔁 再試', callback_data: `pg:confirm:${tail}` }, { text: '✏️ 改 Branch', callback_data: `pg:branch:${tail}` }]] },
+      run && run.tgChatId
+    );
+  }
 }
 // ─── Swarm Council (三模議會 · Phase 2-4): 三模共識收斂 + 人手御准閘 + 人話講解 ───
 // 三個你揀嘅 model 讀真 project + plan,互相博弈到零爭議,moderator 改寫 plan.vN;
@@ -831,7 +942,27 @@ function layerCounts(agents) {
   return Object.fromEntries(LAYERS.map((layer) => [layer.id, agents.filter((agent) => agent.layer === layer.id).length]));
 }
 
-function createRun({ topic, personas, chatContext, sessionId, projectPath, source, template, background, taskBrief, seed } = {}) {
+// Telegram user registry（bot 寫 data/tg-users.json：chatId → {username,name}）。
+// console（dashboard）開議會時揀 username → resolve 返 chatId → run.tgChatId → 通知 route 返佢。
+function readTgUsers() {
+  try { return JSON.parse(fs.readFileSync(path.join(DATA_DIR, 'tg-users.json'), 'utf8')) || {}; }
+  catch (_) { return {}; }
+}
+function resolveTgChat(key) {
+  if (!key) return null;
+  const k = String(key).trim().toLowerCase().replace(/^@/, '');
+  if (!k) return null;
+  if (/^\d+$/.test(k)) return k; // 已經係 chatId
+  const reg = readTgUsers();
+  for (const id of Object.keys(reg)) {
+    const u = reg[id] || {};
+    if ((u.username && String(u.username).toLowerCase() === k) || (u.name && String(u.name).toLowerCase() === k)) return id;
+  }
+  return null;
+}
+
+function createRun({ topic, personas, chatContext, sessionId, projectPath, source, template, background, taskBrief, seed, tgChatId, tgUser } = {}) {
+  if (!tgChatId && tgUser) tgChatId = resolveTgChat(tgUser); // console 開:username → chatId
   const now = new Date().toISOString();
   const agents = Array.isArray(personas) && personas.length
     ? personas.map((persona, index) => makeAgent(String(persona), 'stakeholder', 'Persona', 'stakeholder reasoning', index + 1))
@@ -849,6 +980,7 @@ function createRun({ topic, personas, chatContext, sessionId, projectPath, sourc
     background: background || '',
     backgroundSource: background ? 'manual' : '',
     taskBrief: taskBrief || '',
+    tgChatId: tgChatId || null, // 邊個 Telegram chat 開呢個 run → 通知 send 返佢度（唔係硬 send owner）
     chatThread: [],
     chatModel: null,
     chatProjectPath: null,
@@ -1072,8 +1204,15 @@ function buildAutoBackground(run) {
 }
 
 function buildAgentCommand(cliName, model) {
-  const cli = String(cliName || DEFAULT_AGENT_CLI).trim().toLowerCase();
   const m = safeModelFlag(model);
+  let cli = String(cliName || '').trim().toLowerCase();
+  if (!cli) {
+    // 冇明確 cli → 由 model 名推斷 provider,避免 claude+gpt-5.5 之類 cli/model 唔夾而炸
+    // （verifier 等 fallback agent 攞到 build model 但 cli 跌返 claude default 嘅 bug）。
+    if (/^gpt[-.]|^o[34]\b|codex/i.test(m)) cli = 'codex';
+    else if (/^glm/i.test(m)) cli = 'glm';
+    else cli = String(DEFAULT_AGENT_CLI || 'claude').trim().toLowerCase();
+  }
   if (cli === 'codex') {
     const mflag = m ? ` -m "${m}"` : '';
     return {
@@ -1384,6 +1523,27 @@ function readLatestPlan(run) {
   return { v: 0, md: run.taskBrief || run.background || '' };
 }
 
+// 任務三:抽最新一 round 三模 review 重點 + 未解爭議 → 注入 code agent prompt
+// （斷層:落 code 嘅 agent 本來完全唔知 reviewer concern,fix iteration 冇目標）。
+function collectReviewFindings(run) {
+  const dir = COUNCIL_DIR(run.id);
+  let files = [];
+  try { files = fs.readdirSync(dir); } catch (_) { return ''; }
+  const reviewRe = /^round-(\d+)-reviewer-(\d+)\.md$/;
+  const reviews = files.map((f) => { const m = f.match(reviewRe); return m ? { f, round: Number(m[1]), rev: Number(m[2]) } : null; }).filter(Boolean);
+  if (!reviews.length) return '';
+  const maxRound = Math.max(...reviews.map((r) => r.round));
+  const latest = reviews.filter((r) => r.round === maxRound).sort((a, b) => a.rev - b.rev);
+  const parts = latest.map((r) => {
+    let txt = ''; try { txt = fs.readFileSync(path.join(dir, r.f), 'utf8'); } catch (_) {}
+    return `### 評審 ${r.rev}\n${truncate(txt, 800)}`;
+  });
+  let out = `\n\n---\n## ⚠️ 三模 review 重點（落 code 時必須兼顧 reviewer 嘅 concern）\n\n${parts.join('\n\n')}`;
+  const disputes = (run.pipeline && run.pipeline.councilDisputes) || '';
+  if (disputes && disputes.trim() && !/^\(?(none|無)\)?$/i.test(disputes.trim())) out += `\n\n## 仍未完全解決嘅爭議\n${truncate(disputes, 600)}`;
+  return out;
+}
+
 function writeCouncilPlan(run, version, md) {
   const dir = COUNCIL_DIR(run.id);
   try {
@@ -1549,7 +1709,7 @@ function advanceCouncil(run, p, stage, session) {
 async function runCouncilResearch(run, p, angles, query) {
   addArtifact(run, { type: 'note', title: '🔍 議會上網 research 緊…', content: `查詢：${query}\n角度：\n${angles.map((a) => `- ${a}`).join('\n')}` });
   io.emit('run-updated', publicRun(run));
-  tgNotify(`🔍 *議會上網 research 緊*\n${tgEsc(run.topic)}\n查：${tgEsc(query)}\n角度：${tgEsc(angles.join(' / '))}`);
+  tgNotify(`🔍 *議會上網 research 緊*\n${tgEsc(run.topic)}\n查：${tgEsc(query)}\n角度：${tgEsc(angles.join(' / '))}`, null, run && run.tgChatId);
   let research;
   try {
     research = await runResearch(query, angles, { runId: String(run.id), budget: PPLX_BUDGET, model: PPLX_MODEL, logDir: COUNCIL_DIR(run.id) });
@@ -1563,10 +1723,10 @@ async function runCouncilResearch(run, p, angles, query) {
       title: `🔍 議會 research 完成（${research.used}/${research.budget} · ~$${(research.estCost || 0).toFixed(3)}）`,
       content: `**查詢**：${query}\n**角度**：${angles.join(' / ')}\n\n${research.text}\n\n${(research.citations || []).slice(0, 8).map((c, i) => `[${i + 1}] ${c}`).join('\n')}`,
     });
-    tgNotify(`✅ *research 完成*（${research.used}/${research.budget} · ~$${(research.estCost || 0).toFixed(3)}）\n${tgEsc(run.topic)}\n🔍 查咗：${tgEsc(query)}\n📋 ${tgEsc(tldr.slice(0, 200))}`);
+    tgNotify(`✅ *research 完成*（${research.used}/${research.budget} · ~$${(research.estCost || 0).toFixed(3)}）\n${tgEsc(run.topic)}\n🔍 查咗：${tgEsc(query)}\n📋 ${tgEsc(tldr.slice(0, 200))}`, null, run && run.tgChatId);
   } else {
     addArtifact(run, { type: 'note', title: '⚠ 議會 research 未成事', content: research.capped ? `已用滿 ${research.used}/${research.budget} 次` : `失敗：${research.error || ''}` });
-    tgNotify(`⚠ research ${research.capped ? '已達上限' : '失敗'}：${tgEsc(research.error || '')}\n照樣開拗。`);
+    tgNotify(`⚠ research ${research.capped ? '已達上限' : '失敗'}：${tgEsc(research.error || '')}\n照樣開拗。`, null, run && run.tgChatId);
   }
   p.stopped = false;
   io.emit('run-updated', publicRun(run));
@@ -2201,6 +2361,7 @@ function advancePipeline(run) {
     run.status = run.synthesis ? 'complete' : 'active';
     addArtifact(run, { type: 'note', title: 'Pipeline 完成 ✓', content: '所有 stage（研究 → 建造 → 覆核）已順序完成。' });
     notifyRunComplete(run, 'pipeline');
+    if (shouldOfferPush(run)) enterPushGate(run);   // 任務一:code pipeline 完 → 待確認 push（已 merge 去 local,等人確認先 push 上 GitHub）
     io.emit('run-updated', publicRun(run));
     scheduleSave();
     pumpRunQueue();
@@ -2346,6 +2507,11 @@ const OVERSEER_SYSTEM = [
   'ACTION: revise: <一句指示>  # 叫議會就意見再收斂一 round',
   'ACTION: council: <題目>     # 開一個新三模議會',
   'ACTION: mission: <plan>     # 開一個新 mission 落 code',
+  '',
+  '判斷執行意圖（重要）:用戶講「根據呢份 report / plan 去執行」「落實佢」「照呢個 plan 改 code / 開工做」等明確叫你落手實作 →',
+  '  · 當前 run 已有議會終稿(planv≥1) → 出 `ACTION: execute`(落實終稿,會問你揀 build model)。',
+  '  · 用戶俾一段新 plan 文字叫你做 → 出 `ACTION: mission: <plan>`。',
+  '用戶仲喺度討論 / 未拍板 / 只係問意見 → 唔好出 ACTION。',
   '純粹問狀態 / 總結 / 意見,唔好輸出 ACTION。',
 ].join('\n');
 
@@ -2386,7 +2552,7 @@ app.post('/api/overseer', async (req, res) => {
     : '\n\n（快答模式:簡短、直接俾 idea / 意見即可,唔好為咗周全而長篇大論,亦唔使去 review code,除非用戶明確叫你深入。）';
   const prompt = `${OVERSEER_SYSTEM}${modeNote}${skills}\n\n=== 而家 Swarm 實況 ===\n當前 run: ${d.currentRunId || '(冇)'}\nProjects: ${d.projects || '-'}\nRuns(新→舊):\n${d.runs || '(冇)'}\n\n${hist ? `=== 之前對話 ===\n${hist}\n\n` : ''}=== 用戶而家講 ===\n${message}\n\n答用戶:`;
   try {
-    const raw = await spawnOneShot(prompt, picked, 'swarm-overseer', deep ? 150000 : 70000);
+    const raw = await spawnOneShot(prompt, picked, 'swarm-overseer', deep ? 600000 : 240000);
     const parsed = parseOverseerReply(raw);
     res.json({ ok: true, reply: parsed.reply, action: parsed.action, model: picked.model });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -2399,6 +2565,12 @@ app.get('/api/runs/:id', (req, res) => {
 
 app.get('/api/projects', (req, res) => {
   res.json({ defaultProjectRoot: DEFAULT_PROJECT_ROOT, projects: knownProjects() });
+});
+
+// 已知 Telegram users（bot registry）——dashboard「通知邊個」selector 用。
+app.get('/api/tg-users', (req, res) => {
+  const reg = readTgUsers();
+  res.json({ users: Object.values(reg).map((u) => ({ chatId: u.chatId, username: u.username, name: u.name })) });
 });
 
 // Task-file picker: scan MISSION-*.md in the project root + a dedicated tasks folder.
@@ -2601,6 +2773,7 @@ app.post('/api/plans/run', (req, res) => {
       projectPath: body.projectPath,
       source: body.source || 'dropzone',
       template: body.template || 'cloudcli',
+      tgChatId: body.tgChatId,
       seed: false, // drop-zone plans start clean; agents come from the wave/pipeline we spawn
     });
     const deliveryMode = body.deliveryMode || body.mode || 'code';
@@ -2810,7 +2983,7 @@ app.post('/api/runs/:id/council/execute', (req, res) => {
     reviewer: { cli: 'claude', model: 'opus' },
     verifier: { cli: 'claude', model: 'sonnet' },
   };
-  const taskBrief = `# 落實以下已通過三模議會審議嘅 plan（v${plan.v}）\n\n按呢個 plan 直接喺 project 落手實作,完成後跑驗證 / 測試。唔好重新爭論 plan 本身,佢已經三模收斂 + 人手批准。\n\n${plan.md}`;
+  const taskBrief = `# 落實以下已通過三模議會審議嘅 plan（v${plan.v}）\n\n按呢個 plan 直接喺 project 落手實作,完成後跑驗證 / 測試。唔好重新爭論 plan 本身,佢已經三模收斂 + 人手批准。\n\n${plan.md}${collectReviewFindings(run)}`;
   try {
     const pipeline = startPipeline(run, {
       deliveryMode: 'code',
@@ -2829,6 +3002,97 @@ app.post('/api/runs/:id/council/execute', (req, res) => {
     io.emit('run-updated', publicRun(run));
     res.json({ ok: true, executingVersion: plan.v, pipeline });
   } catch (e) { res.status(400).json({ error: e.message }); }
+});
+
+// ─── 任務三:暴露 council review 報告（前端睇 + code agent 讀）───
+app.get('/api/runs/:id/council/reviews', (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  const dir = COUNCIL_DIR(run.id);
+  const excerpt = (fn) => { try { return truncate(fs.readFileSync(path.join(dir, fn), 'utf8'), 2000); } catch (_) { return ''; } };
+  let files = [];
+  try { files = fs.readdirSync(dir); } catch (_) { return res.json({ ok: true, rounds: [], research: [], plan: null }); }
+  const reviewRe = /^round-(\d+)-reviewer-(\d+)\.md$/;
+  const rounds = {};
+  files.filter((f) => reviewRe.test(f)).forEach((f) => {
+    const m = f.match(reviewRe); const rd = Number(m[1]);
+    (rounds[rd] = rounds[rd] || []).push({ reviewer: Number(m[2]), file: f, excerpt: excerpt(f) });
+  });
+  const research = files.filter((f) => /^research-\d+\.md$/.test(f)).map((f) => ({ file: f, excerpt: excerpt(f) }));
+  const plan = readLatestPlan(run);
+  res.json({
+    ok: true,
+    plan: { v: plan.v, md: plan.md },
+    rounds: Object.keys(rounds).sort((a, b) => a - b).map((r) => ({ round: Number(r), reviewers: rounds[r].sort((a, b) => a.reviewer - b.reviewer) })),
+    research,
+    disputes: (run.pipeline && run.pipeline.councilDisputes) || '',
+  });
+});
+app.get('/api/runs/:id/council/reviews/:file', (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  const file = String(req.params.file || '');
+  if (!/^(round-\d+-reviewer-\d+|research-\d+|plan\.v\d+|brief)\.md$/.test(file)) {
+    return res.status(400).json({ error: 'bad file name' });    // 防 path traversal:只准白名單 pattern
+  }
+  const dir = COUNCIL_DIR(run.id);
+  const full = path.join(dir, file);
+  if (!full.startsWith(dir + path.sep)) return res.status(400).json({ error: 'path escape' });
+  try { res.type('text/plain; charset=utf-8').send(fs.readFileSync(full, 'utf8')); }
+  catch (_) { res.status(404).json({ error: 'not found' }); }
+});
+
+// ─── 任務一:Push gate endpoints（Telegram / dashboard 共用同一 run.pendingPush）───
+app.post('/api/runs/:id/push', (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  const pp = run.pendingPush;
+  if (!pp || !['awaiting', 'failed'].includes(pp.status)) {
+    return res.status(400).json({ error: '冇待確認嘅 push（pendingPush 唔喺 awaiting/failed）' });
+  }
+  doGitPush(run);
+  res.json({ ok: true, status: run.pendingPush.status });
+});
+app.post('/api/runs/:id/push/retarget', (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  const pp = run.pendingPush;
+  if (!pp) return res.status(400).json({ error: '冇 pendingPush' });
+  const body = req.body || {};
+  if (body.branch !== undefined) {
+    const b = String(body.branch || '').trim();
+    if (!b || !/^[A-Za-z0-9._/-]+$/.test(b) || b.includes('..') || b.startsWith('-')) {
+      return res.status(400).json({ error: 'branch 名唔合法' });
+    }
+    pp.branch = b;
+  }
+  if (body.projectIdx !== undefined) {
+    const list = knownProjects();
+    const idx = Number(body.projectIdx);
+    if (!list[idx]) return res.status(400).json({ error: 'project index 無效' });
+    pp.project = list[idx].path;
+  } else if (body.project !== undefined) {
+    try { pp.project = safeProjectPath(body.project); } catch (e) { return res.status(400).json({ error: e.message }); }
+  }
+  pp.status = 'awaiting';
+  io.emit('push-gate', { runId: run.id, pendingPush: pp });
+  io.emit('run-updated', publicRun(run));
+  notifyPushGate(run);            // 重發帶最新 project/branch 嘅 gate
+  scheduleSave();
+  res.json({ ok: true, pendingPush: pp });
+});
+app.post('/api/runs/:id/push/decline', (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  const pp = run.pendingPush;
+  if (!pp) return res.status(400).json({ error: '冇 pendingPush' });
+  pp.status = 'declined';
+  pp.decidedAt = new Date().toISOString();
+  addArtifact(run, { type: 'note', title: '✋ 已取消 push', content: `${path.basename(pp.project || '')} / ${pp.branch} 唔 push。` });
+  io.emit('push-gate', { runId: run.id, pendingPush: pp });
+  io.emit('run-updated', publicRun(run));
+  scheduleSave();
+  res.json({ ok: true });
 });
 
 // ─── 定向幕僚 chat endpoints (Phase 1) ───
@@ -2899,6 +3163,9 @@ app.post('/api/runs/:id/chat/finalize', (req, res) => {
 app.post('/api/runs/:id/council/start', (req, res) => {
   const run = findRunOr404(req.params.id, res);
   if (!run) return;
+  // console 開議會時揀咗「通知邊個」→ 綁定成個 flow 嘅通知去嗰個 user（唔再硬跌 owner）。
+  const tgUser0 = (req.body || {}).tgUser;
+  if (tgUser0) { const cid = resolveTgChat(tgUser0); if (cid) { run.tgChatId = cid; run.tgUser = tgUser0; } }
   const brief = run.missionBrief;
   // taskBrief 優先序:已定稿 brief > run.taskBrief > 直接用 chat 對話(免一定要先定稿)
   let taskBrief = run.taskBrief || (brief && brief.draftPlanMd) || '';
