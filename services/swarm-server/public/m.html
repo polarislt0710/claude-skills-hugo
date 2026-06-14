@@ -138,6 +138,9 @@ html[data-theme="forest"] body{background:linear-gradient(180deg,#bfe0ee,#cfe6e0
 .row-btns{display:flex;gap:9px;margin-top:13px}
 .row-btns button{flex:1;padding:12px;border-radius:12px;font-size:14px;font-weight:700;font-family:var(--sans);border:1px solid var(--line-2);background:var(--panel-2);color:var(--text)}
 .row-btns button.go{background:linear-gradient(180deg,var(--gold),color-mix(in srgb,var(--gold) 72%,#000));color:#241a07;border:0}
+.big-choice{display:flex;flex-direction:column;gap:3px;width:100%;text-align:left;padding:15px;border-radius:14px;border:1px solid var(--line-2);background:var(--panel-2);color:var(--text);margin-bottom:10px;font-family:var(--sans)}
+.big-choice b{font-size:15px;font-weight:700}.big-choice span{font-size:12px;color:var(--muted);line-height:1.4}
+.big-choice:active{filter:brightness(1.12)}
 .mchips{display:flex;flex-wrap:wrap;gap:7px;margin-top:6px}
 .mchip{padding:7px 12px;border-radius:var(--m-r-chip);border:1px solid var(--line);background:var(--panel);color:var(--muted);font-size:12.5px}
 .mchip.on{color:var(--text);border-color:var(--blue);background:color-mix(in srgb,var(--blue) 14%,transparent)}
@@ -322,7 +325,7 @@ function renderPlans(){
   });
   v.innerHTML=html;
   const s=$('#msearch');if(s)s.oninput=e=>{state.search=e.target.value;clearTimeout(s._t);s._t=setTimeout(scheduleRender,250);};
-  if(!$('#fab')){const f=el('button','fab','<span class="fi">▶</span>Run');f.id='fab';f.onclick=openQuickRun;document.body.appendChild(f);}
+  if(!$('#fab')){const f=el('button','fab','<span class="fi">▶</span>Run');f.id='fab';f.onclick=openRunMenu;document.body.appendChild(f);}
   $('#fab').style.display=state.tab==='plans'?'':'none';
 }
 function cycleFilter(){const o=['全部','running','active'];const i=o.indexOf(state.listFilter||'全部');state.listFilter=o[(i+1)%o.length];if(state.listFilter==='全部')state.listFilter=null;scheduleRender();}
@@ -483,6 +486,45 @@ function openQuickRun(){const proj=localStorage.getItem('m-proj')||(state.projec
    <div class="row-btns"><button onclick="closeSheet()">取消</button><button class="go" onclick="doQuickRun()">🔀 分波開工</button></div>
    <p style="font-size:11px;color:var(--faint);margin-top:8px">→ ${esc((proj||'').split('/').pop())} · research→build→review→fix</p>`);}
 async function doQuickRun(){const task=$('#qrTask').value.trim();if(!task){toast('寫低任務先',true);return;}const proj=localStorage.getItem('m-proj')||(state.projects[0]&&state.projects[0].path)||undefined;const mv=(localStorage.getItem('m-model')||'codex|gpt-5.5').split('|');const tg=localStorage.getItem('swarm-tguser')||undefined;closeSheet();try{const r=await api('/api/plans/run',{method:'POST',body:JSON.stringify({staged:true,taskBrief:task,projectPath:proj,deliveryMode:'code',cli:mv[0],model:mv[1],tgUser:tg})});toast('🔀 開工!');if(r.run){state.focusRunId=r.run.id;state.byId[r.run.id]=r.run;state.tab='mission';}await loadAll();}catch(e){toast(e.message,true);}}
+
+/* ───────── 開新嘢:直接 code / 傾諗法+開三模議會（同 Telegram /council 一致）───────── */
+const COUNCIL_STRENGTH={standard:null,fable:{council_a:{cli:'claude',model:'claude-fable-5'},council_b:{cli:'codex',model:'gpt-5.5'},council_c:{cli:'glm',model:'glm-5.1'},moderator:{cli:'claude',model:'opus'},explainer:{cli:'claude',model:'sonnet'}}};
+function openRunMenu(){openSheet('開新嘢',`
+  <button class="big-choice" onclick="openQuickRun()"><b>🔀 直接落 code</b><span>你已經知要做咩 → research → build → review → fix</span></button>
+  <button class="big-choice" onclick="openCouncilDraft()"><b>💡 傾諗法 + 開三模議會</b><span>諗法未完善 → Opus 幫你完善 → 過目 → 交三模議會評審收斂</span></button>`);}
+function openCouncilDraft(){openSheet('💡 新議題 → 三模議會',`
+  <textarea id="cdRaw" placeholder="寫低你個諗法 / 想議會評審乜（粗略都得,Opus 會幫你完善）…"></textarea>
+  <div class="row-btns"><button onclick="closeSheet()">取消</button><button class="go" onclick="refineCouncil()">✨ Opus 完善</button></div>
+  <p style="font-size:11px;color:var(--faint);margin-top:9px">想跳過完善 → <a onclick="startCouncilFromDraft(($('#cdRaw')||{}).value,null)" style="color:var(--blue);text-decoration:underline">用原文直接交議會</a></p>`);}
+async function refineCouncil(){const raw=(($('#cdRaw')||{}).value||'').trim();if(!raw){toast('寫低你個諗法先',true);return;}
+  state.councilDraft={raw,refined:null};openSheet('✨ 完善緊…',`<div class="thinking">⏱ Opus 完善緊（約 15-40s）…</div>`);
+  try{const r=await api('/api/refine',{method:'POST',body:JSON.stringify({text:raw,kind:'council'})});
+    if(r.ok&&r.refined){state.councilDraft.refined=r.refined;showRefinePreview();}else{toast('完善失敗,用原文揀陣容',true);chooseCouncilStrength(raw);}}
+  catch(e){toast('完善失敗:'+e.message,true);chooseCouncilStrength(raw);}}
+function showRefinePreview(){const d=state.councilDraft||{};openSheet('📝 Opus 完善版（過目）',`
+  <div class="logbox" style="max-height:44vh">${mdLite(d.refined||'')}</div>
+  <div class="row-btns"><button class="go" onclick="chooseCouncilStrength(state.councilDraft.refined)">✅ 用呢個開會</button><button onclick="reviseCouncilPrompt()">✍️ 再俾意見</button></div>
+  <div class="row-btns" style="margin-top:8px"><button onclick="chooseCouncilStrength(state.councilDraft.raw)">↩️ 用我原文</button><button onclick="closeSheet()">✖ 取消</button></div>`);}
+function reviseCouncilPrompt(){openSheet('✍️ 再俾意見完善',`
+  <p style="font-size:12px;color:var(--muted)">打你想改 / 補充邊幾個位,Opus 按意見再完善（可一路重複）：</p>
+  <textarea id="cdNote" placeholder="例:聚焦 navigation、加 desktop 回歸風險、唔好擴大範圍…"></textarea>
+  <div class="row-btns"><button onclick="showRefinePreview()">↩ 返去</button><button class="go" onclick="doReviseCouncil()">✨ 再完善</button></div>`);}
+async function doReviseCouncil(){const note=(($('#cdNote')||{}).value||'').trim();if(!note){toast('打你嘅意見先',true);return;}
+  const d=state.councilDraft;openSheet('✨ 再完善緊…',`<div class="thinking">⏱ Opus 按你意見再完善…</div>`);
+  try{const r=await api('/api/refine',{method:'POST',body:JSON.stringify({base:d.refined,note,kind:'council'})});
+    if(r.ok&&r.refined)d.refined=r.refined;else toast('再完善失敗,保留上一版',true);showRefinePreview();}
+  catch(e){toast(e.message,true);showRefinePreview();}}
+function chooseCouncilStrength(taskBrief){if(!state.councilDraft)state.councilDraft={};state.councilDraft.brief=taskBrief;openSheet('🗳 揀議會陣容',`
+  <p style="font-size:12px;color:var(--muted)">seat A = 仲裁腦（收斂 plan 嗰個）</p>
+  <button class="big-choice" onclick="startCouncilFromDraft(state.councilDraft.brief,'standard')"><b>⚖️ 標準</b><span>Opus · Codex gpt-5.5 · GLM 5.1</span></button>
+  <button class="big-choice" onclick="startCouncilFromDraft(state.councilDraft.brief,'fable')"><b>👑 Fable 領銜</b><span>Fable 5 · Codex · GLM（seat A 升旗艦）</span></button>`);}
+async function startCouncilFromDraft(taskBrief,strength){taskBrief=(taskBrief||'').trim();if(!taskBrief){toast('冇內容開會',true);return;}
+  const tg=localStorage.getItem('swarm-tguser')||undefined;const models=strength?COUNCIL_STRENGTH[strength]:null;closeSheet();
+  try{const cr=await api('/api/runs',{method:'POST',body:JSON.stringify({topic:taskBrief.slice(0,70),taskBrief,tgUser:tg})});
+    const run=cr.run;if(!run){toast('開 run 失敗',true);return;}
+    await api('/api/runs/'+run.id+'/council/start',{method:'POST',body:JSON.stringify(Object.assign({tgUser:tg},models?{perAgentModels:models}:{}))});
+    toast('🗳 三模議會開波!');state.focusRunId=run.id;state.byId[run.id]=run;state.tab='mission';state.councilDraft=null;await loadAll();}
+  catch(e){toast('開議會失敗:'+e.message,true);}}
 
 /* ───────── sheet ───────── */
 function openSheet(title,html){$('#sheet').innerHTML='<h3>'+esc(title)+'</h3>'+html;$('#sheet').classList.add('show');$('#scrim').classList.add('show');}
