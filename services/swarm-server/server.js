@@ -595,6 +595,16 @@ app.use('/mirofish-api', (req, res) => {
 });
 
 app.use(express.json({ limit: '12mb' }));
+// 手機 UA 開 / → server-side 302 跳去 mobile-first 頁（唔受 client cache 影響;?desktop=1 可 bypass 睇桌面版）
+app.get(['/', '/index.html'], (req, res, next) => {
+  const ua = req.headers['user-agent'] || '';
+  const isMobile = /iPhone|iPod|Android.*Mobile/i.test(ua);
+  if (isMobile && req.query.desktop === undefined) {
+    res.set('Cache-Control', 'no-store');
+    return res.redirect(302, '/m.html');
+  }
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public')));
 app.get('/mirofish/*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'mirofish', 'index.html'));

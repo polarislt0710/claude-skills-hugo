@@ -2,7 +2,7 @@
 <html lang="zh-HK" data-theme="ink">
 <head>
 <meta charset="utf-8" />
-<script>/* 真.手機/平板（touch + 窄）自動入 mobile-first 頁；desktop（無 touch）即使細 window 都唔 redirect；m.html「切返桌面版」set m-prefer-desktop opt-out */(function(){try{var touch=('ontouchstart'in window)||navigator.maxTouchPoints>0;if(touch&&window.innerWidth<=900&&!localStorage.getItem('m-prefer-desktop')&&(location.pathname==='/'||/index\.html$/.test(location.pathname))){location.replace('/m.html');}}catch(e){}})();</script>
+<script>/* 真.手機/平板（touch + 窄）自動入 mobile-first 頁；desktop（無 touch）即使細 window 都唔 redirect；m.html「切返桌面版」set m-prefer-desktop opt-out */(function(){try{var touch=('ontouchstart'in window)||navigator.maxTouchPoints>0;if(touch&&window.innerWidth<=900&&!localStorage.getItem('m-prefer-desktop')&&!/[?&]desktop/.test(location.search)&&(location.pathname==='/'||/index\.html$/.test(location.pathname))){location.replace('/m.html');}}catch(e){}})();</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
 <title>Swarm Desktop · Agent Control Room</title>
 <style>

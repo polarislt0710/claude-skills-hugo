@@ -435,7 +435,7 @@ function renderSettings(){
   const st=$('#setTg');if(st){st.value=localStorage.getItem('swarm-tguser')||'';st.onchange=e=>localStorage.setItem('swarm-tguser',e.target.value);}
 }
 function setTheme(t){state.theme=t;document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('swarm-theme',t);}catch(e){}scheduleRender();}
-function goDesktop(){try{localStorage.setItem('m-prefer-desktop','1');}catch(e){}location.href='/';}
+function goDesktop(){try{localStorage.setItem('m-prefer-desktop','1');}catch(e){}location.href='/?desktop=1';}
 
 /* ───────── 操作 bar（gate-driven）───────── */
 function renderActionbar(){
