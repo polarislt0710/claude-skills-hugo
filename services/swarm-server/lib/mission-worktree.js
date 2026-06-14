@@ -50,7 +50,7 @@ function headSha(repo) {
 // Uses a refspec (HEAD:refs/heads/<branch>) so we never have to checkout / rename
 // the ephemeral swarm/* branches; the remote branch is auto-created if missing.
 // Returns { ok, remoteBranch, pushedSha, err, conflict }.
-function pushBranch({ repo, targetBranch, sourceRef = 'HEAD', remote = 'origin' }) {
+function pushBranch({ repo, targetBranch, sourceRef = 'HEAD', remote = 'origin', autoCommit = false, commitMessage }) {
   const branch = String(targetBranch || '').trim();
   // 1) sanitise branch name (reject anything that could break the refspec)
   if (!branch || !/^[A-Za-z0-9._/-]+$/.test(branch) || branch.includes('..')
@@ -60,6 +60,14 @@ function pushBranch({ repo, targetBranch, sourceRef = 'HEAD', remote = 'origin' 
   // 2) refuse to push a half-finished merge state
   if (gitSafe(repo, ['rev-parse', '-q', '--verify', 'MERGE_HEAD']).ok) {
     return { ok: false, err: 'repo is mid-merge (MERGE_HEAD exists)', remoteBranch: branch };
+  }
+  // 2.5) auto-commit 未 commit 嘅 working-tree 改動（單 agent / 無 worktree mission 可能改咗
+  //      working tree 但冇 commit;唔 commit 嘅話 push HEAD 會漏咗嗰啲改動）。
+  let autoCommitted = false;
+  if (autoCommit && !isClean(repo)) {
+    gitSafe(repo, ['add', '-A']);
+    const c = gitSafe(repo, ['commit', '--no-verify', '-m', commitMessage || 'swarm: finalize uncommitted changes']);
+    autoCommitted = c.ok;
   }
   // 3) remote must exist + be resolvable
   if (!gitSafe(repo, ['remote', 'get-url', remote]).ok) {
@@ -71,7 +79,7 @@ function pushBranch({ repo, targetBranch, sourceRef = 'HEAD', remote = 'origin' 
   // 5) push HEAD -> refs/heads/<branch> (non-force)
   const r = gitSafe(repo, ['push', remote, `${sourceRef}:refs/heads/${branch}`]);
   if (r.ok) {
-    return { ok: true, remoteBranch: branch, pushedSha, remote };
+    return { ok: true, remoteBranch: branch, pushedSha, remote, autoCommitted };
   }
   const conflict = /non-fast-forward|\brejected\b|fetch first|tip of your current branch is behind/i.test(r.err || '');
   return { ok: false, conflict, err: r.err, remoteBranch: branch, pushedSha, remote };

@@ -159,7 +159,7 @@ function doGitPush(run) {
     notifyPushResult(run, pp.result); io.emit('run-updated', publicRun(run)); scheduleSave(); return;
   }
   setImmediate(() => {                                                        // 背景跑,唔 block REST
-    const r = worktreeMgr.pushBranch({ repo, targetBranch: pp.branch });
+    const r = worktreeMgr.pushBranch({ repo, targetBranch: pp.branch, autoCommit: true, commitMessage: `swarm ${String(run.id).slice(-8)}: ${String(run.topic || '').replace(/\n/g, ' ').slice(0, 60)}` });
     pp.status = r.ok ? 'done' : 'failed';
     pp.decidedAt = new Date().toISOString();
     pp.result = r;
