@@ -45,6 +45,8 @@ html[data-theme="forest"] body{background:linear-gradient(180deg,#bfe0ee,#cfe6e0
 .kpi.live b{color:var(--run)} .kpi.done b{color:var(--green)}
 /* ── search ── */
 .search-row{display:flex;gap:8px;margin-bottom:12px}
+.sortfilter-row{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
+.sortfilter-row .fchip{flex:none}
 .m-search{flex:1;background:color-mix(in srgb,var(--text) 6%,transparent);border:1px solid var(--line);border-radius:12px;color:var(--text);padding:10px 13px;font-size:14px;font-family:var(--sans)}
 .m-search:focus{outline:none;border-color:var(--blue)}
 .fbtn{padding:0 14px;border-radius:12px;border:1px solid var(--line);background:var(--panel-2);color:var(--muted);font-size:13px}
@@ -203,7 +205,7 @@ const state={
   models:[], projects:[], tgUsers:[], logBuf:{}, feed:[],
   missionSub:'overview', activityView:'log', logFilter:'all', search:'',
   sprites:[], spritesLoaded:false, theme:localStorage.getItem('swarm-theme')||'ink',
-  overseer:{history:[],thinking:false},
+  overseer:{history:[],thinking:false}, sortOrder:'newest', dayFilter:'all',
 };
 document.documentElement.setAttribute('data-theme',state.theme);
 
@@ -305,12 +307,15 @@ function renderPlans(){
     <div class="kpi live"><b>${k.live}</b><span>Agents Live</span></div>
     <div class="kpi"><b>${k.sess}</b><span>Sessions</span></div>
     <div class="kpi done"><b>${k.done}</b><span>Done</span></div></div>
-   <div class="search-row"><input class="m-search" id="msearch" placeholder="搜尋計畫或關鍵字" value="${esc(state.search)}"><button class="fbtn" onclick="cycleFilter()">${state.listFilter||'全部'}</button></div>`;
+   <div class="search-row"><input class="m-search" id="msearch" placeholder="搜尋計畫或關鍵字" value="${esc(state.search)}"><button class="fbtn" onclick="cycleFilter()">${state.listFilter||'全部'}</button></div>
+   <div class="sortfilter-row"><button class="fchip" onclick="toggleSort()">🕐 ${state.sortOrder==='oldest'?'遠 → 近':'近 → 遠'}</button><button class="fchip${(state.dayFilter&&state.dayFilter!=='all')?' on':''}" onclick="openDayFilter()">📅 ${dayFilterLabel()}</button></div>`;
   let list=state.runs.slice();
   if(state.search){const q=state.search.toLowerCase();list=list.filter(r=>(r.topic||'').toLowerCase().includes(q));}
   if(state.listFilter==='running')list=list.filter(r=>r.runningAgents>0||r.status==='executing');
   else if(state.listFilter==='active')list=list.filter(r=>r.status==='active');
-  list=list.slice().reverse();
+  if(state.dayFilter==='today'){const t=new Date().toDateString();list=list.filter(r=>new Date(runTime(r)).toDateString()===t);}
+  else if(/^\d{4}-\d{2}-\d{2}$/.test(state.dayFilter||'')){list=list.filter(r=>fmtDay(runTime(r))===state.dayFilter);}
+  list=list.slice().sort((a,b)=>state.sortOrder==='oldest'?runTime(a)-runTime(b):runTime(b)-runTime(a));
   if(!list.length)html+='<div class="empty">冇符合嘅計畫。</div>';
   list.forEach(r=>{
     const cat=catOf(r);const running=r.runningAgents>0;
@@ -329,6 +334,15 @@ function renderPlans(){
   $('#fab').style.display=state.tab==='plans'?'':'none';
 }
 function cycleFilter(){const o=['全部','running','active'];const i=o.indexOf(state.listFilter||'全部');state.listFilter=o[(i+1)%o.length];if(state.listFilter==='全部')state.listFilter=null;scheduleRender();}
+function runTime(run){if(run&&run.startedAt)return new Date(run.startedAt).getTime();const m=String((run&&run.id)||'').match(/run_(\d+)/);return m?Number(m[1]):0;}
+function fmtDay(ts){const d=new Date(ts);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+function dayFilterLabel(){const f=state.dayFilter;if(!f||f==='all')return '全部日子';if(f==='today')return '今日';return f;}
+function toggleSort(){state.sortOrder=state.sortOrder==='oldest'?'newest':'oldest';scheduleRender();}
+function openDayFilter(){const today=fmtDay(Date.now());openSheet('📅 篩日期',`
+  <button class="big-choice" onclick="setDayFilter('all')"><b>全部日子</b><span>唔篩,顯示所有 plan</span></button>
+  <button class="big-choice" onclick="setDayFilter('today')"><b>今日</b><span>${today}</span></button>
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:13px 4px 2px"><label style="font-size:14px">揀某一日</label><input type="date" id="dayPick" value="${/^\d{4}-\d{2}-\d{2}$/.test(state.dayFilter||'')?state.dayFilter:today}" onchange="setDayFilter(this.value)" style="background:color-mix(in srgb,var(--text) 6%,transparent);border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px 11px;font-family:var(--mono);font-size:14px"></div>`);}
+function setDayFilter(v){state.dayFilter=v||'all';closeSheet();scheduleRender();}
 function openMission(id){state.focusRunId=id;state.tab='mission';state.missionSub='overview';if(!state.byId[id])loadRun(id);scheduleRender();}
 
 /* ───────── Tab 2: Mission ───────── */
