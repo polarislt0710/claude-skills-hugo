@@ -2424,6 +2424,15 @@ function emitSnapshot() {
 }
 
 // ─── Run queue (SWARM_RUN_QUEUE): one run at a time, auto-start the next ───
+// 防同一個 run 喺極短時間內被重複觸發破壞性動作（兩個 user 同一秒撳同一掣 → double-trigger 開兩條 pipeline）。
+// Set + 2.5s TTL:第一個 request 攞到 lock,第二個即時 409;TTL 後自動釋放,之後靠各 endpoint 嘅 status 閘接力。
+const runActionLock = new Set();
+function lockRun(runId) {
+  if (runActionLock.has(runId)) return false;
+  runActionLock.add(runId);
+  setTimeout(() => runActionLock.delete(runId), 2500);
+  return true;
+}
 function isRunActive() {
   return store.runs.some((r) => r.status === 'executing');
 }
@@ -2729,6 +2738,7 @@ app.delete('/api/runs/:id', (req, res) => {
 app.post('/api/runs/:id/execution/start', (req, res) => {
   const run = findRunOr404(req.params.id, res);
   if (!run) return;
+  if (!lockRun(run.id)) return res.status(409).json({ error: '呢個 run 啱啱有動作處理緊,等一兩秒先再試' });
   try {
     const body = req.body || {};
     const deliveryMode = body.deliveryMode || body.mode || 'code';
@@ -2863,6 +2873,7 @@ app.post('/api/runs/:id/agents/:agentId/rerun', (req, res) => {
 app.post('/api/runs/:id/resume', (req, res) => {
   const run = findRunOr404(req.params.id, res);
   if (!run) return;
+  if (!lockRun(run.id)) return res.status(409).json({ error: '呢個 run 啱啱有動作處理緊,等一兩秒先再試' });
   const p = run.pipeline;
   if (!p || !Array.isArray(p.stages) || !p.stages.length) {
     return res.status(400).json({ error: 'no pipeline to resume' });
@@ -2978,6 +2989,10 @@ app.post('/api/runs/:id/council/debate', (req, res) => {
 app.post('/api/runs/:id/council/execute', (req, res) => {
   const run = findRunOr404(req.params.id, res);
   if (!run) return;
+  if (!lockRun(run.id)) return res.status(409).json({ error: '呢個 run 啱啱有動作處理緊,等一兩秒先再試' });
+  if (run.pipeline && run.pipeline.mode === 'code' && (run.pipeline.stages || []).some((s) => s.status === 'running')) {
+    return res.status(409).json({ error: 'code pipeline 已經跑緊,唔使再落實' });   // status 閘:防 pipeline running 期間重複 execute（補 TTL 之後嘅窗）
+  }
   const plan = readLatestPlan(run);
   if (!plan.md || !plan.md.trim() || (plan.v || 0) < 1) {
     return res.status(400).json({ error: '未有議會終稿 plan 可落實(請先跑完議會 + 批准)' });
@@ -3173,6 +3188,7 @@ app.post('/api/runs/:id/chat/finalize', (req, res) => {
 app.post('/api/runs/:id/council/start', (req, res) => {
   const run = findRunOr404(req.params.id, res);
   if (!run) return;
+  if (!lockRun(run.id)) return res.status(409).json({ error: '呢個 run 啱啱有動作處理緊,等一兩秒先再試' });
   // console 開議會時揀咗「通知邊個」→ 綁定成個 flow 嘅通知去嗰個 user（唔再硬跌 owner）。
   const tgUser0 = (req.body || {}).tgUser;
   if (tgUser0) { const cid = resolveTgChat(tgUser0); if (cid) { run.tgChatId = cid; run.tgUser = tgUser0; } }
