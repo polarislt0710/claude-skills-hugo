@@ -90,6 +90,8 @@ function notifyRunComplete(run, tag) {
     : null;
   tgNotify(`${title}\n\n🏛 ${tgEsc(run.topic)}\n${note}\n\n→ 開 [Swarm Dashboard](${SWARM_DASH_URL})`, markup, run && run.tgChatId);
   if (tag === 'pipeline') autoReviewOnComplete(run);
+  // 預熱「下一步」收斂層（背景,best-effort）—— 用戶完成後一 tap 即出,唔使等 LLM。SWARM_NEXTSTEPS=0 可關。
+  if (process.env.SWARM_NEXTSTEPS !== '0') { try { generateNextSteps(run); } catch (_) {} }
 }
 // 完成自動覆核:TG 開嘅 mission build→review→fix→verify 完,總管讀產出 → send 簡短 feedback 返開 run 嗰位
 // （補返「等結果返嚟自己 review」嗰橛）。SWARM_AUTO_REVIEW=0 可關。
@@ -205,7 +207,8 @@ function notifyPushResult(run, r) {
 // 三個你揀嘅 model 讀真 project + plan,互相博弈到零爭議,moderator 改寫 plan.vN;
 // 收斂(或用盡 round)後停低交人手御准,批准後 explainer 用人話講解。全程沿用 CLI spawn
 // (OAuth Max,零增量成本)。全部邏輯 gate by p.mode==='council',唔影響既有 code/thinking pipeline。
-const SWARM_COUNCIL_MAX_ROUNDS = Number(process.env.SWARM_COUNCIL_MAX_ROUNDS || 6);      // 5-6 round 上限
+const SWARM_COUNCIL_MAX_ROUNDS = Number(process.env.SWARM_COUNCIL_MAX_ROUNDS || 8);      // 上限（深度討論：6→8）
+const SWARM_COUNCIL_MIN_ROUNDS = Math.max(1, Number(process.env.SWARM_COUNCIL_MIN_ROUNDS || 3)); // 收斂下限：未夠 N round 唔准收工,逼再鑽深
 const SWARM_COUNCIL_TIME_BUDGET_MS = Number(process.env.SWARM_COUNCIL_TIME_BUDGET_MS || 0); // 0 = off
 const COUNCIL_DIR = (runId) => path.join(DATA_DIR, 'council', String(runId));
 // ─── Swarm Council Phase 1: 定向幕僚 chat (互動單-model brainstorm → mission brief) ───
@@ -374,33 +377,45 @@ const EXECUTION_PRESETS = [
 
 // ─── Swarm Council system prompts (注入 preset.scope) ───
 const COUNCIL_REVIEWER_SCOPE = [
-  '你係「三模議會」三個共識評審之一。另外仲有兩個*唔同 model* 嘅評審同你並行,之後有一個 moderator 會 merge 大家意見、改寫 plan。',
-  '你嘅 cwd 就係真實 project 根目錄。你**必須真係用 Read / grep / Bash(ls/cat/git log)去查項目入面嘅實際文件**先發言,唔准淨係讀 plan 文字就估。',
+  '你係「三模議會」三個共識評審之一。另外仲有兩個*唔同 model* 嘅評審同你並行,之後有一個 moderator 會 merge 大家意見、改寫 plan。你哋嘅職責唔係快速通過,而係**逼出一個「揀邊個 file、改邊段、點驗收」都講得清嘅 plan**。寧願拗多幾轉,都唔好留含糊。',
+  '你嘅 cwd 就係真實 project 根目錄。你**必須真係用 Read / grep / Bash(ls/cat/git log)去查項目入面嘅實際文件**先發言 —— 引用要落到具體 file path + 函數 / 行號做證據,唔准淨係讀 plan 文字就估,亦唔准講空泛原則(例如淨係講「要注意安全」而唔指明邊個 endpoint / 邊個 query)。',
   '輸入:① 當前 plan(喺下面 task brief)② project 實際 code / 結構 / config。',
-  '根據 goal,逐點寫低你嘅評審:',
-  '1. 要改善:plan 邊度弱、漏咗咩、邊度過度設計。',
-  '2. 要做 / 要捉(fix)/ 要加:實際 code 入面有咩 bug / 缺口 / 風險要喺 plan 反映。',
-  '3. 環節之間關係:步驟之間嘅連扣、依賴、UI、UX、data flow 有冇斷層或矛盾。',
-  '博弈紀律:主動挑另外兩位(上一 round)嘅論點骨頭,標出歧義同矛盾。目標係**傾到三個全部同意、零爭議**。同意就講同意,唔好為拗而拗。',
+  '**深度紀律(必守)**:你嘅評審至少要逐一過呢 9 個維度,每個寫一句結論(冇問題都要講「已 check：…」,有問題就升做 OPEN_ISSUES):',
+  '  1) 正確性 — plan 嘅邏輯 / 資料 / 公式啱唔啱。',
+  '  2) Edge case — 空資料 / 0 份卷 / 缺欄位 / 超大量 / 並發 / 重複提交。',
+  '  3) 失敗模式 — 邊步會炸、炸咗點 degrade、有冇 fail-loud（唔好靜靜吞 error）。',
+  '  4) Data flow — 上下游 schema / API / state / DB migration 連扣有冇斷層或矛盾。',
+  '  5) UI / UX — 流程順唔順、空狀態、loading、錯誤回報、手機 responsive。',
+  '  6) 權限 / 安全 — 邊個 role 入到、有冇 IDOR / 越權 / 注入 / 洩漏。',
+  '  7) 效能 — N+1、全表掃、阻塞、無謂重算。',
+  '  8) 向後兼容 — 會唔會整爛現有功能 / 資料 / 既有 API。',
+  '  9) 驗收 — plan 有冇講明「點先算做完」(可執行嘅驗證指令 + 期望 output)。',
+  '根據 goal,逐點寫低你嘅評審:1. 要改善(plan 邊度弱、漏咗咩、邊度過度設計);2. 要做 / 要捉 fix(實際 code 入面有咩 bug / 缺口 / 風險要喺 plan 反映);3. 環節之間關係(步驟之間嘅依賴、UI、data flow 有冇斷層或矛盾)。',
+  '博弈紀律:主動挑另外兩位(上一 round)嘅論點骨頭,標出歧義同矛盾。每一 round 都要帶**新嘢**(新 edge case / 新風險 / 更佳方案),唔好淨係複製上一 round 嘅嘢。目標係**傾到三個全部同意、零爭議,而且 plan 已落到 file 級**。但**唔好為咗快而 AGREE** —— 只有當你逐個維度都 check 過、真係搵唔到可改善先 AGREE;同樣亦唔好為拗而拗。',
   '**唔好自己直接改 plan 文字檔** —— 你只負責提出結構化改動建議,由 moderator 落實(避免三人撞同一個 file)。',
   '最後**必須**用呢個固定格式收尾(俾機器 parse,前後唔好加多餘文字):',
   'CONSENSUS: AGREE        # 或 DISPUTE(你對當前 plan 仲有未解爭議)',
   'OPEN_ISSUES:',
   '- [id] 一句講清未解爭議 / 要 moderator 仲裁嘅點(AGREE 就寫「(none)」)',
   'PROPOSED_CHANGES:',
-  '- 對 plan 嘅具體改動(patch 級描述:邊段、改成點)',
+  '- 對 plan 嘅具體改動(patch 級描述:邊個 file、邊段、改成點、點驗收)',
 ].join('\n');
 
 const COUNCIL_MODERATOR_SCOPE = [
-  '你係「三模議會」嘅 moderator(仲裁收斂)。三個評審(A/B/C)今 round 嘅完整輸出**會以 file path 形式喺 task brief 列出** —— 你**必須先用 Read tool 逐個讀晒嗰啲 file 全文**先 merge,唔好只靠摘要(摘要會缺料,尤其體積大嗰份)。讀埋當前 plan。',
-  '1. Merge:將三人嘅 PROPOSED_CHANGES 合併、去重、解衝突,**改寫出新一版完整 plan**。三人有衝突嘅地方,揀技術上最穩陣嗰個,並一句講點解。若某評審缺席(fail),照 merge 在席者意見,唔好因為少咗一把聲就 block。',
+  '你係「三模議會」嘅 moderator(仲裁收斂)。三個評審(A/B/C)今 round 嘅完整輸出**會以 file path 形式喺 task brief 列出** —— 你**必須先用 Read tool 逐個讀晒嗰啲 file 全文**先 merge,唔好只靠摘要(摘要會缺料,尤其體積大嗰份)。讀埋當前 plan,有需要自己 Read / grep project 核實。',
+  '1. Merge:將三人嘅 PROPOSED_CHANGES 合併、去重、解衝突,**改寫出新一版完整 plan**。三人有衝突嘅地方,揀技術上最穩陣嗰個,並一句講點解。**每一條評審提出嘅 proposal 都要有下場:要麼 incorporate 入 plan,要麼喺 DISPUTES 寫明點解 reject** —— 唔准靜靜雞當冇睇到。若某評審缺席(fail),照 merge 在席者意見,唔好因為少咗一把聲就 block。',
   '2. 重新評估每條 OPEN_ISSUES:已解決就剔走;仍未解就保留,標明邊位提出、卡喺邊。',
   '3. **必須**將新 plan 全文用呢個 fenced block 輸出(系統會寫去 plan.vN.md):',
   '```plan-final',
-  '<完整 markdown plan 全文>',
+  '<完整 markdown plan 全文 —— 要落到 file 級:每個改動講到改邊個 file / 介面 / 邊界條件 / 點驗收>',
   '```',
+  '**收斂門檻(嚴格,唔好為咗收工亂報 CONVERGED)**:只有以下全部成立先可以寫 CONVERGED —',
+  '  (a) 三人零未解爭議;',
+  '  (b) plan 已落到**檔案 / 介面 / 邊界條件 / 驗收方式**級別,唔再停留喺概括或抽象層面;',
+  '  (c) 冇未驗證嘅關鍵假設(有就喺 plan 講明點 verify)。',
+  '只要有一條未滿足,寫 OPEN,留俾下一 round 收 —— 寧願多拗一 round,都唔好交一個含糊嘅 plan。',
   '4. 之後**必須**用呢個固定格式收尾(俾機器 parse):',
-  'COUNCIL: CONVERGED      # 三人零未解爭議;仲有爭議就寫 OPEN',
+  'COUNCIL: CONVERGED      # 三人零未解爭議 + plan 已落到 file 級;仲未夠就寫 OPEN',
   'OPEN_DISPUTES: <整數>',
   'DISPUTES:',
   '- [id] 一句講未解爭議(CONVERGED 就寫「(none)」)',
@@ -1689,7 +1704,9 @@ function advanceCouncil(run, p, stage, session) {
     content: `未解爭議: ${mod.openDisputes}\n${mod.disputes || '(none)'}${mod.planMd ? '' : '\n⚠ moderator 未輸出 plan-final block,沿用上一版。'}`,
   });
 
-  const converged = mod.converged && mod.openDisputes === 0;
+  const reachedMin = p.councilRound >= SWARM_COUNCIL_MIN_ROUNDS;
+  const trulyConverged = mod.converged && mod.openDisputes === 0;
+  const converged = trulyConverged && reachedMin;          // 未夠 MIN round 唔准收工,逼佢再鑽深
   const maxedOut = p.councilRound >= SWARM_COUNCIL_MAX_ROUNDS;
   const overBudget = SWARM_COUNCIL_TIME_BUDGET_MS > 0 &&
     (Date.now() - new Date(p.startedAt).getTime()) > SWARM_COUNCIL_TIME_BUDGET_MS;
@@ -1698,7 +1715,8 @@ function advanceCouncil(run, p, stage, session) {
     return;
   }
 
-  // 未收斂 → rewind consensus+moderator stage,round+1,plan vN 做下一 round input
+  // 未收斂(或表面收斂但未夠 MIN round)→ rewind consensus+moderator,round+1,再跑一 round
+  const deepening = trulyConverged && !reachedMin;          // 表面收斂但要逼深度
   p.councilRound += 1;
   const cIdx = p.stages.findIndex((s) => s.kind === 'consensus');
   for (let i = cIdx; i < p.stages.length && ['consensus', 'moderator'].includes(p.stages[i].kind); i += 1) {
@@ -1708,7 +1726,14 @@ function advanceCouncil(run, p, stage, session) {
   const plan = readLatestPlan(run);
   run.taskBrief = truncate(
     `## Goal\n${run.background || run.topic || ''}\n\n## 要評審嘅當前 Plan (v${plan.v})\n${plan.md}\n\n` +
-    `## 上一 round 未解爭議(請優先處理 / 表態)\n${mod.disputes || '(none)'}`,
+    (deepening
+      ? `## 深度紀律（Round ${p.councilRound}/${SWARM_COUNCIL_MAX_ROUNDS}，議會規定最少 ${SWARM_COUNCIL_MIN_ROUNDS} round）\n` +
+        `Plan 表面上已收斂,但未到深度下限唔准收工。呢一 round **唔好複述同意**,要主動鑽深:\n` +
+        `- 逐個 phase / 改動,用 Read+grep 揾返 project 入面**未覆蓋嘅 edge case、失敗模式、隱性依賴、向後兼容風險**。\n` +
+        `- 至少提出 1 個「如果照而家 plan 做,邊度會出事」嘅具體情境 + 點改。\n` +
+        `- 諗有冇**更穩陣 / 更簡單**嘅替代方案;如有,寫低 tradeoff。\n` +
+        `- 真係搵唔到任何可改善,先至再 AGREE(並一句講你 check 過邊啲維度)。`
+      : `## 上一 round 未解爭議(請優先處理 / 表態)\n${mod.disputes || '(none)'}`),
     MAX_CONTEXT_CHARS);
   p.current = cIdx - 1;
   io.emit('run-updated', publicRun(run));
@@ -2575,6 +2600,137 @@ app.post('/api/overseer', async (req, res) => {
     const parsed = parseOverseerReply(raw);
     res.json({ ok: true, reply: parsed.reply, action: parsed.action, model: picked.model });
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// ─── Next-steps:run 完成後嘅「收斂層」———————————————————————————
+// 一個 run（議會 / mission / code pipeline）跑完之後,將散落嘅人話講解、未解爭議、
+// reviewer findings、失敗階段 收斂成「⚠️ Gap / 💡 下一步」結構化清單,每項 map 一個
+// 可一鍵執行嘅動作（execute / revise / mission / council / none）。lazy 生成 + cache,
+// 唔會每次 poll 都燒 LLM。前端（手機 m.html + 桌面 index.html）共用呢個 contract。
+const _nextStepsInflight = new Map(); // runId -> { sig, promise }（去重,避免並發重複 spawn）
+const NEXT_STEPS_SYSTEM = [
+  '你係 Swarm 嘅「收斂層」AI。一個 run 啱啱完成,下面係佢嘅實況。',
+  '你要做兩樣嘢,幫用戶睇清「跟住做咩」:',
+  '1) GAP —— 抽出未做好 / fail / 風險 / 漏咗嘅位（如有,冇就空陣列）;',
+  '2) SUGGESTION —— 具體、可即刻落手嘅下一步建議。',
+  '每項 map 一個動作俾用戶一鍵做。action_type 只可以係:',
+  '  execute  — 落實當前議會終稿（淨係 council 已收斂、未落 code 時啱用）',
+  '  revise   — 叫議會就某意見再收斂一 round（action_arg = 一句指示）',
+  '  mission  — 開一個新 mission 落 code 去修 / 做呢件事（action_arg = 清楚、可直接落手嘅 plan brief,寫明範圍）',
+  '  council  — 開一個新三模議會傾呢個議題（action_arg = 議題）',
+  '  none     — 淨係值得傾 / 唔需要自動動作',
+  '嚴格淨係輸出一個 JSON object（唔好加 markdown fence、唔好任何前言或結語）,schema:',
+  '{"gaps":[{"severity":"fail|warn","title":"短","detail":"一兩句","action_type":"mission|revise|none","action_arg":"..."}],"suggestions":[{"title":"短","rationale":"點解值得做","action_type":"mission|council|execute|revise|none","action_arg":"...","discuss_seed":"用戶想傾呢項時 pre-seed 落總管對話嘅問句"}]}',
+  '最多 4 個 gaps + 4 個 suggestions。用繁體中文 / 廣東話。action_arg 要夠具體(寫明 project / 檔案 / 範圍),令 mission 可以直接照住做。',
+].join('\n');
+
+function nextStepsSignature(run) {
+  const p = run.pipeline || {};
+  const doneStages = (p.stages || []).filter((s) => s.status === 'complete').length;
+  return [run.status || '', p.councilPlanVersion || 0, p.councilRound || 0, doneStages, run.completedAt || run.finishedAt || ''].join('|');
+}
+
+function structuredVerdict(run) {
+  const p = run.pipeline || {};
+  const stages = p.stages || [];
+  let pass = 0; let fail = 0;
+  stages.forEach((s) => {
+    if (s.status === 'complete') pass++;
+    else if (s.status === 'failed' || s.status === 'interrupted') fail++;
+  });
+  const failAgents = (run.agents || []).filter((a) => a.status === 'failed' || a.status === 'interrupted').length;
+  return { pass, warn: 0, fail: fail + failAgents, openDisputes: p.councilOpenDisputes != null ? p.councilOpenDisputes : 0 };
+}
+
+function buildNextStepsContext(run) {
+  const p = run.pipeline || {};
+  const mode = p.mode || (run.metrics && run.metrics.deliveryMode) || 'code';
+  const parts = [];
+  parts.push(`任務: ${truncate(run.taskBrief || run.background || run.topic || '', 700)}`);
+  parts.push(`Project: ${run.projectPath || '-'} · 模式: ${mode} · 狀態: ${run.status || '-'}`);
+  const stages = p.stages || [];
+  if (stages.length) parts.push(`階段:\n${stages.map((s) => `- ${s.title} = ${s.status}`).join('\n')}`);
+  if (run.synthesis) parts.push(`人話講解（收斂決策）:\n${truncate(run.synthesis, 1600)}`);
+  const disputes = (p.councilDisputes || '').trim();
+  if (disputes && !/^\(?(none|無)\)?$/i.test(disputes)) parts.push(`未解爭議:\n${truncate(disputes, 700)}`);
+  const reviewers = (run.agents || []).filter((a) => /review|覆核|reviewer|verif|驗證/i.test(`${a.role || ''}${a.name || ''}${a.layer || ''}`));
+  const revTxt = reviewers.map((a) => `【${a.name} · ${a.status}】${truncate(a.logs || '', 600)}`).filter((s) => s.length > 12).join('\n');
+  if (revTxt) parts.push(`覆核 / 驗證 agent 輸出:\n${revTxt}`);
+  const failedAgents = (run.agents || []).filter((a) => a.status === 'failed' || a.status === 'interrupted');
+  if (failedAgents.length) parts.push(`失敗 / 中斷 agent: ${failedAgents.map((a) => a.name).join(', ')}`);
+  const arts = (run.artifacts || []).slice(0, 6).map((a) => a.title || a.type).filter(Boolean).join('; ');
+  if (arts) parts.push(`產出 artifact: ${arts}`);
+  return parts.join('\n\n');
+}
+
+function parseNextSteps(raw) {
+  let t = String(raw || '').trim();
+  const fence = t.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) t = fence[1].trim();
+  const brace = t.match(/\{[\s\S]*\}/);
+  if (brace) t = brace[0];
+  let obj = null;
+  try { obj = JSON.parse(t); } catch (_) { obj = null; }
+  const clampAction = (ty) => (['execute', 'revise', 'mission', 'council', 'none'].includes(String(ty || '').toLowerCase()) ? String(ty).toLowerCase() : 'none');
+  const mkGap = (g, i) => ({
+    id: `g${i + 1}`,
+    severity: g && /fail/i.test(g.severity || '') ? 'fail' : 'warn',
+    title: truncate(String((g && g.title) || ''), 120),
+    detail: truncate(String((g && g.detail) || ''), 400),
+    action: { type: clampAction(g && g.action_type), arg: truncate(String((g && g.action_arg) || ''), 1400) },
+  });
+  const mkSug = (s, i) => ({
+    id: `s${i + 1}`,
+    title: truncate(String((s && s.title) || ''), 120),
+    rationale: truncate(String((s && s.rationale) || ''), 400),
+    action: { type: clampAction(s && s.action_type), arg: truncate(String((s && s.action_arg) || ''), 1400) },
+    discussSeed: truncate(String((s && s.discuss_seed) || (s && s.title) || ''), 600),
+  });
+  if (obj && (Array.isArray(obj.gaps) || Array.isArray(obj.suggestions))) {
+    return {
+      gaps: (obj.gaps || []).slice(0, 4).map(mkGap).filter((g) => g.title),
+      suggestions: (obj.suggestions || []).slice(0, 4).map(mkSug).filter((s) => s.title),
+    };
+  }
+  // Fallback:JSON parse 唔到 → 把全文當一個「值得傾」嘅 suggestion,起碼唔會空白。
+  const txt = String(raw || '').trim();
+  return {
+    gaps: [],
+    suggestions: txt ? [{ id: 's1', title: '睇收斂建議', rationale: truncate(txt, 400), action: { type: 'none', arg: '' }, discussSeed: '根據呢個 run 嘅結果,下一步應該做咩?' }] : [],
+  };
+}
+
+function generateNextSteps(run, sig) {
+  sig = sig || nextStepsSignature(run);
+  const inflight = _nextStepsInflight.get(run.id);
+  if (inflight && inflight.sig === sig) return inflight.promise;
+  const promise = (async () => {
+    const ctx = buildNextStepsContext(run);
+    const prompt = `${NEXT_STEPS_SYSTEM}\n\n=== Run 實況 ===\n${ctx}\n\n直接出 JSON（唔好加 markdown fence、唔好前言）:`;
+    const raw = await spawnOneShot(prompt, { cli: 'claude', model: 'sonnet' }, 'swarm-nextsteps', 180000);
+    const parsed = parseNextSteps(raw);
+    run.nextSteps = { signature: sig, generatedAt: Date.now(), source: 'overseer', gaps: parsed.gaps, suggestions: parsed.suggestions };
+    scheduleSave();
+    io.emit('run-updated', publicRun(run));
+    return run.nextSteps;
+  })();
+  _nextStepsInflight.set(run.id, { sig, promise });
+  promise.catch(() => {}).finally(() => { const cur = _nextStepsInflight.get(run.id); if (cur && cur.promise === promise) _nextStepsInflight.delete(run.id); });
+  return promise;
+}
+
+app.get('/api/runs/:id/next-steps', async (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  const sig = nextStepsSignature(run);
+  const verdict = structuredVerdict(run);
+  if (req.query.refresh !== '1' && run.nextSteps && run.nextSteps.signature === sig) {
+    return res.json({ ok: true, cached: true, source: run.nextSteps.source, generatedAt: run.nextSteps.generatedAt, verdict, gaps: run.nextSteps.gaps || [], suggestions: run.nextSteps.suggestions || [] });
+  }
+  try {
+    const ns = await generateNextSteps(run, sig);
+    res.json({ ok: true, cached: false, source: ns.source, generatedAt: ns.generatedAt, verdict, gaps: ns.gaps || [], suggestions: ns.suggestions || [] });
+  } catch (e) { res.status(500).json({ error: e.message, verdict }); }
 });
 
 app.get('/api/runs/:id', (req, res) => {
