@@ -437,6 +437,19 @@ const COUNCIL_EXPLAINER_SCOPE = [
   '唔好 emoji、唔好 marketing 語、唔好「綜上所述」。直接俾人睇得明、肯撳批准。',
 ].join('\n');
 
+// 最終仲裁者 (Opus 4.8)：議會跑足 round 都未收斂時,主動一鎚定音,全自動唔交人手。
+const COUNCIL_ARBITER_SCOPE = [
+  '你係「三模議會」嘅**最終仲裁者**,用緊 Opus 4.8 —— 三個 model 拗咗好多 round 都未完全收斂,而家由你一鎚定音。**全自動,唔會交俾人類批准**,所以你唔可以再 punt 返出去。',
+  '你嘅 cwd 係真實 project 根目錄,有需要可以用 Read / grep 親自核實先決定,唔好淨係靠人哋摘要。',
+  '輸入:① goal ② 議會跑足 N round 後嘅最新 plan ③ 仲未解嘅技術爭議 / 要拍板嘅 ESCALATE ④ 最後一 round 三模評審。',
+  '你嘅任務:**逐條未解爭議 / ESCALATE 做最終決定** —— 揀技術上最穩陣、最符合 goal、對現有系統最安全(唔整爛現有嘢)嗰個方案,每條一句講點解咁揀。如果係產品 / 取捨類,揀**最保守、最可逆、scope 最細**嗰個 default。**唔准再留任何 OPEN,唔准叫人類決定。**',
+  '輸出一份**完全收斂、file 級、可直接落 code** 嘅 final plan,用呢個 fenced block(系統會寫做新 plan 版本,俾 build agent 直接跟):',
+  '```plan-final',
+  '<完整 markdown plan 全文 —— 每個改動講到改邊個 file / 介面 / 邊界 / 點驗收;原本 ESCALATE / DISPUTE 嗰啲,改寫成「✅ 已仲裁:揀 X,因為 …」>',
+  '```',
+  '之後**獨立一段**用人話(繁中)講晒:你一共拍咗幾多個板、每個揀咗乜、整體取態(例如「全部從保守 / 可逆方向收」),等 Hugo 事後一眼睇得明你做過咩決定。',
+].join('\n');
+
 const THINKING_PRESETS = [
   {
     key: 'researcher',
@@ -1382,14 +1395,14 @@ const COUNCIL_REFINE_PROMPT = [
 ].join('\n');
 
 // One-shot model call: prompt → text（唔耦合 run / chatThread）。
-function spawnOneShot(prompt, picked, label = 'swarm-oneshot', timeoutMs = 90000) {
+function spawnOneShot(prompt, picked, label = 'swarm-oneshot', timeoutMs = 90000, opts = {}) {
   return new Promise((resolve, reject) => {
     const cmd = buildAgentCommand(picked.cli, picked.model);
     let cwd;
-    try { cwd = safeProjectPath(SWARM_WORKSPACE); } catch (e) { return reject(e); }
+    try { cwd = opts.cwd ? safeProjectPath(opts.cwd) : safeProjectPath(SWARM_WORKSPACE); } catch (e) { return reject(e); }
     let out = '', err = '', killed = false;
     const child = spawn('bash', ['-ic', cmd.shell, label, cwd, prompt], {
-      cwd, env: { ...process.env, TERM: process.env.TERM || 'xterm-256color' },
+      cwd, env: { ...process.env, ...(opts.env || {}), TERM: process.env.TERM || 'xterm-256color' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const timer = setTimeout(() => { killed = true; try { child.kill('SIGTERM'); } catch (_) {} }, timeoutMs);
@@ -1715,8 +1728,19 @@ function advanceCouncil(run, p, stage, session) {
   const maxedOut = p.councilRound >= SWARM_COUNCIL_MAX_ROUNDS;
   const overBudget = SWARM_COUNCIL_TIME_BUDGET_MS > 0 &&
     (Date.now() - new Date(p.startedAt).getTime()) > SWARM_COUNCIL_TIME_BUDGET_MS;
-  if (converged || maxedOut || overBudget) {
-    pauseForHumanGate(run, p, { converged, maxedOut, overBudget });
+  if (converged) {
+    pauseForHumanGate(run, p, { converged });
+    return;
+  }
+  if (maxedOut || overBudget) {
+    // 跑足都未收斂 → Opus 4.8 最終仲裁主動強制收斂（全自動,唔交人手等批准）
+    runFinalArbiter(run, p, { maxedOut, overBudget }).catch((e) => {
+      console.warn('[council] final arbiter threw:', e.message);
+      try {
+        addArtifact(run, { type: 'note', title: '⚠ 最終仲裁例外 → fallback 御准閘', content: e.message });
+        pauseForHumanGate(run, p, { maxedOut, overBudget });
+      } catch (_) {}
+    });
     return;
   }
 
@@ -1774,12 +1798,46 @@ async function runCouncilResearch(run, p, angles, query) {
   advancePipeline(run);
 }
 
+// 最終仲裁 (Opus 4.8)：議會跑足都未完全收斂 → 主動一鎚定音強制收斂,全自動唔交人手等批准。
+async function runFinalArbiter(run, p, why) {
+  const plan = readLatestPlan(run);
+  const cdir = COUNCIL_DIR(run.id);
+  let reviewerBlock = '';
+  try {
+    const re = new RegExp(`^round-${p.councilRound}-reviewer-\\d+\\.md$`);
+    reviewerBlock = fs.readdirSync(cdir).filter((f) => re.test(f))
+      .map((f) => `### ${f}\n${truncate(fs.readFileSync(path.join(cdir, f), 'utf8'), 2500)}`).join('\n\n');
+  } catch (_) {}
+  const prompt = [
+    COUNCIL_ARBITER_SCOPE,
+    `## Goal\n${run.background || run.topic || ''}`,
+    `## 議會跑足 ${p.councilRound} round 後最新 plan (v${plan.v})\n${plan.md}`,
+    `## 仲未解嘅技術爭議 / 要拍板嘅 ESCALATE\n${p.councilDisputes || '(見 plan 內 ESCALATE / DISPUTES 段)'}`,
+    reviewerBlock ? `## 最後一 round 三模評審\n${reviewerBlock}` : '',
+  ].filter(Boolean).join('\n\n');
+  addArtifact(run, { type: 'note', title: `⚖️ 最終仲裁 (Opus 4.8) — 議會 ${p.councilRound} round 未完全收斂`, content: 'Opus 4.8 主動逐條拍板 → 強制收斂 → 直接落 code,全自動唔交人手。' });
+  io.emit('run-updated', publicRun(run));
+  const raw = await spawnOneShot(
+    prompt, { cli: 'claude', model: 'opus' }, 'swarm-arbiter', 420000,
+    { cwd: run.projectPath, env: { MAX_THINKING_TOKENS: process.env.SWARM_COUNCIL_THINKING || '31999' } },
+  );
+  const finalMd = (raw.match(/```plan-final\s*\n([\s\S]*?)\n```/) || [, ''])[1].trim();
+  const nextV = (readLatestPlan(run).v || 0) + 1;
+  if (finalMd) { writeCouncilPlan(run, nextV, finalMd); p.councilPlanVersion = nextV; }
+  p.councilOpenDisputes = 0;
+  p.councilArbitrated = true;
+  p.councilDisputes = `(Opus 4.8 最終仲裁已強制收斂 → plan v${p.councilPlanVersion})`;
+  addArtifact(run, { type: 'note', title: `✅ 最終仲裁完成 → plan v${p.councilPlanVersion} 收斂`, content: truncate(raw, 1800) });
+  pauseForHumanGate(run, p, { converged: true, arbitrated: true });
+}
+
 // Phase 3 御准閘:收斂(或用盡 round)後停低,唔自動 advance,等用戶撳批准 / 再改。
 function pauseForHumanGate(run, p, why) {
   p.stopped = true;
   p.councilPaused = true;
   const plan = readLatestPlan(run);
-  const reason = why.converged ? '三模零爭議收斂'
+  const reason = why.arbitrated ? 'Opus 4.8 最終仲裁收斂'
+    : why.converged ? '三模零爭議收斂'
     : (why.maxedOut ? `用盡 ${SWARM_COUNCIL_MAX_ROUNDS} round` : '時間預算用盡');
   addArtifact(run, {
     type: 'council-gate',
