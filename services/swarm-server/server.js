@@ -209,6 +209,7 @@ function notifyPushResult(run, r) {
 // (OAuth Max,零增量成本)。全部邏輯 gate by p.mode==='council',唔影響既有 code/thinking pipeline。
 const SWARM_COUNCIL_MAX_ROUNDS = Number(process.env.SWARM_COUNCIL_MAX_ROUNDS || 5);      // 上限（實證+研究：value 集中頭 3-4 round,5+ 遞減/兜圈,故 8→5；MIN=3 保深度）
 const SWARM_COUNCIL_MIN_ROUNDS = Math.max(1, Number(process.env.SWARM_COUNCIL_MIN_ROUNDS || 3)); // 收斂下限：未夠 N round 唔准收工,逼再鑽深
+const SWARM_COUNCIL_DROP_AFTER = Math.max(1, Number(process.env.SWARM_COUNCIL_DROP_AFTER || 3)); // 一個 model 連續 N round fail → 踢走唔再 spawn(degrade 到在席者)
 const SWARM_COUNCIL_TIME_BUDGET_MS = Number(process.env.SWARM_COUNCIL_TIME_BUDGET_MS || 0); // 0 = off
 const COUNCIL_DIR = (runId) => path.join(DATA_DIR, 'council', String(runId));
 // ─── Swarm Council Phase 1: 定向幕僚 chat (互動單-model brainstorm → mission brief) ───
@@ -1672,6 +1673,22 @@ function advanceCouncil(run, p, stage, session) {
     const reviews = parseCouncilReviews(run, session);
     stage.reviews = reviews.map((r) => ({ name: r.name, model: r.model, agree: r.agree, failed: r.failed }));
     const present = reviews.filter((r) => !r.failed && r.logs.trim());
+    // ── 連續失敗追蹤：一個 model 連續 N round fail/缺席 → 踢走唔再 spawn（degrade 到在席者）──
+    p.councilSeatFails = p.councilSeatFails || {};
+    p.councilDroppedSeats = p.councilDroppedSeats || [];
+    const seatOf = (name) => /reviewer\s*a/i.test(name) ? 'council_a'
+      : /reviewer\s*b/i.test(name) ? 'council_b'
+      : /reviewer\s*c/i.test(name) ? 'council_c' : null;
+    reviews.forEach((r) => {
+      const seat = seatOf(r.name);
+      if (!seat) return;
+      if (r.failed || !r.logs.trim()) p.councilSeatFails[seat] = (p.councilSeatFails[seat] || 0) + 1;
+      else p.councilSeatFails[seat] = 0;                       // 成功有輸出就 reset
+      if (p.councilSeatFails[seat] >= SWARM_COUNCIL_DROP_AFTER && !p.councilDroppedSeats.includes(seat)) {
+        p.councilDroppedSeats.push(seat);
+        addArtifact(run, { type: 'note', title: `🚫 踢走議會席位 ${seat}${r.model ? `（${r.model}）` : ''}`, content: `連續 ${SWARM_COUNCIL_DROP_AFTER} round 失敗/缺席,之後唔再 spawn,剩低嘅 model 繼續開會（全自動,唔使人手）。` });
+      }
+    });
     const plan = readLatestPlan(run);
     // 把每位評審完整輸出寫去 file → moderator 用 Read 讀全文(避免 taskBrief argv 上限截斷而丟失 reviewer)。
     const cdir = COUNCIL_DIR(run.id);
@@ -1748,6 +1765,11 @@ function advanceCouncil(run, p, stage, session) {
   const deepening = trulyConverged && !reachedMin;          // 表面收斂但要逼深度
   p.councilRound += 1;
   const cIdx = p.stages.findIndex((s) => s.kind === 'consensus');
+  // 踢走連續失敗嘅 model：下一 round 唔再 spawn 佢（至少保留 1 席,通常 opus+codex 仍在）
+  if ((p.councilDroppedSeats || []).length) {
+    const keep = ['council_a', 'council_b', 'council_c'].filter((k) => !p.councilDroppedSeats.includes(k));
+    if (keep.length >= 1) p.stages[cIdx].agentKeys = keep;
+  }
   for (let i = cIdx; i < p.stages.length && ['consensus', 'moderator'].includes(p.stages[i].kind); i += 1) {
     p.stages[i].status = 'pending';
     p.stages[i].sessionId = null;
