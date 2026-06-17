@@ -207,7 +207,7 @@ function notifyPushResult(run, r) {
 // 三個你揀嘅 model 讀真 project + plan,互相博弈到零爭議,moderator 改寫 plan.vN;
 // 收斂(或用盡 round)後停低交人手御准,批准後 explainer 用人話講解。全程沿用 CLI spawn
 // (OAuth Max,零增量成本)。全部邏輯 gate by p.mode==='council',唔影響既有 code/thinking pipeline。
-const SWARM_COUNCIL_MAX_ROUNDS = Number(process.env.SWARM_COUNCIL_MAX_ROUNDS || 8);      // 上限（深度討論：6→8）
+const SWARM_COUNCIL_MAX_ROUNDS = Number(process.env.SWARM_COUNCIL_MAX_ROUNDS || 5);      // 上限（實證+研究：value 集中頭 3-4 round,5+ 遞減/兜圈,故 8→5；MIN=3 保深度）
 const SWARM_COUNCIL_MIN_ROUNDS = Math.max(1, Number(process.env.SWARM_COUNCIL_MIN_ROUNDS || 3)); // 收斂下限：未夠 N round 唔准收工,逼再鑽深
 const SWARM_COUNCIL_TIME_BUDGET_MS = Number(process.env.SWARM_COUNCIL_TIME_BUDGET_MS || 0); // 0 = off
 const COUNCIL_DIR = (runId) => path.join(DATA_DIR, 'council', String(runId));
@@ -2146,6 +2146,13 @@ function spawnAgentNow(run, preset, agent, agentCommand, options = {}) {
       councilEnv.MAX_THINKING_TOKENS = process.env.SWARM_COUNCIL_THINKING || '31999';
       appendAgentLog(run, agent, `[swarm-server] Council ${agentCommand.cli} MAX_THINKING_TOKENS=${councilEnv.MAX_THINKING_TOKENS}\n`);
     }
+  }
+  // ─── GLM thinking（非議會角色都開）───（Hugo 2026-06-17）
+  // economy/budget preset 用 glm-5.2 做 researcher 等角色 → 一樣行 claude 二進制,開 extended thinking。
+  // glm-4.5-air / glm-mini 係特登平快嘅 tier,唔開（開咗就違背慳 cost 原意）。可由 SWARM_GLM_THINKING 調。
+  if (!fake && agentCommand.cli === 'glm' && !isCouncilAgent && !/air|mini/i.test(String(agentCommand.model || ''))) {
+    councilEnv.MAX_THINKING_TOKENS = process.env.SWARM_GLM_THINKING || process.env.SWARM_COUNCIL_THINKING || '31999';
+    appendAgentLog(run, agent, `[swarm-server] GLM(${agentCommand.model}) non-council MAX_THINKING_TOKENS=${councilEnv.MAX_THINKING_TOKENS}\n`);
   }
   const child = spawn(
     'bash',
