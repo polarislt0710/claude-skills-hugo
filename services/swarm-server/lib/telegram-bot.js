@@ -22,7 +22,7 @@ const MODEL_CHOICES = [
   { cli: 'codex',  model: 'gpt-5.5', label: 'Codex gpt-5.5' },
   { cli: 'claude', model: 'opus',    label: 'Opus 4.8' },
   { cli: 'claude', model: 'sonnet',  label: 'Sonnet' },
-  { cli: 'glm',    model: 'glm-5.1', label: 'GLM 5.1' },
+  { cli: 'glm',    model: 'glm-5.2', label: 'GLM 5.2' },
   { cli: 'claude', model: 'claude-fable-5', label: 'Fable 5 (至尊·貴)' },
 ];
 
@@ -32,7 +32,7 @@ const COUNCIL_STRENGTH = {
   fable: {
     council_a: { cli: 'claude', model: 'claude-fable-5' },
     council_b: { cli: 'codex',  model: 'gpt-5.5' },
-    council_c: { cli: 'glm',    model: 'glm-5.1' },
+    council_c: { cli: 'glm',    model: 'glm-5.2' },
     moderator: { cli: 'claude', model: 'opus' },
     explainer: { cli: 'claude', model: 'sonnet' },
   },

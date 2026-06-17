@@ -23,7 +23,7 @@ const CLI_REGISTRY = {
   'haiku':          { bin: 'claude', extraArgs: ['-p', '--output-format', 'text', '--permission-mode', 'bypassPermissions', '--model', 'haiku'] },
   'claude-default': { bin: 'claude', extraArgs: ['-p', '--output-format', 'text', '--permission-mode', 'bypassPermissions'] },
   // GLM wrapper = `claude` with BigModel env — same args as Claude
-  'glm-5.1':        { bin: 'glm',    extraArgs: ['-p', '--output-format', 'text', '--permission-mode', 'bypassPermissions'] },
+  'glm-5.2':        { bin: 'glm',    extraArgs: ['-p', '--output-format', 'text', '--permission-mode', 'bypassPermissions'] },
   'glm':            { bin: 'glm',    extraArgs: ['-p', '--output-format', 'text', '--permission-mode', 'bypassPermissions'] },
   // Codex CLI — non-interactive mode is `codex exec -`; prompt is piped via stdin.
   'codex':          { bin: 'codex',  extraArgs: codexArgs('gpt-5.5') },

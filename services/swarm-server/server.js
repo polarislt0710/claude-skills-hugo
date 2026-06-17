@@ -826,7 +826,7 @@ const MODEL_CATALOG = [
   { cli: 'claude', model: 'sonnet',  label: 'Claude Sonnet', short: 'sonnet', color: '#87b7ff', tier: '均衡 · 預設' },
   { cli: 'claude', model: 'haiku',   label: 'Claude Haiku',  short: 'haiku',  color: '#5fb89a', tier: '快 · 輕量' },
   { cli: 'codex',  model: 'gpt-5.5', label: 'Codex gpt-5.5', short: 'codex',  color: '#9aa7b2', tier: 'OpenAI' },
-  { cli: 'glm',    model: 'glm-5.1', label: 'GLM 5.1',       short: 'glm',    color: '#b58cff', tier: '實驗', experimental: true },
+  { cli: 'glm',    model: 'glm-5.2', label: 'GLM 5.2',       short: 'glm',    color: '#b58cff', tier: '實驗', experimental: true },
 ];
 
 function safeModelFlag(model) {
@@ -1253,7 +1253,7 @@ function buildAgentCommand(cliName, model) {
     return {
       label: 'glm',
       cli: 'glm',
-      model: m || 'glm-5.1',
+      model: m || 'glm-5.2',
       shell: `cd "$1" && exec "$HOME/bin/glm" -p --permission-mode bypassPermissions${mflag} "$2"`,
     };
   }
@@ -3361,7 +3361,7 @@ app.post('/api/runs/:id/council/start', (req, res) => {
   const perAgentModels = {
     council_a: per.council_a || { cli: 'claude', model: 'opus' },
     council_b: per.council_b || { cli: 'codex', model: 'gpt-5.5' },
-    council_c: per.council_c || { cli: 'glm', model: 'glm-5.1' },
+    council_c: per.council_c || { cli: 'glm', model: 'glm-5.2' },
     moderator: per.moderator || { cli: 'claude', model: 'opus' },
     explainer: per.explainer || { cli: 'claude', model: 'sonnet' },
   };

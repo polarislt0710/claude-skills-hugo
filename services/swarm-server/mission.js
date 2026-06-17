@@ -161,7 +161,7 @@ function getBigModelKey() {
 // Resolve a model alias to its actual BigModel name + env config.
 // Supports:
 //   'claude' / 'opus'              → Claude (Anthropic native)
-//   'glm' / 'glm-5.1'              → GLM-5.1 (主力，長程複雜)
+//   'glm' / 'glm-5.2'              → GLM-5.2 (主力，長程複雜)
 //   'glm-4.6'                      → GLM-4.6 (中等)
 //   'glm-4.5-air' / 'glm-mini'     → GLM-4.5 Air (簡單、平)
 //   'codex'                        → Codex CLI
@@ -170,8 +170,8 @@ function resolveModel(model) {
   if (m === 'codex') return { cli: 'codex', label: 'Codex', provider: 'codex' };
   if (m === 'claude' || m === 'opus' || m === '') return { cli: 'claude', label: 'Opus', provider: 'anthropic' };
   if (m.startsWith('glm')) {
-    let modelName = 'glm-5.1';
-    let label = 'GLM-5.1';
+    let modelName = 'glm-5.2';
+    let label = 'GLM-5.2';
     if (m === 'glm-4.5-air' || m === 'glm-mini' || m === 'glm-air') { modelName = 'glm-4.5-air'; label = 'GLM-4.5-Air'; }
     else if (m === 'glm-4.6') { modelName = 'glm-4.6'; label = 'GLM-4.6'; }
     return { cli: 'claude', label, provider: 'bigmodel', modelName };
@@ -288,18 +288,18 @@ Target project：${mission.targetProject}
   "scope": "2-3 句具體 scope 描述",
   "targetFiles": ["src/path/file1.ts", "src/path/file2.py"],
   "successCheck": "一句講點樣驗證呢 phase 完成（例如：npm test 過、API endpoint 返回 200）",
-  "coderModel": "glm-5.1"
+  "coderModel": "glm-5.2"
 }
 \`\`\`
 
 ### 📌 coderModel 選擇指引
 為每個 phase 揀適合嘅 coder model 嚟慳 token：
 
-- **\`"glm-5.1"\`** — 複雜邏輯、跨多 files、需要長程推理、新功能設計、tricky bugs
+- **\`"glm-5.2"\`** — 複雜邏輯、跨多 files、需要長程推理、新功能設計、tricky bugs
 - **\`"glm-4.6"\`** — 中等複雜度、refactor、加 features 但邏輯清晰
 - **\`"glm-4.5-air"\`** — 簡單修改、單一 file 嘅小改動、改 typo / 加 logging / 簡單 boilerplate
 
-預設用 \`glm-5.1\`，但 simple phases **必須** 揀 \`glm-4.5-air\` 嚟慳 cost。
+預設用 \`glm-5.2\`，但 simple phases **必須** 揀 \`glm-4.5-air\` 嚟慳 cost。
 
 ## 🛡️ Risks & Mitigations
 2-3 個主要風險 + 應對。
@@ -985,7 +985,7 @@ function registerRoutes(app, io) {
         topic, goal,
         targetProject: targetProject || '/home/hugo-orca/orca-platform-mvp',
         plannerModel: models?.planner || 'claude',
-        coderModel: models?.coder || 'glm-5.1',
+        coderModel: models?.coder || 'glm-5.2',
         reviewerModel: models?.reviewer || 'claude',
         autoExecute: false,  // imported plans always go through approval
       });

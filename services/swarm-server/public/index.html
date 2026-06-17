@@ -107,6 +107,20 @@ body.resizing{cursor:col-resize;user-select:none}
 .pill.active{color:var(--muted)}
 .pill.failed,.pill.interrupted{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 40%,transparent);background:color-mix(in srgb,var(--amber) 9%,transparent)}
 .empty{color:var(--faint);font-size:12px;text-align:center;padding:24px 8px;line-height:1.6}
+/* ── 下一步 modal ── */
+.ns-modal{position:fixed;inset:0;z-index:120;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.5);backdrop-filter:blur(4px)}
+.ns-modal.show{display:flex}
+.ns-card{width:min(580px,92vw);max-height:84vh;display:flex;flex-direction:column;background:var(--panel-2);border:1px solid var(--line-2);border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.5);overflow:hidden}
+.ns-top{display:flex;align-items:center;gap:8px;padding:13px 16px;border-bottom:1px solid var(--line)}
+.ns-top b{font-size:15px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ns-verdict{display:inline-flex;gap:5px}
+.ns-body{padding:14px 16px;overflow-y:auto}
+.ns-h{font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--faint);font-weight:700;margin:2px 0 9px}
+.ns-item{border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:9px;background:var(--panel)}
+.ns-chat{border-top:1px dashed var(--line);margin-top:9px;padding-top:9px}
+.ns-reply{font-size:12.5px;line-height:1.55;color:var(--text)}
+.ns-reply p{margin:.3em 0}
+.pill.failed{color:var(--red);border-color:color-mix(in srgb,var(--red) 35%,transparent)}
 
 .stage{display:flex;flex-direction:column;min-height:0;overflow:auto}
 .hero{margin:14px;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);overflow:hidden;flex:none}
@@ -424,6 +438,7 @@ canvas#office{display:block;width:100%;height:480px;image-rendering:pixelated}
           <button class="btn go sm" id="councilApproveBtn" style="display:none" title="批准三模議會終稿 → 出人話講解">✅ 批准</button>
           <button class="btn ghost sm" id="councilReviseBtn" style="display:none" title="加指示,叫議會再收斂多一 round">✍️ 再改</button>
           <button class="btn go sm" id="councilExecuteBtn" style="display:none" title="將議會終稿 plan 交 code pipeline 真正喺 project 實作">▶ 落實 plan</button>
+          <button class="btn go sm" id="nextStepsBtn" style="display:none" title="run 完成後:睇收斂建議 / 未補嘅 gap,一鍵傾 or 做下一步">✨ 下一步</button>
           <span id="pushGate" style="display:none;align-items:center;gap:6px">
             <span class="pill" id="pushGateLabel" style="border-color:var(--gold);color:var(--gold)">⬆️ 待 push</span>
             <button class="btn go sm" id="pushConfirmBtn" title="push 上 GitHub">⬆️ Confirm Push</button>
@@ -463,6 +478,12 @@ canvas#office{display:block;width:100%;height:480px;image-rendering:pixelated}
 
 <!-- 📱 手機抽屜遮罩 + 底部導航（只喺 ≤1024 顯示） -->
 <div class="m-scrim" id="mScrim"></div>
+<div class="ns-modal" id="nextStepsModal">
+  <div class="ns-card">
+    <div class="ns-top"><b id="nsTitle">✨ 下一步</b><span style="flex:1"></span><span id="nsVerdict" class="ns-verdict"></span><button class="btn ghost sm" title="重新收斂" data-ns-refresh>↻</button><button class="btn ghost sm" data-ns-close>✕</button></div>
+    <div class="ns-body" id="nsBody"></div>
+  </div>
+</div>
 <nav class="m-tabbar" id="mTabbar">
   <button data-drawer="left"><span class="ic">📋</span>任務</button>
   <button data-drawer="" class="on"><span class="ic">▶</span>舞台</button>
@@ -536,9 +557,9 @@ const state = {
   chat:{thinking:false, model:null},
 };
 const PROFILES = {
-  balanced:{label:'⚖ 均衡', hint:'Opus 4.8 規劃/覆核、Sonnet 建造、Haiku+GLM 輕量分流', map:{frontend:'sonnet',backend:'sonnet',test:'haiku',reviewer:'opus',researcher:'glm-5.1',strategist:'opus',synthesis:'sonnet'}},
+  balanced:{label:'⚖ 均衡', hint:'Opus 4.8 規劃/覆核、Sonnet 建造、Haiku+GLM 輕量分流', map:{frontend:'sonnet',backend:'sonnet',test:'haiku',reviewer:'opus',researcher:'glm-5.2',strategist:'opus',synthesis:'sonnet'}},
   quality:{ label:'★ 最強', hint:'盡量 Opus 4.8 / Sonnet,最高質但最食 quota', map:{frontend:'opus',backend:'opus',test:'sonnet',reviewer:'opus',researcher:'sonnet',strategist:'opus',synthesis:'opus'}},
-  economy:{ label:'$ 慳 quota', hint:'分流去 Codex / GLM / Haiku,慳返 Claude', map:{frontend:'gpt-5.5',backend:'sonnet',test:'haiku',reviewer:'sonnet',researcher:'glm-5.1',strategist:'sonnet',synthesis:'haiku'}},
+  economy:{ label:'$ 慳 quota', hint:'分流去 Codex / GLM / Haiku,慳返 Claude', map:{frontend:'gpt-5.5',backend:'sonnet',test:'haiku',reviewer:'sonnet',researcher:'glm-5.2',strategist:'sonnet',synthesis:'haiku'}},
 };
 const PRESETS = {
   code:[{key:'frontend',name:'Frontend Agent',role:'前端開發'},{key:'backend',name:'Backend Agent',role:'後端開發'},{key:'test',name:'Test Agent',role:'測試 / QA'},{key:'reviewer',name:'Reviewer Agent',role:'Reviewer 覆核'}],
@@ -602,6 +623,7 @@ function renderPipeStrip(run){
   if(vb)vb.style.display=paused?'':'none';
   if(db)db.style.display=reviewPaused?'':'none';
   const xb=$('#councilExecuteBtn');const planReady=!!(p&&p.mode==='council'&&p.councilPlanVersion>0&&!paused&&!reviewPaused);if(xb)xb.style.display=planReady?'':'none';
+  const nsb=$('#nextStepsBtn');if(nsb)nsb.style.display=dIsDone(run)?'':'none';
   const pp=run&&run.pendingPush;const pgEl=$('#pushGate');if(pgEl){const onGate=!!(pp&&['awaiting','pushing','failed'].includes(pp.status));pgEl.style.display=onGate?'inline-flex':'none';if(onGate){const lbl=$('#pushGateLabel');if(lbl)lbl.textContent=pp.status==='pushing'?'⬆️ Pushing…':(pp.status==='failed'?('⚠️ Push 失敗: '+(pp.branch||'')):('⬆️ 待 push: '+(pp.branch||'')));const cf=$('#pushConfirmBtn');if(cf){cf.disabled=pp.status==='pushing';cf.textContent=pp.status==='failed'?'🔁 再試':'⬆️ Confirm Push';}}}
   if(!p||!p.stages){ps.style.display='none';if(rb)rb.style.display='none';return;}
   ps.style.display='';
@@ -815,6 +837,94 @@ async function resumePipeline(){const run=focusedRun();if(!run){toast('未揀 pl
 async function approveCouncil(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}try{const r=await api('/api/runs/'+run.id+'/council/approve',{method:'POST',body:'{}'});toast('✅ 已批准 plan v'+r.approvedVersion+',生成人話講解中…');if(window.__mobileNav)window.__mobileNav.pulseDetail();}catch(e){toast('批准失敗:'+e.message,true);}}
 async function reviseCouncil(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}const note=prompt('想點改?(可留空,淨係叫議會就未解爭議再收斂一 round)')||'';try{const r=await api('/api/runs/'+run.id+'/council/revise',{method:'POST',body:JSON.stringify({note})});toast('✍️ 議會重跑 round '+(r.round||'')+' 共識…');}catch(e){toast('再改失敗:'+e.message,true);}}
 async function startDebate(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}try{await api('/api/runs/'+run.id+'/council/debate',{method:'POST',body:'{}'});toast('🥊 三模開始辯論收斂…');}catch(e){toast('開拗失敗:'+e.message,true);}}
+
+/* ───────── 下一步（run 完成後嘅收斂層）───────── */
+function dIsDone(r){if(!r)return false;const p=r.pipeline||{};if(p.councilReviewPaused||p.councilPaused)return false;return r.status==='complete'||r.status==='done';}
+function dVerdict(r){const p=r.pipeline||{};const stages=p.stages||[];let pass=0,fail=0;stages.forEach(s=>{if(s.status==='complete')pass++;else if(s.status==='failed'||s.status==='interrupted')fail++;});const fa=(r.agents||[]).filter(a=>a.status==='failed'||a.status==='interrupted').length;return{pass,fail:fail+fa,disputes:p.councilOpenDisputes||0};}
+function openNextStepsDesktop(force){
+  const r=focusedRun();if(!r){toast('未揀 plan',true);return;}
+  $('#nextStepsModal').classList.add('show');
+  $('#nsTitle').textContent='✨ 下一步 · '+(r.topic||'').replace(/^#+\s*/,'').slice(0,42);
+  const v=dVerdict(r);
+  $('#nsVerdict').innerHTML=`<span class="pill complete">✓ ${v.pass}</span>`+(v.fail?`<span class="pill failed">✕ ${v.fail}</span>`:'')+(v.disputes?`<span class="pill" style="border-color:var(--gold);color:var(--gold)">⚖ ${v.disputes} 未解</span>`:'');
+  $('#nsBody').innerHTML='<div class="empty">⏱ 總管收斂緊（約 15-40s,完成時通常已預熱 → 即出）…</div>';
+  api('/api/runs/'+r.id+'/next-steps'+(force?'?refresh=1':'')).then(data=>{
+    const rr=state.byId[r.id];if(rr)rr.nextSteps={gaps:data.gaps,suggestions:data.suggestions,generatedAt:data.generatedAt};
+    renderNextStepsDesktop(data);
+  }).catch(e=>{$('#nsBody').innerHTML='<div class="empty">收斂失敗:'+esc(e.message)+'<br><button class="btn ghost sm" style="margin-top:10px" data-ns-refresh>↻ 再試</button></div>';});
+}
+function closeNextSteps(){$('#nextStepsModal').classList.remove('show');}
+function renderNextStepsDesktop(data){
+  const gaps=data.gaps||[],sug=data.suggestions||[];let h='';
+  if(gaps.length){h+='<div class="ns-h">⚠️ 要補 / 風險</div>';gaps.forEach((g,i)=>h+=nsItemDesktop(g,true,'g'+i));}
+  if(sug.length){h+='<div class="ns-h" style="margin-top:14px">💡 建議下一步</div>';sug.forEach((s,i)=>h+=nsItemDesktop(s,false,'s'+i));}
+  if(!gaps.length&&!sug.length)h='<div class="empty">冇特別下一步,呢個 run 睇嚟收得幾齊 👍</div>';
+  $('#nsBody').innerHTML=h;
+}
+function nsItemDesktop(it,isGap,uid){
+  const a=it.action||{type:'none'};const doable=a.type&&a.type!=='none';
+  const sub=isGap?(it.detail||''):(it.rationale||'');
+  const seed=esc(it.discussSeed||it.title||'');const arg=esc(a.arg||'');
+  const doLbl={execute:'▶ 落實',revise:'✍️ 再改',mission:'🔧 開 mission',council:'🗳 開議會'}[a.type]||'▶ 做';
+  const tag=isGap?(it.severity==='fail'?'<span class="pill failed" style="font-size:10px">FAIL</span>':'<span class="pill" style="font-size:10px;border-color:var(--gold);color:var(--gold)">風險</span>'):'';
+  return `<div class="ns-item" id="ns-${uid}">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">${tag}<b style="font-size:14px">${esc(it.title)}</b></div>
+    ${sub?`<div class="muted" style="font-size:12.5px;line-height:1.5;margin-bottom:8px">${esc(sub)}</div>`:''}
+    <div class="row" style="gap:8px">
+      <button class="btn ghost sm" data-ns-discuss data-uid="${uid}" data-seed="${seed}">💬 傾</button>
+      ${doable?`<button class="btn go sm" data-ns-do data-type="${esc(a.type)}" data-arg="${arg}">${doLbl}</button>`:''}
+    </div>
+    <div class="ns-chat" id="nschat-${uid}" style="display:none"></div>
+  </div>`;
+}
+function dActionLabel(t){return {approve:'✅ 批准',debate:'🥊 開拗',execute:'▶ 落實',revise:'✍️ 再改',mission:'🔧 開 mission',council:'🗳 開議會',stop:'⏹ 停'}[t]||('▶ '+t);}
+function discussDesktop(uid,seed){
+  const box=$('#nschat-'+uid);if(!box)return;
+  box.style.display='';box.innerHTML='<div class="muted" style="font-size:12px">⏱ 總管諗緊…</div>';
+  api('/api/overseer',{method:'POST',body:JSON.stringify({message:seed,mode:'auto'})}).then(r=>{
+    let h='<div class="ns-reply">'+mdLite(r.reply||'(冇內容)')+'</div>';
+    if(r.action){h+='<div class="row" style="gap:8px;margin-top:8px"><button class="btn go sm" data-ns-do data-type="'+esc(r.action.type)+'" data-arg="'+esc(r.action.arg||'')+'">'+dActionLabel(r.action.type)+'</button></div>';}
+    box.innerHTML=h;
+  }).catch(e=>{box.innerHTML='<div style="font-size:12px;color:var(--red)">⚠️ '+esc(e.message)+'</div>';});
+}
+async function doNextStepDesktop(type,arg){
+  const r=focusedRun();
+  if(type==='execute'){closeNextSteps();executePlan();return;}
+  if(type==='approve'){closeNextSteps();approveCouncil();return;}
+  if(type==='debate'){closeNextSteps();startDebate();return;}
+  if(type==='revise'){if(!confirm('叫議會就呢點再收斂一 round?\n\n'+arg))return;try{await api('/api/runs/'+r.id+'/council/revise',{method:'POST',body:JSON.stringify({note:arg})});toast('✍️ 議會再收斂');closeNextSteps();}catch(e){toast(e.message,true);}return;}
+  if(type==='mission'){spawnMissionDesktop(arg);return;}
+  if(type==='council'){spawnCouncilDesktop(arg);return;}
+}
+function spawnMissionDesktop(brief){
+  const r=focusedRun();const proj=(r&&r.projectPath)||state.defaultProject||(state.projects[0]&&(state.projects[0].path||state.projects[0]))||'';
+  const b=prompt('開新 mission（喺 '+String(proj).split('/').pop()+'，research→build→review→fix）。確認 / 改 brief:',brief);
+  if(b===null||!b.trim())return;
+  const mv=(localStorage.getItem('swarm-build-model')||'codex|gpt-5.5').split('|');
+  api('/api/plans/run',{method:'POST',body:JSON.stringify({staged:true,taskBrief:b.trim(),projectPath:proj||undefined,deliveryMode:'code',cli:mv[0],model:mv[1]})}).then(rr=>{
+    toast('🔀 新 mission 開工!');if(rr.run){state.focus=rr.run.id;state.byId[rr.run.id]=rr.run;state.selAgent=null;}closeNextSteps();loadRuns();
+  }).catch(e=>toast(e.message,true));
+}
+function spawnCouncilDesktop(topic){
+  const t=prompt('開新三模議會,議題:',topic||'');if(t===null||!t.trim())return;
+  api('/api/runs',{method:'POST',body:JSON.stringify({topic:t.trim().slice(0,70),taskBrief:t.trim()})}).then(cr=>{
+    if(!cr.run){toast('開 run 失敗',true);return;}
+    return api('/api/runs/'+cr.run.id+'/council/start',{method:'POST',body:'{}'}).then(()=>{
+      toast('🗳 三模議會開波!');state.focus=cr.run.id;state.byId[cr.run.id]=cr.run;state.selAgent=null;closeNextSteps();loadRuns();
+    });
+  }).catch(e=>toast(e.message,true));
+}
+// 事件代理（index.html 係 IIFE scope,inline onclick 唔 work → 用 data-* delegation；modal DOM 喺 page load 已存在）
+(function initNextStepsDesktop(){
+  const modal=document.getElementById('nextStepsModal');if(!modal)return;
+  modal.addEventListener('click',(e)=>{
+    const t=e.target.closest('[data-ns-do],[data-ns-discuss],[data-ns-refresh],[data-ns-close]');if(!t)return;
+    if(t.hasAttribute('data-ns-close'))closeNextSteps();
+    else if(t.hasAttribute('data-ns-refresh'))openNextStepsDesktop(true);
+    else if(t.hasAttribute('data-ns-discuss'))discussDesktop(t.getAttribute('data-uid'),t.getAttribute('data-seed')||'');
+    else if(t.hasAttribute('data-ns-do'))doNextStepDesktop(t.getAttribute('data-type'),t.getAttribute('data-arg')||'');
+  });
+})();
 function executePlan(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}const row=$('#executePickRow');if(!row)return;const show=row.style.display==='none';row.style.display=show?'':'none';if(show)fillExecuteSelectors();}
 function fillExecuteSelectors(){[['exBuild','gpt-5.5'],['exReviewer','opus']].forEach(([sid,defModel])=>{const sel=$('#'+sid);if(!sel||sel._filled)return;sel._filled=true;state.models.forEach(m=>{const o=el('option');o.value=m.cli+'|'+m.model;o.textContent=m.short||m.label;if(m.model===defModel)o.selected=true;sel.appendChild(o);});});}
 async function confirmExecute(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}const pick=sid=>{const v=($('#'+sid).value||'').split('|');return{cli:v[0]||'claude',model:v[1]||'sonnet'};};const build=pick('exBuild');const rev=pick('exReviewer');if(!confirm('將議會終稿 plan 交 code pipeline 真正落手實作?\n建造='+build.model+'，覆核='+rev.model+'\n會喺 '+(run.projectPath||'')+' 改 code（build → review → fix）。'))return;try{const r=await api('/api/runs/'+run.id+'/council/execute',{method:'POST',body:JSON.stringify({model:build.model,perAgentModels:{frontend:build,backend:build,test:build,reviewer:rev,fixer:build}})});toast('▶ 落實 plan v'+r.executingVersion+' 開波，build→review→fix 跑緊…');$('#executePickRow').style.display='none';}catch(e){toast('落實失敗:'+e.message,true);}}
@@ -886,7 +996,7 @@ async function ensureChatRun(){let run=focusedRun();if(run&&run.id)return run.id
 async function sendChat(){const msg=$('#chatInput').value.trim();if(!msg){toast('寫低你想做乜先',true);return;}let runId;try{runId=await ensureChatRun();}catch(e){toast('開 session 失敗:'+e.message,true);return;}const body={message:msg,modelOverride:state.chat.model||state.defModel,projectPath:$('#chatProjSelect').value||''};$('#chatInput').value='';state.chat.thinking=true;renderChat();try{await api('/api/runs/'+runId+'/chat',{method:'POST',body:JSON.stringify(body)});}catch(e){state.chat.thinking=false;renderChat();toast('傾偈失敗:'+e.message,true);}}
 async function finalizeChat(){const run=focusedRun();if(!run){toast('未開始傾偈',true);return;}if(!confirm('將呢段傾偈定稿成 mission brief?之後可以撳「交議會」開三模議會。'))return;state.chat.thinking=true;renderChat();try{await api('/api/runs/'+run.id+'/chat/finalize',{method:'POST',body:'{}'});toast('定稿中…（10-40s）');}catch(e){state.chat.thinking=false;renderChat();toast('定稿失敗:'+e.message,true);}}
 function toggleCouncilPick(){const row=$('#councilPickRow');if(!row)return;const show=row.style.display==='none';row.style.display=show?'':'none';if(show)fillCouncilSelectors();}
-function fillCouncilSelectors(){[['csA','opus'],['csB','gpt-5.5'],['csC','glm-5.1']].forEach(([sid,defModel])=>{const sel=$('#'+sid);if(!sel||sel._filled)return;sel._filled=true;state.models.forEach(m=>{const o=el('option');o.value=m.cli+'|'+m.model;o.textContent=m.short||m.label;if(m.model===defModel)o.selected=true;sel.appendChild(o);});});fillTgUserSelector();}
+function fillCouncilSelectors(){[['csA','opus'],['csB','gpt-5.5'],['csC','glm-5.2']].forEach(([sid,defModel])=>{const sel=$('#'+sid);if(!sel||sel._filled)return;sel._filled=true;state.models.forEach(m=>{const o=el('option');o.value=m.cli+'|'+m.model;o.textContent=m.short||m.label;if(m.model===defModel)o.selected=true;sel.appendChild(o);});});fillTgUserSelector();}
 async function fillTgUserSelector(){const sel=$('#csUser');if(!sel||sel._filled)return;sel._filled=true;try{const r=await api('/api/tg-users');const saved=localStorage.getItem('swarm-tguser')||'';sel.innerHTML='<option value="">（預設 owner）</option>'+(r.users||[]).map(u=>{const key=u.username||u.name||u.chatId;const lbl=u.username?('@'+u.username):(u.name||u.chatId);return `<option value="${esc(key)}"${key===saved?' selected':''}>${esc(lbl)}</option>`;}).join('');}catch(e){}}
 async function startCouncilFromChat(){const run=focusedRun();if(!run){toast('未揀 run',true);return;}const pick=sid=>{const v=($('#'+sid).value||'').split('|');return{cli:v[0]||'claude',model:v[1]||'opus'};};const perAgentModels={council_a:pick('csA'),council_b:pick('csB'),council_c:pick('csC')};const tgUser=($('#csUser')&&$('#csUser').value)||'';if(tgUser)localStorage.setItem('swarm-tguser',tgUser);try{await api('/api/runs/'+run.id+'/council/start',{method:'POST',body:JSON.stringify({perAgentModels,tgUser})});toast(tgUser?('🗳 開波!通知→'+tgUser):'🗳 三模議會開波!');$('#councilPickRow').style.display='none';}catch(e){toast('開議會失敗:'+e.message,true);}}
 function renderTaskPicker(){const sel=$('#taskPicker');if(!sel)return;sel.innerHTML='<option value="">📂 任務檔…</option>'+state.tasks.map((t,i)=>`<option value="${i}">${t.source==='mission'?'◆ ':'• '}${esc(t.title)}</option>`).join('');}
@@ -934,6 +1044,7 @@ $('#councilApproveBtn').onclick=()=>approveCouncil();
 $('#councilReviseBtn').onclick=()=>reviseCouncil();
 $('#councilDebateBtn').onclick=()=>startDebate();
 $('#councilExecuteBtn').onclick=()=>executePlan();
+$('#nextStepsBtn').onclick=()=>openNextStepsDesktop();
 $('#pushConfirmBtn').onclick=()=>pushConfirm();
 $('#pushBranchBtn').onclick=()=>pushBranch();
 $('#pushProjectBtn').onclick=()=>pushProject();

@@ -6,7 +6,7 @@ const DEFAULT_ROUTE = {
   contextScout: null,
   planner: 'gpt-5.5',
   coding: 'gpt-5.5',
-  codingFallback: 'glm-5.1',
+  codingFallback: 'glm-5.2',
   review: 'opus',
   refill: 'opus',
   finalSummary: 'opus',
@@ -351,7 +351,7 @@ function modelForRole(role, route) {
   if (role.group === 'review') return route.models.review;
   if (role.key === 'security-auditor') return route.models.review;
   if (role.group === 'risk') return route.models.refill || 'sonnet';
-  if (role.group === 'budget' || role.group === 'monitoring') return 'glm-5.1';
+  if (role.group === 'budget' || role.group === 'monitoring') return 'glm-5.2';
   if (role.group === 'quality') return route.models.refill || route.models.review;
   if (role.group === 'delivery') return route.models.finalSummary || route.models.refill || 'opus';
   return route.models.coding;
@@ -393,7 +393,7 @@ function buildIntelligence(planText, options = {}) {
 function normalizeModel(model) {
   if (!model) return model;
   const value = String(model).toLowerCase();
-  if (value === 'glm') return 'glm-5.1';
+  if (value === 'glm') return 'glm-5.2';
   if (value === 'claude') return 'opus';
   return value;
 }

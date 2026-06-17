@@ -109,7 +109,7 @@ function readIterationVerdict(missionDir, subPhase, iterIdx, dirName = 'review')
 }
 
 function getCodingFallbackModel(mission) {
-  return (mission.models && mission.models.codingFallback) || 'glm-5.1';
+  return (mission.models && mission.models.codingFallback) || 'glm-5.2';
 }
 
 function selectInnerPhaseModel(mission, phase, iter) {

@@ -1,5 +1,5 @@
 // Mission Controller v2 — handoff-driven multi-phase pipeline
-//   coding (GLM 5.1 default) → review (Opus + guidelines) → refill (Opus)
+//   coding (GLM 5.2 default) → review (Opus + guidelines) → refill (Opus)
 // New missions get a display workspace under <targetProject>/missions/<plan-slug>/.
 // State persisted to disk so swarm-server restart doesn't lose progress.
 
@@ -604,7 +604,7 @@ function createMissionFromPlan(opts = {}) {
     requestedModels: {
       contextScout: (models && models.contextScout) || (models && models.planner) || 'gpt-5.5',
       coding: (models && models.coding) || 'gpt-5.5',
-      codingFallback: (models && models.codingFallback) || 'glm-5.1',
+      codingFallback: (models && models.codingFallback) || 'glm-5.2',
       refill: (models && models.refill) || 'opus',
       review: (models && models.review) || 'opus',
       planner: (models && models.planner) || 'gpt-5.5',
