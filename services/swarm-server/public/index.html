@@ -395,7 +395,7 @@ canvas#office{display:block;width:100%;height:480px;image-rendering:pixelated}
 
       <div class="hero" id="chatPanel" style="margin-top:10px">
         <div class="hero-head" id="chatHead">
-          <div class="ht"><span class="glyph">💬</span>定向幕僚 <span class="hint" style="margin:0">— 同單一 model 傾掂方向 → 定稿 → 交三模議會</span></div>
+          <div class="ht"><span class="glyph">💬</span>定向幕僚 <span class="hint" style="margin:0">— 同單一 model 傾掂方向 → 定稿 → 交 AI 聯合國（三模議會）</span></div>
           <button class="btn ghost sm" id="chatToggle">收起</button>
         </div>
         <div class="hero-body" id="chatBody">
@@ -409,14 +409,14 @@ canvas#office{display:block;width:100%;height:480px;image-rendering:pixelated}
             <textarea class="task" id="chatInput" style="min-height:46px;flex:1" placeholder="例如:我想 review orca-platform-mvp 個 grading 流程,目標係搵出可以改善嘅地方…（Cmd/Ctrl+Enter 送出）"></textarea>
             <button class="btn go" id="chatSendBtn">▶ 傾</button>
             <button class="btn ghost sm" id="chatFinalizeBtn" title="將傾偈結論固化成 mission brief">✓ 定稿</button>
-            <button class="btn sm" id="chatToCouncilBtn" style="display:none" title="用定稿 brief 開三模議會">🗳 交議會</button>
+            <button class="btn sm" id="chatToCouncilBtn" style="display:none" title="用定稿 brief 開 AI 聯合國（三模議會）">🗳 交聯合國</button>
           </div>
           <div id="councilPickRow" class="row" style="display:none;margin-top:8px;align-items:flex-end">
             <div class="fldwrap"><label>議員 A</label><select class="fld" id="csA"></select></div>
             <div class="fldwrap"><label>議員 B</label><select class="fld" id="csB"></select></div>
             <div class="fldwrap"><label>議員 C</label><select class="fld" id="csC"></select></div>
             <div class="fldwrap"><label>📣 通知 TG</label><select class="fld" id="csUser"></select></div>
-            <button class="btn go sm" id="councilGoBtn">🗳 開議會</button>
+            <button class="btn go sm" id="councilGoBtn">🗳 開聯合國</button>
           </div>
         </div>
       </div>
@@ -450,8 +450,9 @@ canvas#office{display:block;width:100%;height:480px;image-rendering:pixelated}
         <div id="executePickRow" class="row" style="display:none;padding:8px 14px;border-bottom:1px solid var(--line);align-items:flex-end;gap:10px">
           <div class="fldwrap"><label>建造 model</label><select class="fld" id="exBuild"></select></div>
           <div class="fldwrap"><label>覆核 model</label><select class="fld" id="exReviewer"></select></div>
+          <div class="fldwrap"><label>驗證 model</label><select class="fld" id="exVerifier"></select></div>
           <button class="btn go sm" id="executeGoBtn">▶ 確認落實</button>
-          <span class="hint" style="margin:0">build agent（前/後/測）用建造 model；reviewer 用覆核 model</span>
+          <span class="hint" id="executePreview" style="margin:0">build agent（前/後/DB/測）用建造 model；reviewer / verifier 分開把關</span>
         </div>
         <canvas id="office"></canvas>
       </div>
@@ -565,7 +566,7 @@ const PRESETS = {
   code:[{key:'frontend',name:'Frontend Agent',role:'前端開發'},{key:'backend',name:'Backend Agent',role:'後端開發'},{key:'test',name:'Test Agent',role:'測試 / QA'},{key:'reviewer',name:'Reviewer Agent',role:'Reviewer 覆核'}],
   thinking:[{key:'researcher',name:'Research Agent',role:'研究整理'},{key:'strategist',name:'Strategy Agent',role:'策略收斂'},{key:'synthesis',name:'Synthesis Agent',role:'文字交付'}],
 };
-const STATUS_LABEL={pending:'待命',running:'工作中',completed:'已完成',failed:'失敗',interrupted:'已中斷'};
+const STATUS_LABEL={pending:'待命',running:'工作中',completed:'已完成',failed:'失敗',interrupted:'已中斷',queued:'排隊中',done:'已完成',complete:'已完成',needs_attention:'要處理'};
 
 async function api(path,opts){
   const r=await fetch(path,Object.assign({headers:{'Content-Type':'application/json'}},opts||{}));
@@ -599,11 +600,14 @@ function renderBoard(){
     const running=(r.runningAgents||0)>0||r.status==='executing';
     const card=el('div','plan-card'+(r.id===state.focus?' focused':'')+(running?' running':''));
     const st=r.status||'active';
-    card.innerHTML=`<div class="pt">${esc(r.topic||'Untitled plan')}</div>
-      <div class="plan-meta">
-        <span class="pill ${running?'run':st}">${running?'● live':esc(st)}</span>
-        <span class="pill">${r.agentCount||0} agents</span>
-        <span class="pill">${r.sessionCount||0} sess</span>
+	    card.innerHTML=`<div class="pt">${esc(r.topic||'Untitled plan')}</div>
+	      <div class="plan-meta">
+	        <span class="pill ${running?'run':st}">${running?'● live':esc(st)}</span>
+	        ${r.ownerUser?`<span class="pill">👤 ${esc(r.ownerUser)}</span>`:''}
+	        ${r.verifyVerdict?`<span class="pill ${r.verifyVerdict==='PASS'?'complete':'failed'}">VERIFY ${esc(r.verifyVerdict)}</span>`:''}
+	        ${st==='queued'?`<span class="pill" title="${esc(r.queuedReason||'')}">⏳ queue${r.queuedBehindRunId?' behind':''}</span>`:''}
+	        <span class="pill">${r.agentCount||0} agents</span>
+	        <span class="pill">${r.sessionCount||0} sess</span>
         ${r.dynamicAgentSet?`<span class="pill">${esc(r.dynamicAgentSet)}</span>`:''}
         <span class="pill" data-cancel="1" title="取消 / 移除呢個 mission" style="cursor:pointer;margin-left:auto;color:var(--red);border-color:color-mix(in srgb,var(--red) 45%,transparent)">${st==='queued'?'✕ 取消排隊':'✕ 移除'}</span>
       </div>`;
@@ -671,14 +675,19 @@ function renderInspector(){
   const box=$('#detailBox');const f=state.selAgent?findAgent(state.selAgent):null;
   if(!f){box.innerHTML='<div class="empty">揀一個 agent（map 入面 click 個角色,或下面卡片）睇 live log、model、完成度。</div>';return;}
   const a=f.a,mm=modelMeta(a.cli,a.model);const tail=state.logBuf[a.id]!=null?state.logBuf[a.id]:(a.logs||'');
+  const ctx=a.contextSources||{};const mem=ctx.memoryPack||{};const skills=(a.skillKeys||[]).join(', ')||'none';
   box.innerHTML=`<div class="detail-head"><div class="dn">${esc(a.name)}</div><div class="dr">${esc(a.role||'')} · ${esc(a.skill||'')}</div>
       <div class="kv">
         <span class="pill"><span style="width:8px;height:8px;border-radius:50%;display:inline-block;background:${mm.color}"></span>&nbsp;${esc(a.cli||'claude')}${a.model?' · '+esc(a.model):''}</span>
         <span class="pill ${a.status==='running'?'run':(a.status==='completed'?'complete':a.status)}">${esc(STATUS_LABEL[a.status]||a.status)}</span>
         <span class="pill" data-since="${a.startedAt||''}" data-end="${a.completedAt||''}">⏱ ${a.startedAt?fmtElapsed(a.startedAt,a.completedAt):'--'}</span>
+        <span class="pill" title="${esc(skills)}">Skills ${(a.skillKeys||[]).length}</span>
+        <span class="pill" title="included: ${esc((mem.included||[]).join(', ')||'-')} | missing: ${esc((mem.missing||[]).join(', ')||'-')}">Memory ${(mem.included||[]).length||0}/${((mem.included||[]).length+(mem.missing||[]).length)||0}</span>
+        <span class="pill">Plan v${esc(a.inputPlanVersion||0)}</span>
         ${(a.status==='interrupted'||a.status==='failed')?`<span class="pill" style="cursor:pointer;color:var(--amber);border-color:color-mix(in srgb,var(--amber) 40%,transparent)" data-rerun="${a.id}">↻ 重跑</span>`:''}
         <span class="logtoggle ${state.logMd?'on':''}" id="logToggle" title="切換格式化 / 原文">${state.logMd?'✦ 格式化':'⟨⟩ 原文'}</span>
-      </div><div class="aaction" style="margin-top:9px">${esc(a.action||'')}</div></div>
+      </div><div class="aaction" style="margin-top:9px">${esc(a.action||'')}</div>
+      <div class="hint" style="margin:7px 0 0">context: chat ${esc(ctx.chatContextCount||0)} · artifacts ${(ctx.artifactsPassed||[]).length||0} · output artifacts ${(a.artifactIds||[]).length||0}</div></div>
     <div class="logbox ${state.logMd?'md':''}" id="logbox">${state.logMd?mdLite(tail):(esc(tail)||'<span class="muted">未有輸出…</span>')}</div>`;
   const rb=box.querySelector('[data-rerun]');if(rb)rb.onclick=()=>rerunAgent(f.run.id,a.id);
   const tg=box.querySelector('#logToggle');if(tg)tg.onclick=()=>{state.logMd=!state.logMd;try{localStorage.setItem('swarm-log-md',state.logMd?'1':'0');}catch(e){}renderInspector();};
@@ -839,7 +848,7 @@ async function reviseCouncil(){const run=focusedRun();if(!run){toast('未揀 pla
 async function startDebate(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}try{await api('/api/runs/'+run.id+'/council/debate',{method:'POST',body:'{}'});toast('🥊 三模開始辯論收斂…');}catch(e){toast('開拗失敗:'+e.message,true);}}
 
 /* ───────── 下一步（run 完成後嘅收斂層）───────── */
-function dIsDone(r){if(!r)return false;const p=r.pipeline||{};if(p.councilReviewPaused||p.councilPaused)return false;return r.status==='complete'||r.status==='done';}
+function dIsDone(r){if(!r)return false;const p=r.pipeline||{};if(p.councilReviewPaused||p.councilPaused)return true;const stages=p.stages||[];const noRunning=!stages.some(s=>s.status==='running'||s.status==='pending');return ['complete','done','needs_attention','stopped'].includes(r.status)||((p.current||0)>=stages.length&&noRunning);}
 function dVerdict(r){const p=r.pipeline||{};const stages=p.stages||[];let pass=0,fail=0;stages.forEach(s=>{if(s.status==='complete')pass++;else if(s.status==='failed'||s.status==='interrupted')fail++;});const fa=(r.agents||[]).filter(a=>a.status==='failed'||a.status==='interrupted').length;return{pass,fail:fail+fa,disputes:p.councilOpenDisputes||0};}
 function openNextStepsDesktop(force){
   const r=focusedRun();if(!r){toast('未揀 plan',true);return;}
@@ -865,7 +874,7 @@ function nsItemDesktop(it,isGap,uid){
   const a=it.action||{type:'none'};const doable=a.type&&a.type!=='none';
   const sub=isGap?(it.detail||''):(it.rationale||'');
   const seed=esc(it.discussSeed||it.title||'');const arg=esc(a.arg||'');
-  const doLbl={execute:'▶ 落實',revise:'✍️ 再改',mission:'🔧 開 mission',council:'🗳 開議會'}[a.type]||'▶ 做';
+  const doLbl={execute:'▶ 落實',revise:'✍️ 再改',mission:'🔧 開 mission',council:'🗳 開聯合國'}[a.type]||'▶ 做';
   const tag=isGap?(it.severity==='fail'?'<span class="pill failed" style="font-size:10px">FAIL</span>':'<span class="pill" style="font-size:10px;border-color:var(--gold);color:var(--gold)">風險</span>'):'';
   return `<div class="ns-item" id="ns-${uid}">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px">${tag}<b style="font-size:14px">${esc(it.title)}</b></div>
@@ -877,7 +886,7 @@ function nsItemDesktop(it,isGap,uid){
     <div class="ns-chat" id="nschat-${uid}" style="display:none"></div>
   </div>`;
 }
-function dActionLabel(t){return {approve:'✅ 批准',debate:'🥊 開拗',execute:'▶ 落實',revise:'✍️ 再改',mission:'🔧 開 mission',council:'🗳 開議會',stop:'⏹ 停'}[t]||('▶ '+t);}
+function dActionLabel(t){return {approve:'✅ 批准',debate:'🥊 開拗',execute:'▶ 落實',revise:'✍️ 再改',mission:'🔧 開 mission',council:'🗳 開聯合國',stop:'⏹ 停'}[t]||('▶ '+t);}
 function discussDesktop(uid,seed){
   const box=$('#nschat-'+uid);if(!box)return;
   box.style.display='';box.innerHTML='<div class="muted" style="font-size:12px">⏱ 總管諗緊…</div>';
@@ -901,16 +910,18 @@ function spawnMissionDesktop(brief){
   const b=prompt('開新 mission（喺 '+String(proj).split('/').pop()+'，research→build→review→fix）。確認 / 改 brief:',brief);
   if(b===null||!b.trim())return;
   const mv=(localStorage.getItem('swarm-build-model')||'codex|gpt-5.5').split('|');
-  api('/api/plans/run',{method:'POST',body:JSON.stringify({staged:true,taskBrief:b.trim(),projectPath:proj||undefined,deliveryMode:'code',cli:mv[0],model:mv[1]})}).then(rr=>{
-    toast('🔀 新 mission 開工!');if(rr.run){state.focus=rr.run.id;state.byId[rr.run.id]=rr.run;state.selAgent=null;}closeNextSteps();loadRuns();
+  const tgUser=localStorage.getItem('swarm-tguser')||'';
+  api('/api/plans/run',{method:'POST',body:JSON.stringify({staged:true,taskBrief:b.trim(),projectPath:proj||undefined,deliveryMode:'code',cli:mv[0],model:mv[1],tgUser,ownerUser:tgUser||undefined,notifyUser:tgUser||undefined})}).then(rr=>{
+    toast(rr.queued?('⏳ 新 mission 已排隊 #'+(rr.position||'')):'🔀 新 mission 開工!');if(rr.run){state.focus=rr.run.id;state.byId[rr.run.id]=rr.run;state.selAgent=null;}closeNextSteps();loadRuns();
   }).catch(e=>toast(e.message,true));
 }
 function spawnCouncilDesktop(topic){
-  const t=prompt('開新三模議會,議題:',topic||'');if(t===null||!t.trim())return;
-  api('/api/runs',{method:'POST',body:JSON.stringify({topic:t.trim().slice(0,70),taskBrief:t.trim()})}).then(cr=>{
+  const t=prompt('開新 AI 聯合國（三模議會）,議題:',topic||'');if(t===null||!t.trim())return;
+  const tgUser=localStorage.getItem('swarm-tguser')||'';
+  api('/api/runs',{method:'POST',body:JSON.stringify({topic:t.trim().slice(0,70),taskBrief:t.trim(),tgUser,ownerUser:tgUser||undefined,notifyUser:tgUser||undefined})}).then(cr=>{
     if(!cr.run){toast('開 run 失敗',true);return;}
     return api('/api/runs/'+cr.run.id+'/council/start',{method:'POST',body:'{}'}).then(()=>{
-      toast('🗳 三模議會開波!');state.focus=cr.run.id;state.byId[cr.run.id]=cr.run;state.selAgent=null;closeNextSteps();loadRuns();
+      toast('🗳 AI 聯合國開波!');state.focus=cr.run.id;state.byId[cr.run.id]=cr.run;state.selAgent=null;closeNextSteps();loadRuns();
     });
   }).catch(e=>toast(e.message,true));
 }
@@ -925,9 +936,23 @@ function spawnCouncilDesktop(topic){
     else if(t.hasAttribute('data-ns-do'))doNextStepDesktop(t.getAttribute('data-type'),t.getAttribute('data-arg')||'');
   });
 })();
-function executePlan(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}const row=$('#executePickRow');if(!row)return;const show=row.style.display==='none';row.style.display=show?'':'none';if(show)fillExecuteSelectors();}
-function fillExecuteSelectors(){[['exBuild','gpt-5.5'],['exReviewer','opus']].forEach(([sid,defModel])=>{const sel=$('#'+sid);if(!sel||sel._filled)return;sel._filled=true;state.models.forEach(m=>{const o=el('option');o.value=m.cli+'|'+m.model;o.textContent=m.short||m.label;if(m.model===defModel)o.selected=true;sel.appendChild(o);});});}
-async function confirmExecute(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}const pick=sid=>{const v=($('#'+sid).value||'').split('|');return{cli:v[0]||'claude',model:v[1]||'sonnet'};};const build=pick('exBuild');const rev=pick('exReviewer');if(!confirm('將議會終稿 plan 交 code pipeline 真正落手實作?\n建造='+build.model+'，覆核='+rev.model+'\n會喺 '+(run.projectPath||'')+' 改 code（build → review → fix）。'))return;try{const r=await api('/api/runs/'+run.id+'/council/execute',{method:'POST',body:JSON.stringify({model:build.model,perAgentModels:{frontend:build,backend:build,test:build,reviewer:rev,fixer:build}})});toast('▶ 落實 plan v'+r.executingVersion+' 開波，build→review→fix 跑緊…');$('#executePickRow').style.display='none';}catch(e){toast('落實失敗:'+e.message,true);}}
+function executePlan(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}const row=$('#executePickRow');if(!row)return;const show=row.style.display==='none';row.style.display=show?'':'none';if(show){fillExecuteSelectors();renderExecutePreview();}}
+function fillExecuteSelectors(){[['exBuild','gpt-5.5'],['exReviewer','opus'],['exVerifier','sonnet']].forEach(([sid,defModel])=>{const sel=$('#'+sid);if(!sel||sel._filled)return;sel._filled=true;state.models.forEach(m=>{const o=el('option');o.value=m.cli+'|'+m.model;o.textContent=m.short||m.label;if(m.model===defModel)o.selected=true;sel.appendChild(o);});sel.onchange=renderExecutePreview;});}
+function renderExecutePreview(){const run=focusedRun();const elp=$('#executePreview');if(!run||!elp)return;const p=run.pipeline||{};elp.textContent=`plan v${p.councilPlanVersion||'?'} · ${run.ownerUser||'owner'} · build→review→fix→verify · 同 project 忙緊會自動排隊`;}
+async function confirmExecute(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}const pick=sid=>{const v=($('#'+sid).value||'').split('|');return{cli:v[0]||'claude',model:v[1]||'sonnet'};};const build=pick('exBuild');const rev=pick('exReviewer');const ver=pick('exVerifier');const p=run.pipeline||{};const agents=['frontend','backend','database(if needed)','test','reviewer','fixer','verifier'].join(', ');const msg=[
+  '將議會終稿 plan 交 code pipeline 真正落手實作?',
+  '',
+  'Project: '+(run.projectPath||''),
+  'Owner: '+(run.ownerUser||'owner')+' / Notify: '+(run.notifyUser||run.ownerUser||'owner'),
+  'Plan: v'+(p.councilPlanVersion||'?'),
+  'Agents: '+agents,
+  'Build/Fix: '+build.model,
+  'Review: '+rev.model+'（review gate strict）',
+  'Verify: '+ver.model+'（VERIFY PASS 先算完成）',
+  'Queue: 同 project 有 code mission 跑緊就自動排隊',
+  '',
+  '有 ESCALATE 未拍板會被 server 擋住。'
+].join('\n');if(!confirm(msg))return;try{const payload={model:build.model,perAgentModels:{frontend:build,backend:build,database:build,test:build,fixer:build,reviewer:rev,verifier:ver}};const r=await api('/api/runs/'+run.id+'/council/execute',{method:'POST',body:JSON.stringify(payload)});toast(r.queued?('⏳ 已排隊 #'+(r.position||'')):'▶ 落實 plan v'+r.executingVersion+' 開波，build→review→fix→verify 跑緊…');$('#executePickRow').style.display='none';}catch(e){toast('落實失敗:'+e.message,true);}}
 // ─── 任務一:Push gate（dashboard 側,同 Telegram 共用同一 run.pendingPush）───
 async function pushConfirm(){const run=focusedRun();if(!run||!run.pendingPush){toast('冇待確認 push',true);return;}const pp=run.pendingPush;if(!confirm('Push 上 GitHub?\nProject: '+String(pp.project||'').split('/').pop()+'\nBranch: '+pp.branch+'\n（push 去生產線,確認清楚）'))return;try{await api('/api/runs/'+run.id+'/push',{method:'POST',body:JSON.stringify({confirm:true})});toast('⬆️ Push 緊…');}catch(e){toast('Push 失敗:'+e.message,true);}}
 async function pushBranch(){const run=focusedRun();if(!run||!run.pendingPush){toast('冇待確認 push',true);return;}const b=prompt('Push 去邊個 branch?',run.pendingPush.branch||'feature/mvp-sprint');if(b===null)return;const branch=b.trim();if(!branch){toast('branch 唔可以空',true);return;}try{await api('/api/runs/'+run.id+'/push/retarget',{method:'POST',body:JSON.stringify({branch})});toast('🌿 已轉 branch: '+branch);}catch(e){toast('改 branch 失敗:'+e.message,true);}}
@@ -945,15 +970,16 @@ function profilePerAgent(){
 async function runPlan(){
   const task=$('#taskInput').value.trim();if(!task){toast('請先寫低任務內容',true);$('#taskInput').focus();return;}
   const proj=$('#projSelect').value||state.defaultProject;
+  const tgUser=localStorage.getItem('swarm-tguser')||'';
   let body;
   if(state.staged){
-    body={staged:true,taskBrief:task,projectPath:proj,deliveryMode:state.mode,model:state.defModel.model,cli:state.defModel.cli,perAgentModels:profilePerAgent()};
+    body={staged:true,taskBrief:task,projectPath:proj,deliveryMode:state.mode,model:state.defModel.model,cli:state.defModel.cli,perAgentModels:profilePerAgent(),tgUser,ownerUser:tgUser||undefined,notifyUser:tgUser||undefined};
   }else{
     const agents=buildAgentsPayload();if(!agents.length){toast('最少揀一個 sub-agent',true);return;}
-    body={taskBrief:task,projectPath:proj,deliveryMode:state.mode,cli:state.defModel.cli,model:state.defModel.model,agents};
+    body={taskBrief:task,projectPath:proj,deliveryMode:state.mode,cli:state.defModel.cli,model:state.defModel.model,agents,tgUser,ownerUser:tgUser||undefined,notifyUser:tgUser||undefined};
   }
   const btn=$('#runBtn');btn.disabled=true;btn.textContent='啟動中…';
-  try{const r=await api('/api/plans/run',{method:'POST',body:JSON.stringify(body)});toast(state.staged?'🔀 分波 pipeline 已啟動':'🚀 Plan 已啟動:'+(r.run.topic||''));state.focus=r.run.id;state.byId[r.run.id]=r.run;state.selAgent=null;$('#taskInput').value='';await loadRuns();}
+  try{const r=await api('/api/plans/run',{method:'POST',body:JSON.stringify(body)});toast(r.queued?('⏳ 已排隊 #'+(r.position||'')):(state.staged?'🔀 分波 pipeline 已啟動':'🚀 Plan 已啟動:'+(r.run.topic||'')));state.focus=r.run.id;state.byId[r.run.id]=r.run;state.selAgent=null;$('#taskInput').value='';await loadRuns();}
   catch(e){toast('啟動失敗:'+e.message,true);}finally{btn.disabled=false;btn.textContent='▶ RUN';}
 }
 
@@ -992,13 +1018,13 @@ function renderChat(){
   const cb=$('#chatToCouncilBtn');if(cb)cb.style.display=(run&&((run.chatThread&&run.chatThread.length)||run.missionBrief))?'':'none';
 }
 function ingestChatMessage(d){const run=state.byId[d.runId];if(run){run.chatThread=run.chatThread||[];if(!run.chatThread.find(x=>x.id===d.message.id))run.chatThread.push(d.message);}if(d.runId===state.focus){state.chat.thinking=false;renderChat();}}
-async function ensureChatRun(){let run=focusedRun();if(run&&run.id)return run.id;const proj=$('#chatProjSelect').value||undefined;const r=await api('/api/runs',{method:'POST',body:JSON.stringify({topic:'定向幕僚 Session',seed:false,projectPath:proj})});state.focus=r.run.id;state.byId[r.run.id]=r.run;await loadRuns();return r.run.id;}
+async function ensureChatRun(){let run=focusedRun();if(run&&run.id)return run.id;const proj=$('#chatProjSelect').value||undefined;const tgUser=localStorage.getItem('swarm-tguser')||'';const r=await api('/api/runs',{method:'POST',body:JSON.stringify({topic:'定向幕僚 Session',seed:false,projectPath:proj,tgUser,ownerUser:tgUser||undefined,notifyUser:tgUser||undefined})});state.focus=r.run.id;state.byId[r.run.id]=r.run;await loadRuns();return r.run.id;}
 async function sendChat(){const msg=$('#chatInput').value.trim();if(!msg){toast('寫低你想做乜先',true);return;}let runId;try{runId=await ensureChatRun();}catch(e){toast('開 session 失敗:'+e.message,true);return;}const body={message:msg,modelOverride:state.chat.model||state.defModel,projectPath:$('#chatProjSelect').value||''};$('#chatInput').value='';state.chat.thinking=true;renderChat();try{await api('/api/runs/'+runId+'/chat',{method:'POST',body:JSON.stringify(body)});}catch(e){state.chat.thinking=false;renderChat();toast('傾偈失敗:'+e.message,true);}}
-async function finalizeChat(){const run=focusedRun();if(!run){toast('未開始傾偈',true);return;}if(!confirm('將呢段傾偈定稿成 mission brief?之後可以撳「交議會」開三模議會。'))return;state.chat.thinking=true;renderChat();try{await api('/api/runs/'+run.id+'/chat/finalize',{method:'POST',body:'{}'});toast('定稿中…（10-40s）');}catch(e){state.chat.thinking=false;renderChat();toast('定稿失敗:'+e.message,true);}}
+async function finalizeChat(){const run=focusedRun();if(!run){toast('未開始傾偈',true);return;}if(!confirm('將呢段傾偈定稿成 mission brief?之後可以撳「交聯合國」開 AI 聯合國（三模議會）。'))return;state.chat.thinking=true;renderChat();try{await api('/api/runs/'+run.id+'/chat/finalize',{method:'POST',body:'{}'});toast('定稿中…（10-40s）');}catch(e){state.chat.thinking=false;renderChat();toast('定稿失敗:'+e.message,true);}}
 function toggleCouncilPick(){const row=$('#councilPickRow');if(!row)return;const show=row.style.display==='none';row.style.display=show?'':'none';if(show)fillCouncilSelectors();}
 function fillCouncilSelectors(){[['csA','opus'],['csB','gpt-5.5'],['csC','glm-5.2']].forEach(([sid,defModel])=>{const sel=$('#'+sid);if(!sel||sel._filled)return;sel._filled=true;state.models.forEach(m=>{const o=el('option');o.value=m.cli+'|'+m.model;o.textContent=m.short||m.label;if(m.model===defModel)o.selected=true;sel.appendChild(o);});});fillTgUserSelector();}
 async function fillTgUserSelector(){const sel=$('#csUser');if(!sel||sel._filled)return;sel._filled=true;try{const r=await api('/api/tg-users');const saved=localStorage.getItem('swarm-tguser')||'';sel.innerHTML='<option value="">（預設 owner）</option>'+(r.users||[]).map(u=>{const key=u.username||u.name||u.chatId;const lbl=u.username?('@'+u.username):(u.name||u.chatId);return `<option value="${esc(key)}"${key===saved?' selected':''}>${esc(lbl)}</option>`;}).join('');}catch(e){}}
-async function startCouncilFromChat(){const run=focusedRun();if(!run){toast('未揀 run',true);return;}const pick=sid=>{const v=($('#'+sid).value||'').split('|');return{cli:v[0]||'claude',model:v[1]||'opus'};};const perAgentModels={council_a:pick('csA'),council_b:pick('csB'),council_c:pick('csC')};const tgUser=($('#csUser')&&$('#csUser').value)||'';if(tgUser)localStorage.setItem('swarm-tguser',tgUser);try{await api('/api/runs/'+run.id+'/council/start',{method:'POST',body:JSON.stringify({perAgentModels,tgUser})});toast(tgUser?('🗳 開波!通知→'+tgUser):'🗳 三模議會開波!');$('#councilPickRow').style.display='none';}catch(e){toast('開議會失敗:'+e.message,true);}}
+async function startCouncilFromChat(){const run=focusedRun();if(!run){toast('未揀 run',true);return;}const pick=sid=>{const v=($('#'+sid).value||'').split('|');return{cli:v[0]||'claude',model:v[1]||'opus'};};const perAgentModels={council_a:pick('csA'),council_b:pick('csB'),council_c:pick('csC')};const tgUser=($('#csUser')&&$('#csUser').value)||'';if(tgUser)localStorage.setItem('swarm-tguser',tgUser);try{await api('/api/runs/'+run.id+'/council/start',{method:'POST',body:JSON.stringify({perAgentModels,tgUser})});toast(tgUser?('🗳 聯合國開波!通知→'+tgUser):'🗳 AI 聯合國開波!');$('#councilPickRow').style.display='none';}catch(e){toast('開聯合國失敗:'+e.message,true);}}
 function renderTaskPicker(){const sel=$('#taskPicker');if(!sel)return;sel.innerHTML='<option value="">📂 任務檔…</option>'+state.tasks.map((t,i)=>`<option value="${i}">${t.source==='mission'?'◆ ':'• '}${esc(t.title)}</option>`).join('');}
 
 // ─── theme ───
@@ -1024,7 +1050,7 @@ socket.on('council-paused',d=>{const run=state.byId[d.runId];if(run&&run.pipelin
 socket.on('council-review-paused',d=>{const run=state.byId[d.runId];if(run&&run.pipeline)run.pipeline.councilReviewPaused=true;pushFeed('art','🔎',`三模獨立 review 完(${d.reviewCount}份),待你開拗`);if(d.runId===state.focus)scheduleRender();toast('🔎 三模 review 完,睇齊三份再撳「開始拗」');});
 socket.on('chat-message',d=>ingestChatMessage(d));
 socket.on('chat-thinking',d=>{if(d.runId===state.focus){state.chat.thinking=!!d.on;const tm=$('#chatThinkModel');if(tm)tm.textContent=esc(d.model||'');const tk=$('#chatThinking');if(tk)tk.style.display=d.on?'':'none';}});
-socket.on('chat-finalized',d=>{if(d.error){toast('定稿失敗:'+d.error,true);if(d.runId===state.focus){state.chat.thinking=false;renderChat();}return;}const run=state.byId[d.runId];if(run&&d.brief)run.missionBrief=d.brief;toast('📋 Mission brief 已定稿,可撳「交議會」');if(d.runId===state.focus){state.chat.thinking=false;renderChat();}});
+socket.on('chat-finalized',d=>{if(d.error){toast('定稿失敗:'+d.error,true);if(d.runId===state.focus){state.chat.thinking=false;renderChat();}return;}const run=state.byId[d.runId];if(run&&d.brief)run.missionBrief=d.brief;toast('📋 Mission brief 已定稿,可撳「交聯合國」');if(d.runId===state.focus){state.chat.thinking=false;renderChat();}});
 socket.on('debate-message',d=>{pushFeed('debate','⇄',`<b>${esc(d.from)}</b> → <b>${esc(d.to)}</b> 挑戰`);if(d.run)ingestRun(d.run);scheduleRender();});
 socket.on('agent-proposal',d=>{if(d.run)ingestRun(d.run);scheduleRender();});
 socket.on('persona-added',d=>{if(d.run)ingestRun(d.run);scheduleRender();});

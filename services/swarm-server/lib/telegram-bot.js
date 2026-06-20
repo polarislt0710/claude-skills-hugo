@@ -11,7 +11,7 @@
 //
 // /mission and /council flow: Opus 先完善 prompt → 過目 preview →
 //   ✅ 用完善版 / ✍️ 再俾意見完善（Opus 按意見再改，可無限重複）/ ↩️ 用我原本 / ❌ 取消
-//   確認後：mission 再揀 build model 落 code；council 開三模議會。
+//   確認後：mission 再揀 build model 落 code；council 開 AI 聯合國（三模議會）。
 
 const http = require('http');
 const tg = require('./telegram');
@@ -26,7 +26,7 @@ const MODEL_CHOICES = [
   { cli: 'claude', model: 'claude-fable-5', label: 'Fable 5 (至尊·貴)' },
 ];
 
-// 議會陣容：standard = server 預設(A=Opus,B=Codex,C=GLM);fable = seat A 升旗艦 Fable。
+// AI 聯合國（三模議會）陣容：standard = server 預設(A=Opus,B=Codex,C=GLM);fable = seat A 升旗艦 Fable。
 const COUNCIL_STRENGTH = {
   standard: null,
   fable: {
@@ -54,7 +54,8 @@ const HELP = [
   '`/projects` — 列出可用 project',
   '',
   '*開工*',
-  '`/council <題目>` — Opus 完善 → 過目 → 揀陣容（含 👑Fable 領銜）→ 開三模議會',
+  '`/council <題目>` — Opus 完善 → 過目 → 揀陣容（含 👑Fable 領銜）→ 開 AI 聯合國（三模議會）',
+  '自然講法亦得：「開聯合國議會」「將呢個 plan 擺去聯合國」「叫 AI 聯合國審一審」。',
   '`/mission <plan>` — Opus 完善 → 過目 → 揀 model（含 Fable）落 code',
   '`/debate` — 三模獨立 review 完後，開始拗入 moderator 收斂',
   '`/revise <指示>` — 御准閘度叫議會就你意見再收斂一 round',
@@ -233,7 +234,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
   async function sendRefinePreview() {
     if (!pendingRefine) return;
     const { kind, refined } = pendingRefine;
-    const verb = kind === 'council' ? '開三模議會' : '落 code';
+    const verb = kind === 'council' ? '開 AI 聯合國（三模議會）' : '落 code';
     const body = refined.length > 3400 ? refined.slice(0, 3400) + '\n…（preview 截短）' : refined;
     await say(
       `📝 Opus 完善版（${kind === 'council' ? '議題' : 'mission'}）：\n\n${body}\n\n——\n用呢個版本${verb}？或者再俾意見完善（可反覆）。`,
@@ -272,10 +273,10 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     await sendRefinePreview();
   }
 
-  // 揀議會陣容（seat A 仲裁腦）→ 確認後開會。
+  // 揀 AI 聯合國（三模議會）陣容（seat A 仲裁腦）→ 確認後開會。
   async function promptCouncilStrength(taskBrief) {
     pendingCouncil = { taskBrief };
-    await say('揀議會陣容（seat A 仲裁腦）：', { replyMarkup: { inline_keyboard: [
+    await say('揀 AI 聯合國陣容（seat A 仲裁腦）：', { replyMarkup: { inline_keyboard: [
       [{ text: '⚖️ 標準（Opus·Codex·GLM）', callback_data: 'cm:standard' }],
       [{ text: '👑 Fable 領銜（Fable·Codex·GLM）', callback_data: 'cm:fable' }],
     ] } });
@@ -287,8 +288,8 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     if (!run) { await say(`⚠️ 開 run 失敗：${(cr.json && cr.json.error) || cr.status}`); return; }
     const sr = await api('POST', `/api/runs/${run.id}/council/start`, councilModels ? { perAgentModels: councilModels } : {});
     const seatA = (councilModels && councilModels.council_a && councilModels.council_a.model) || 'opus';
-    if (sr.json && sr.json.ok) await say(`🗳 三模議會開波：*${tgline(taskBrief)}*\n（seat A=${seatA}｜B=Codex｜C=GLM）獨立 review 完先 ping 你開拗；收斂到御准閘會再 ping。`);
-    else await say(`⚠️ 開議會失敗：${(sr.json && sr.json.error) || sr.status}`);
+    if (sr.json && sr.json.ok) await say(`🗳 AI 聯合國開波（三模議會）：*${tgline(taskBrief)}*\n（seat A=${seatA}｜B=Codex｜C=GLM）獨立 review 完先 ping 你開拗；收斂到御准閘會再 ping。`);
+    else await say(`⚠️ 開聯合國失敗：${(sr.json && sr.json.error) || sr.status}`);
   }
 
   async function promptMissionModel(taskBrief, topic) {

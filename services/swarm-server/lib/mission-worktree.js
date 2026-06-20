@@ -143,6 +143,13 @@ function commitWorktree({ dir, message }) {
   return { committed: true, head: headSha(dir) };
 }
 
+// Commit dirty changes in the main repo as a stable snapshot before a later push.
+// This prevents a pending push gate from accidentally including changes produced
+// by a newer queued mission.
+function commitDirty({ repo, message }) {
+  return commitWorktree({ dir: repo, message: message || 'swarm: snapshot mission output' });
+}
+
 // Merge a sub-phase branch back into the main repo's current branch.
 // Clean → { ok:true }. Conflict/failure → abort + { ok:false, conflict:true }.
 function mergeWorktree({ repo, branch, message }) {
@@ -190,5 +197,6 @@ module.exports = {
   pruneWorktrees,
   headSha,
   isClean,
+  commitDirty,
   pushBranch,
 };

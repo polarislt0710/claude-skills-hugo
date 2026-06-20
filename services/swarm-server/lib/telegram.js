@@ -70,6 +70,26 @@ function answerCallbackQuery(id, text) {
   return callApi('answerCallbackQuery', { callback_query_id: id, text: text || '' });
 }
 
+// 下載 Telegram 檔（photo/doc）去本地 destPath。先 getFile 攞 file_path,再由 file API 下載。
+function downloadFile(fileId, destPath) {
+  if (!process.env.TG_BOT_TOKEN) return Promise.resolve(false);
+  return callApi('getFile', { file_id: fileId }).then((r) => {
+    const fp = r && r.ok && r.result && r.result.file_path;
+    if (!fp) return false;
+    return new Promise((resolve) => {
+      const fs = require('fs');
+      const file = fs.createWriteStream(destPath);
+      const req = https.get(`https://api.telegram.org/file/bot${process.env.TG_BOT_TOKEN}/${fp}`, (res) => {
+        if (res.statusCode !== 200) { try { file.close(); } catch (_) {} resolve(false); return; }
+        res.pipe(file);
+        file.on('finish', () => file.close(() => resolve(true)));
+      });
+      req.on('error', () => { try { file.close(); } catch (_) {} resolve(false); });
+      req.setTimeout(30000, () => { try { req.destroy(); file.close(); } catch (_) {} resolve(false); }); // 防卡死 queue
+    });
+  }).catch(() => false);
+}
+
 function editMessageText(chatId, messageId, text, opts = {}) {
   const params = {
     chat_id: chatId,
@@ -82,4 +102,4 @@ function editMessageText(chatId, messageId, text, opts = {}) {
   return callApi('editMessageText', params);
 }
 
-module.exports = { sendMessage, tgEnabled, getUpdates, answerCallbackQuery, editMessageText, callApi };
+module.exports = { sendMessage, tgEnabled, getUpdates, answerCallbackQuery, editMessageText, callApi, downloadFile };

@@ -229,7 +229,7 @@ async function loadAll(){
   scheduleRender();
 }
 async function loadRun(id){if(state.loadingRun===id)return;state.loadingRun=id;try{state.byId[id]=await api('/api/runs/'+id);}catch(e){console.warn('loadRun fail',id,e.message);}finally{if(state.loadingRun===id)state.loadingRun=null;scheduleRender();}}
-function ingestRun(run){if(!run||!run.id)return;state.byId[run.id]=run;const sm=state.runs.find(r=>r.id===run.id);if(sm){sm.status=run.status;sm.stage=run.stage;sm.agentCount=(run.agents||[]).length;sm.runningAgents=(run.agents||[]).filter(a=>a.status==='running').length;sm.topic=run.topic;}}
+function ingestRun(run){if(!run||!run.id)return;state.byId[run.id]=run;const sm=state.runs.find(r=>r.id===run.id);if(sm){Object.assign(sm,{status:run.status,stage:run.stage,agentCount:(run.agents||[]).length,runningAgents:(run.agents||[]).filter(a=>a.status==='running').length,topic:run.topic,ownerUser:run.ownerUser,verifyVerdict:run.verifyVerdict,queuedReason:run.queuedReason,queuedBehindRunId:run.queuedBehindRunId});}}
 
 /* ───────── KPI ───────── */
 function kpis(){let live=0,sess=0,done=0;state.runs.forEach(r=>{live+=r.runningAgents||0;});Object.values(state.byId).forEach(r=>{(r.sessions||[]).forEach(s=>{if(s.status==='running')sess++;});(r.agents||[]).forEach(a=>{if(a.status==='completed')done++;});});
@@ -320,13 +320,13 @@ function renderPlans(){
   if(!list.length)html+='<div class="empty">冇符合嘅計畫。</div>';
   list.forEach(r=>{
     const cat=catOf(r);const running=r.runningAgents>0;
-    const stCls=running?'run':(r.status==='stopped'?'stopped':(r.status==='complete'?'complete':''));
+    const stCls=running?'run':(r.status==='stopped'?'stopped':(['complete','done'].includes(r.status)?'complete':(r.status==='needs_attention'?'failed':'')));
     const stTxt=running?'running':(r.status||'idle');
     html+=`<div class="card tap${running?' running':''}" onclick="openMission('${r.id}')">
       <span class="chevron">›</span>
       <span class="cat-chip" style="color:${cat.col};background:color-mix(in srgb,${cat.col} 14%,transparent)"># ${esc(cat.lab)}</span>
       <div class="ctitle">${esc(tailTopic(r.topic))}</div>
-      <div class="cmeta"><span class="chip ${stCls}">${esc(stTxt)}</span><span class="chip">👥 ${r.agentCount||0}</span><span class="chip">🕐 ${r.sessionCount||(r.sessions?r.sessions.length:0)||0} sess</span></div>
+      <div class="cmeta"><span class="chip ${stCls}">${esc(stTxt)}</span>${r.ownerUser?`<span class="chip">👤 ${esc(r.ownerUser)}</span>`:''}${r.verifyVerdict?`<span class="chip ${r.verifyVerdict==='PASS'?'complete':'failed'}">VERIFY ${esc(r.verifyVerdict)}</span>`:''}${r.status==='queued'?`<span class="chip gold" title="${esc(r.queuedReason||'')}">⏳ queue</span>`:''}<span class="chip">👥 ${r.agentCount||0}</span><span class="chip">🕐 ${r.sessionCount||(r.sessions?r.sessions.length:0)||0} sess</span></div>
     </div>`;
   });
   v.innerHTML=html;
@@ -466,7 +466,7 @@ function setTheme(t){state.theme=t;document.documentElement.setAttribute('data-t
 function goDesktop(){try{localStorage.setItem('m-prefer-desktop','1');}catch(e){}location.href='/?desktop=1';}
 
 /* ───────── 操作 bar（gate-driven）───────── */
-function mIsDone(r){const p=r.pipeline||{};if(p.councilReviewPaused||p.councilPaused)return false;return r.status==='complete'||r.status==='done';}
+function mIsDone(r){const p=r.pipeline||{};if(p.councilReviewPaused||p.councilPaused)return true;const stages=p.stages||[];const noRunning=!stages.some(s=>s.status==='running'||s.status==='pending');return ['complete','done','needs_attention','stopped'].includes(r.status)||((p.current||0)>=stages.length&&noRunning);}
 function mVerdict(r){const p=r.pipeline||{};const stages=p.stages||[];let pass=0,fail=0;stages.forEach(s=>{if(s.status==='complete')pass++;else if(s.status==='failed'||s.status==='interrupted')fail++;});const fa=(r.agents||[]).filter(a=>a.status==='failed'||a.status==='interrupted').length;return{pass,fail:fail+fa,disputes:p.councilOpenDisputes||0};}
 function renderActionbar(){
   const bar=$('#actionbar');const r=focusedRun();
@@ -500,13 +500,14 @@ async function actDebate(){const r=focusedRun();try{await api('/api/runs/'+r.id+
 async function actRevise(){const r=focusedRun();const note=prompt('想點改?（可留空就未解爭議再收斂）')||'';try{await api('/api/runs/'+r.id+'/council/revise',{method:'POST',body:JSON.stringify({note})});toast('✍️ 重跑共識');}catch(e){toast(e.message,true);}}
 async function actResume(){const r=focusedRun();try{await api('/api/runs/'+r.id+'/resume',{method:'POST',body:'{}'});toast('▶ 續行緊');}catch(e){toast(e.message,true);}}
 async function actStop(){const r=focusedRun();if(!confirm('停止呢個 run?'))return;try{await api('/api/runs/'+r.id+'/stop',{method:'POST',body:'{}'});toast('⏹ 已停');}catch(e){toast(e.message,true);}}
-function actExecute(){const r=focusedRun();const mv=(localStorage.getItem('m-model')||'codex|gpt-5.5').split('|');openSheet('▶ 落實 plan',`<p style="font-size:13px;color:var(--muted)">將議會終稿交 code pipeline,喺 project 真正改 code（build → review → fix → verify）。</p>
+function actExecute(){const r=focusedRun();const mv=(localStorage.getItem('m-model')||'codex|gpt-5.5').split('|');const p=r.pipeline||{};openSheet('▶ 落實 plan',`<p style="font-size:13px;color:var(--muted)">將議會終稿交 code pipeline,喺 project 真正改 code（build → review → fix → verify）。</p>
+   <div class="card" style="padding:10px;margin-bottom:10px;font-size:12px;color:var(--muted)">Project: ${esc(r.projectPath||'')}<br>Owner: ${esc(r.ownerUser||'owner')} / Notify: ${esc(r.notifyUser||r.ownerUser||'owner')}<br>Plan: v${esc(p.councilPlanVersion||'?')}<br>Agents: frontend, backend, database(if needed), test, reviewer, fixer, verifier<br>Gate: review strict + VERIFY PASS 先完成；同 project 忙緊會排隊。</div>
    <label style="font-size:12px;color:var(--faint)">寫 code model</label>
    <div class="mchips" id="exModels">${state.models.map(m=>`<span class="mchip ${m.model===mv[1]?'on':''}" data-cli="${m.cli}" data-model="${m.model}">${esc(m.short||m.label)}</span>`).join('')}</div>
    <div class="row-btns"><button onclick="closeSheet()">取消</button><button class="go" onclick="doExecute()">▶ 落實</button></div>`);
   let pick={cli:mv[0],model:mv[1]};setTimeout(()=>{document.querySelectorAll('#exModels .mchip').forEach(c=>c.onclick=()=>{document.querySelectorAll('#exModels .mchip').forEach(x=>x.classList.remove('on'));c.classList.add('on');pick={cli:c.dataset.cli,model:c.dataset.model};});},0);
   window._execPick=()=>pick;}
-async function doExecute(){const r=focusedRun();const pick=window._execPick();const build={cli:pick.cli,model:pick.model};closeSheet();try{await api('/api/runs/'+r.id+'/council/execute',{method:'POST',body:JSON.stringify({model:build.model,perAgentModels:{frontend:build,backend:build,database:build,test:build,fixer:build,reviewer:{cli:'claude',model:'opus'},verifier:{cli:'claude',model:'sonnet'}}})});toast('▶ 落實開波');}catch(e){toast(e.message,true);}}
+async function doExecute(){const r=focusedRun();const pick=window._execPick();const build={cli:pick.cli,model:pick.model};closeSheet();try{const out=await api('/api/runs/'+r.id+'/council/execute',{method:'POST',body:JSON.stringify({model:build.model,perAgentModels:{frontend:build,backend:build,database:build,test:build,fixer:build,reviewer:{cli:'claude',model:'opus'},verifier:{cli:'claude',model:'sonnet'}}})});toast(out.queued?('⏳ 已排隊 #'+(out.position||'')):'▶ 落實開波');}catch(e){toast(e.message,true);}}
 async function actPushConfirm(){const r=focusedRun();const pp=r.pendingPush;if(!confirm('Push 上 GitHub?\nProject: '+String(pp.project||'').split('/').pop()+'\nBranch: '+pp.branch))return;try{await api('/api/runs/'+r.id+'/push',{method:'POST',body:JSON.stringify({confirm:true})});toast('⬆️ Push 緊…');}catch(e){toast(e.message,true);}}
 async function actPushBranch(){const r=focusedRun();const b=prompt('Push 去邊個 branch?',r.pendingPush.branch);if(b===null||!b.trim())return;try{await api('/api/runs/'+r.id+'/push/retarget',{method:'POST',body:JSON.stringify({branch:b.trim()})});toast('🌿 已轉 branch');}catch(e){toast(e.message,true);}}
 async function actPushDecline(){const r=focusedRun();try{await api('/api/runs/'+r.id+'/push/decline',{method:'POST',body:'{}'});toast('✋ 取消 push');}catch(e){toast(e.message,true);}}
@@ -538,7 +539,7 @@ function nsItemHTML(it,isGap){
   const a=it.action||{type:'none'};const doable=a.type&&a.type!=='none';
   const sub=isGap?(it.detail||''):(it.rationale||'');
   const seed=encodeURIComponent(it.discussSeed||it.title||'');const arg=encodeURIComponent(a.arg||'');
-  const doLbl={execute:'▶ 落實',revise:'✍️ 再改',mission:'🔧 開 mission',council:'🗳 開議會'}[a.type]||'▶ 做';
+  const doLbl={execute:'▶ 落實',revise:'✍️ 再改',mission:'🔧 開 mission',council:'🗳 開聯合國'}[a.type]||'▶ 做';
   const tag=isGap?(it.severity==='fail'?'<span class="chip failed" style="font-size:9px;margin-bottom:5px">FAIL</span>':'<span class="chip gold" style="font-size:9px;margin-bottom:5px">風險</span>'):'';
   return `<div class="card" style="margin-bottom:8px;padding:11px">${tag}
     <div style="font-weight:700;font-size:13.5px;line-height:1.35">${esc(it.title)}</div>
@@ -565,24 +566,24 @@ function spawnMissionFromText(brief){const r=focusedRun();const proj=(r&&r.proje
   let pick={cli:mv[0],model:mv[1]};setTimeout(()=>{document.querySelectorAll('#nsExModels .mchip').forEach(c=>c.onclick=()=>{document.querySelectorAll('#nsExModels .mchip').forEach(x=>x.classList.remove('on'));c.classList.add('on');pick={cli:c.dataset.cli,model:c.dataset.model};});},0);
   window._nsMissionPick=()=>pick;window._nsMissionProj=proj;}
 async function doSpawnMission(){const brief=(($('#nsMissionBrief')||{}).value||'').trim();if(!brief){toast('寫低做咩先',true);return;}const pick=window._nsMissionPick();const proj=window._nsMissionProj;const tg=localStorage.getItem('swarm-tguser')||undefined;closeSheet();
-  try{const r=await api('/api/plans/run',{method:'POST',body:JSON.stringify({staged:true,taskBrief:brief,projectPath:proj||undefined,deliveryMode:'code',cli:pick.cli,model:pick.model,tgUser:tg})});toast('🔀 新 mission 開工!');if(r.run){state.focusRunId=r.run.id;state.byId[r.run.id]=r.run;state.tab='mission';state.missionSub='overview';}await loadAll();}catch(e){toast(e.message,true);}}
+  try{const r=await api('/api/plans/run',{method:'POST',body:JSON.stringify({staged:true,taskBrief:brief,projectPath:proj||undefined,deliveryMode:'code',cli:pick.cli,model:pick.model,tgUser:tg,ownerUser:tg||undefined,notifyUser:tg||undefined})});toast(r.queued?('⏳ 新 mission 已排隊 #'+(r.position||'')):'🔀 新 mission 開工!');if(r.run){state.focusRunId=r.run.id;state.byId[r.run.id]=r.run;state.tab='mission';state.missionSub='overview';}await loadAll();}catch(e){toast(e.message,true);}}
 
 /* ───────── Quick Run sheet ───────── */
 function openQuickRun(){const proj=localStorage.getItem('m-proj')||(state.projects[0]&&state.projects[0].path)||'';
   openSheet('▶ Quick Run',`<textarea id="qrTask" placeholder="例如:幫 grading 頁加 rubric 預覽 modal,要 responsive"></textarea>
    <div class="row-btns"><button onclick="closeSheet()">取消</button><button class="go" onclick="doQuickRun()">🔀 分波開工</button></div>
    <p style="font-size:11px;color:var(--faint);margin-top:8px">→ ${esc((proj||'').split('/').pop())} · research→build→review→fix</p>`);}
-async function doQuickRun(){const task=$('#qrTask').value.trim();if(!task){toast('寫低任務先',true);return;}const proj=localStorage.getItem('m-proj')||(state.projects[0]&&state.projects[0].path)||undefined;const mv=(localStorage.getItem('m-model')||'codex|gpt-5.5').split('|');const tg=localStorage.getItem('swarm-tguser')||undefined;closeSheet();try{const r=await api('/api/plans/run',{method:'POST',body:JSON.stringify({staged:true,taskBrief:task,projectPath:proj,deliveryMode:'code',cli:mv[0],model:mv[1],tgUser:tg})});toast('🔀 開工!');if(r.run){state.focusRunId=r.run.id;state.byId[r.run.id]=r.run;state.tab='mission';}await loadAll();}catch(e){toast(e.message,true);}}
+async function doQuickRun(){const task=$('#qrTask').value.trim();if(!task){toast('寫低任務先',true);return;}const proj=localStorage.getItem('m-proj')||(state.projects[0]&&state.projects[0].path)||undefined;const mv=(localStorage.getItem('m-model')||'codex|gpt-5.5').split('|');const tg=localStorage.getItem('swarm-tguser')||undefined;closeSheet();try{const r=await api('/api/plans/run',{method:'POST',body:JSON.stringify({staged:true,taskBrief:task,projectPath:proj,deliveryMode:'code',cli:mv[0],model:mv[1],tgUser:tg,ownerUser:tg||undefined,notifyUser:tg||undefined})});toast(r.queued?('⏳ 已排隊 #'+(r.position||'')):'🔀 開工!');if(r.run){state.focusRunId=r.run.id;state.byId[r.run.id]=r.run;state.tab='mission';}await loadAll();}catch(e){toast(e.message,true);}}
 
-/* ───────── 開新嘢:直接 code / 傾諗法+開三模議會（同 Telegram /council 一致）───────── */
+/* ───────── 開新嘢:直接 code / 傾諗法+開 AI 聯合國（三模議會）（同 Telegram /council 一致）───────── */
 const COUNCIL_STRENGTH={standard:null,fable:{council_a:{cli:'claude',model:'claude-fable-5'},council_b:{cli:'codex',model:'gpt-5.5'},council_c:{cli:'glm',model:'glm-5.2'},moderator:{cli:'claude',model:'opus'},explainer:{cli:'claude',model:'sonnet'}}};
 function openRunMenu(){openSheet('開新嘢',`
   <button class="big-choice" onclick="openQuickRun()"><b>🔀 直接落 code</b><span>你已經知要做咩 → research → build → review → fix</span></button>
-  <button class="big-choice" onclick="openCouncilDraft()"><b>💡 傾諗法 + 開三模議會</b><span>諗法未完善 → Opus 幫你完善 → 過目 → 交三模議會評審收斂</span></button>`);}
-function openCouncilDraft(){openSheet('💡 新議題 → 三模議會',`
+  <button class="big-choice" onclick="openCouncilDraft()"><b>💡 傾諗法 + 開 AI 聯合國</b><span>諗法未完善 → Opus 幫你完善 → 過目 → 交 AI 聯合國評審收斂</span></button>`);}
+function openCouncilDraft(){openSheet('💡 新議題 → AI 聯合國（三模議會）',`
   <textarea id="cdRaw" placeholder="寫低你個諗法 / 想議會評審乜（粗略都得,Opus 會幫你完善）…"></textarea>
   <div class="row-btns"><button onclick="closeSheet()">取消</button><button class="go" onclick="refineCouncil()">✨ Opus 完善</button></div>
-  <p style="font-size:11px;color:var(--faint);margin-top:9px">想跳過完善 → <a onclick="startCouncilFromDraft(($('#cdRaw')||{}).value,null)" style="color:var(--blue);text-decoration:underline">用原文直接交議會</a></p>`);}
+  <p style="font-size:11px;color:var(--faint);margin-top:9px">想跳過完善 → <a onclick="startCouncilFromDraft(($('#cdRaw')||{}).value,null)" style="color:var(--blue);text-decoration:underline">用原文直接交聯合國</a></p>`);}
 async function refineCouncil(){const raw=(($('#cdRaw')||{}).value||'').trim();if(!raw){toast('寫低你個諗法先',true);return;}
   state.councilDraft={raw,refined:null};openSheet('✨ 完善緊…',`<div class="thinking">⏱ Opus 完善緊（約 15-40s）…</div>`);
   try{const r=await api('/api/refine',{method:'POST',body:JSON.stringify({text:raw,kind:'council'})});
@@ -607,11 +608,11 @@ function chooseCouncilStrength(taskBrief){if(!state.councilDraft)state.councilDr
   <button class="big-choice" onclick="startCouncilFromDraft(state.councilDraft.brief,'fable')"><b>👑 Fable 領銜</b><span>Fable 5 · Codex · GLM（seat A 升旗艦）</span></button>`);}
 async function startCouncilFromDraft(taskBrief,strength){taskBrief=(taskBrief||'').trim();if(!taskBrief){toast('冇內容開會',true);return;}
   const tg=localStorage.getItem('swarm-tguser')||undefined;const models=strength?COUNCIL_STRENGTH[strength]:null;closeSheet();
-  try{const cr=await api('/api/runs',{method:'POST',body:JSON.stringify({topic:taskBrief.slice(0,70),taskBrief,tgUser:tg})});
+  try{const cr=await api('/api/runs',{method:'POST',body:JSON.stringify({topic:taskBrief.slice(0,70),taskBrief,tgUser:tg,ownerUser:tg||undefined,notifyUser:tg||undefined})});
     const run=cr.run;if(!run){toast('開 run 失敗',true);return;}
     await api('/api/runs/'+run.id+'/council/start',{method:'POST',body:JSON.stringify(Object.assign({tgUser:tg},models?{perAgentModels:models}:{}))});
-    toast('🗳 三模議會開波!');state.focusRunId=run.id;state.byId[run.id]=run;state.tab='mission';state.councilDraft=null;await loadAll();}
-  catch(e){toast('開議會失敗:'+e.message,true);}}
+    toast('🗳 AI 聯合國開波!');state.focusRunId=run.id;state.byId[run.id]=run;state.tab='mission';state.councilDraft=null;await loadAll();}
+  catch(e){toast('開聯合國失敗:'+e.message,true);}}
 
 /* ───────── sheet ───────── */
 function openSheet(title,html){$('#sheet').innerHTML='<h3>'+esc(title)+'</h3>'+html;$('#sheet').classList.add('show');$('#scrim').classList.add('show');}
