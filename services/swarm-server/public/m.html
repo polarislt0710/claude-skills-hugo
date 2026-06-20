@@ -216,9 +216,9 @@ function scheduleRender(){if(_pending)return;_pending=true;requestAnimationFrame
 function focusedRun(){return state.focusRunId?state.byId[state.focusRunId]:null;}
 function findAgentById(id){for(const r of Object.values(state.byId)){const a=(r.agents||[]).find(x=>x.id===id);if(a)return{a,run:r};}return null;}
 function targetText(run){const t=run&&run.missionTarget;if(!t)return'';if(typeof t==='string')return t;return [t.summary,t.acquire,t.optimize,t.acceptance,t.nonGoals].filter(Boolean).join(' | ');}
-function defaultWarnings(){return ((state.missionControl&&state.missionControl.defaultWarnings)||[]).slice();}
-function missionPayload(task,target,warnings){return {globalGoal:(state.missionControl&&state.missionControl.globalGoal)||'',missionTarget:{summary:(target||task||'').trim()},coordinationWarnings:(warnings&&warnings.length)?warnings:defaultWarnings()};}
-function splitWarnings(raw){return String(raw||'').split(/\r?\n/).map(x=>x.replace(/^\s*[-*]\s*/,'').trim()).filter(Boolean);}
+function latestHandoffText(run){const h=run&&((run.handoffs&&run.handoffs[0])||run.latestHandoff);if(!h)return'';return [h.agentName?('From '+h.agentName):'',h.summary,(h.reminders&&h.reminders.length)?('Reminder: '+h.reminders.slice(0,2).join(' / ')):'',(h.warnings&&h.warnings.length)?('Warning: '+h.warnings.slice(0,2).join(' / ')):''].filter(Boolean).join(' | ');}
+function currentMobileProject(){return localStorage.getItem('m-proj')||(state.projects[0]&&state.projects[0].path)||'';}
+function missionPayload(task,target){const raw=(target||'').trim();return {globalGoal:(state.missionControl&&state.missionControl.globalGoal)||'',...(raw?{missionTarget:{summary:raw,source:'manual-edit'}}:{})};}
 
 /* ───────── category 推導（best-effort，純展示）───────── */
 const CAT_MAP=[[/數學|math/i,'數學','#4f7cc4'],[/dse/i,'DSE','#8a6fc0'],[/grading|改卷|批改|rubric/i,'改卷','#cf982f'],[/共備|review brief|評審/i,'共備','#4f7cc4'],[/link|連結/i,'連結','#2f9a96'],[/physics|物理/i,'物理','#c4564a'],[/geo|地理/i,'地理','#5a9a52'],[/rbac|權限|auth/i,'權限','#8a6fc0'],[/dashboard|ia/i,'UI','#b8852f']];
@@ -230,12 +230,16 @@ async function loadAll(){
   try{state.models=(await api('/api/models')).models||[];}catch(e){}
   try{state.projects=(await api('/api/projects')).projects||[];}catch(e){}
   try{state.tgUsers=(await api('/api/tg-users')).users||[];}catch(e){}
-  try{state.missionControl=(await api('/api/mission-control')).missionControl||null;}catch(e){}
+  await loadMissionControlMobile();
   if(state.focusRunId)loadRun(state.focusRunId);
   scheduleRender();
 }
+async function loadMissionControlMobile(projectPath){
+  const p=projectPath||currentMobileProject();
+  try{state.missionControl=(await api('/api/mission-control?projectPath='+encodeURIComponent(p||''))).missionControl||null;}catch(e){}
+}
 async function loadRun(id){if(state.loadingRun===id)return;state.loadingRun=id;try{state.byId[id]=await api('/api/runs/'+id);}catch(e){console.warn('loadRun fail',id,e.message);}finally{if(state.loadingRun===id)state.loadingRun=null;scheduleRender();}}
-function ingestRun(run){if(!run||!run.id)return;state.byId[run.id]=run;const sm=state.runs.find(r=>r.id===run.id);if(sm){Object.assign(sm,{status:run.status,stage:run.stage,agentCount:(run.agents||[]).length,runningAgents:(run.agents||[]).filter(a=>a.status==='running').length,topic:run.topic,ownerUser:run.ownerUser,verifyVerdict:run.verifyVerdict,queuedReason:run.queuedReason,queuedBehindRunId:run.queuedBehindRunId,globalGoal:run.globalGoal,missionTarget:run.missionTarget,coordinationWarnings:run.coordinationWarnings,missionControlVersion:run.missionControlVersion});}}
+function ingestRun(run){if(!run||!run.id)return;state.byId[run.id]=run;const sm=state.runs.find(r=>r.id===run.id);if(sm){Object.assign(sm,{status:run.status,stage:run.stage,agentCount:(run.agents||[]).length,runningAgents:(run.agents||[]).filter(a=>a.status==='running').length,topic:run.topic,ownerUser:run.ownerUser,verifyVerdict:run.verifyVerdict,queuedReason:run.queuedReason,queuedBehindRunId:run.queuedBehindRunId,globalGoal:run.globalGoal,missionTarget:run.missionTarget,missionControlVersion:run.missionControlVersion,missionControlProjectPath:run.missionControlProjectPath,handoffCount:(run.handoffs||[]).length||run.handoffCount||0,latestHandoff:(run.handoffs&&run.handoffs[0])||run.latestHandoff});}}
 
 /* ───────── KPI ───────── */
 function kpis(){let live=0,sess=0,done=0;state.runs.forEach(r=>{live+=r.runningAgents||0;});Object.values(state.byId).forEach(r=>{(r.sessions||[]).forEach(s=>{if(s.status==='running')sess++;});(r.agents||[]).forEach(a=>{if(a.status==='completed')done++;});});
@@ -380,7 +384,7 @@ function renderMission(){
   html+=`<div class="card"><span class="cat-chip" style="color:var(--gold);background:color-mix(in srgb,var(--gold) 14%,transparent)">Mission Goal</span>
     <div class="ctitle" style="font-size:13.5px">${esc((targetText(r)||r.taskBrief||r.topic||'').slice(0,140))}</div>
     <div class="cdesc" style="-webkit-line-clamp:3">${esc((r.globalGoal||'').slice(0,220))}</div>
-    <div class="cmeta"><span class="chip">warnings ${(r.coordinationWarnings||[]).length}</span><span class="chip">MC v${esc(r.missionControlVersion||0)}</span></div></div>`;
+    <div class="cmeta"><span class="chip">handoffs ${(r.handoffs||[]).length||r.handoffCount||0}</span><span class="chip">target ${esc((r.missionTarget&&r.missionTarget.source)||'auto')}</span><span class="chip">MC v${esc(r.missionControlVersion||0)}</span></div></div>`;
   if(state.missionSub==='agents'){
     html+=renderAgentsList(r);
   }else{
@@ -428,15 +432,16 @@ function renderActivity(){
   if(state.activityView==='agent'){
     const f=state.selAgentId?findAgentById(state.selAgentId):(r&&r.agents&&r.agents.find(a=>a.status==='running'));
     if(!f&&!(r&&r.agents&&r.agents.length)){html+='<div class="empty">未揀 agent。<br>去 Mission tab 揀一個人仔。</div>';}
-    else{const a=(f&&f.a)||r.agents[0];const mm=modelMeta(a.cli,a.model);const ctx=a.contextSources||{};const mem=ctx.memoryPack||{};const mission=ctx.mission||{};
+    else{const a=(f&&f.a)||r.agents[0];const mm=modelMeta(a.cli,a.model);const ctx=a.contextSources||{};const mem=ctx.memoryPack||{};const mission=ctx.mission||{};const handoff=a.handoff;
       const t=state.logBuf[a.id]!=null?state.logBuf[a.id]:(a.logs||'');
       html+=`<div class="card"><div style="display:flex;align-items:center;gap:11px"><canvas data-agent="${a.id}" style="width:48px;height:48px;image-rendering:pixelated"></canvas>
         <div style="flex:1;min-width:0"><div style="font-weight:700;font-size:15px">${esc((a.name||'').replace(/ Agent$/,''))}</div>
         <div style="font-size:11px;color:var(--muted)">${esc(a.role||'')}</div></div>
         <span class="chip ${a.status==='running'?'run':(a.status==='completed'?'complete':a.status)}">${esc(STATUS_LABEL[a.status]||a.status)}</span></div>
         <div class="cmeta" style="margin-top:9px"><span class="mbadge"><span style="width:7px;height:7px;border-radius:50%;background:${mm.color};display:inline-block"></span>${esc(a.cli||'claude')} · ${esc(a.model||'')}</span>
-        <span class="chip">⏱ ${a.startedAt?fmtElapsed(a.startedAt,a.completedAt):'--'}</span><span class="chip">Skills ${(a.skillKeys||[]).length}</span><span class="chip">Memory ${(mem.included||[]).length||0}</span><span class="chip" title="${esc(mission.missionTarget||'')}">Goal ${mission.globalGoalChars?'on':'-'}</span><span class="chip">Warnings ${esc(mission.warningsCount||0)}</span></div>
-        <div class="aaction" style="margin-top:8px;font-size:12.5px;color:var(--muted)">${esc(a.action||'')}</div></div>
+        <span class="chip">⏱ ${a.startedAt?fmtElapsed(a.startedAt,a.completedAt):'--'}</span><span class="chip">Skills ${(a.skillKeys||[]).length}</span><span class="chip">Memory ${(mem.included||[]).length||0}</span><span class="chip" title="${esc(mission.missionTarget||'')}">Goal ${mission.globalGoalChars?'on':'-'}</span><span class="chip">Prior ${(ctx.handoffsPassed||[]).length||0}</span></div>
+        <div class="aaction" style="margin-top:8px;font-size:12.5px;color:var(--muted)">${esc(a.action||'')}</div>
+        ${handoff?`<div class="logbox" style="max-height:150px;margin-top:9px">${mdLite(`Summary: ${handoff.summary||''}${(handoff.reminders||[]).length?`\n\nReminders:\n- ${handoff.reminders.join('\n- ')}`:''}${(handoff.warnings||[]).length?`\n\nWarnings:\n- ${handoff.warnings.join('\n- ')}`:''}`)}</div>`:''}</div>
         <div class="logbox">${t?mdLite(t):'<span style="color:var(--faint)">未有輸出…</span>'}</div>`;}
   }else{
     const cats=['all','feedback','verify','router','upload'];
@@ -459,8 +464,8 @@ function renderSettings(){
      <div class="si-row"><label>主題</label><div class="seg" style="margin:0;width:auto"><button class="${state.theme==='ink'?'on':''}" style="padding:7px 14px" onclick="setTheme('ink')">🌙 深</button><button class="${state.theme==='forest'?'on':''}" style="padding:7px 14px" onclick="setTheme('forest')">☀ 淺</button></div></div>
    </div>
    <div class="sg"><h4>Mission Control</h4>
-     <div style="padding:11px 14px;border-top:1px solid var(--line)"><label style="font-size:12px;color:var(--faint)">共同大目標</label><textarea id="setGlobalGoal" style="margin-top:6px;width:100%;min-height:92px;background:color-mix(in srgb,var(--text) 6%,transparent);border:1px solid var(--line);border-radius:10px;color:var(--text);padding:9px 10px;font-family:var(--sans);font-size:13px">${esc(mc.globalGoal||'')}</textarea></div>
-     <div style="padding:0 14px 11px"><label style="font-size:12px;color:var(--faint)">Default warnings（每行一點）</label><textarea id="setWarnings" style="margin-top:6px;width:100%;min-height:116px;background:color-mix(in srgb,var(--text) 6%,transparent);border:1px solid var(--line);border-radius:10px;color:var(--text);padding:9px 10px;font-family:var(--sans);font-size:13px">${esc((mc.defaultWarnings||[]).join('\n'))}</textarea><button class="abtn go" style="margin-top:10px;width:100%" onclick="saveMissionControlMobile()">保存 Mission Control</button></div>
+     <div style="padding:11px 14px;border-top:1px solid var(--line)"><label style="font-size:12px;color:var(--faint)">Repo 大目標（跟 Project：${esc(((currentMobileProject()||'').split('/').pop()||'default'))}）</label><textarea id="setGlobalGoal" style="margin-top:6px;width:100%;min-height:92px;background:color-mix(in srgb,var(--text) 6%,transparent);border:1px solid var(--line);border-radius:10px;color:var(--text);padding:9px 10px;font-family:var(--sans);font-size:13px">${esc(mc.globalGoal||'')}</textarea></div>
+     <div style="padding:0 14px 11px"><div style="font-size:11.5px;color:var(--faint);line-height:1.45">Mission Target 會由 AI 先起草；agent reminder / warning 會喺交棒時自動生成，唔係用家手填。</div><button class="abtn go" style="margin-top:10px;width:100%" onclick="saveMissionControlMobile()">保存 Repo 目標</button></div>
    </div>
    <div class="sg"><h4>預設</h4>
      <div class="si-row"><label>Project</label><select id="setProj">${projOpts}</select></div>
@@ -473,11 +478,13 @@ function renderSettings(){
      <div class="si-row"><label>連線</label><span class="chip ${socket.connected?'run':'failed'}">${socket.connected?'live':'offline'}</span></div>
      <div class="si-row"><label>切返桌面版</label><button class="mchip" onclick="goDesktop()">前往 →</button></div>
    </div>`;
-  const sp=$('#setProj');if(sp){sp.value=localStorage.getItem('m-proj')||(state.projects[0]&&state.projects[0].path)||'';sp.onchange=e=>localStorage.setItem('m-proj',e.target.value);}
+  const sp=$('#setProj');if(sp){sp.value=currentMobileProject();sp.onchange=e=>{localStorage.setItem('m-proj',e.target.value);loadMissionControlMobile(e.target.value).then(()=>scheduleRender());};}
   const sm=$('#setModel');if(sm){sm.value=localStorage.getItem('m-model')||'codex|gpt-5.5';sm.onchange=e=>localStorage.setItem('m-model',e.target.value);}
   const st=$('#setTg');if(st){st.value=localStorage.getItem('swarm-tguser')||'';st.onchange=e=>localStorage.setItem('swarm-tguser',e.target.value);}
 }
-async function saveMissionControlMobile(){try{const globalGoal=($('#setGlobalGoal')||{}).value||'';const defaultWarnings=splitWarnings((($('#setWarnings')||{}).value||''));const r=await api('/api/mission-control',{method:'PATCH',body:JSON.stringify({globalGoal,defaultWarnings,updatedBy:localStorage.getItem('swarm-tguser')||'mobile'})});state.missionControl=r.missionControl;toast('已保存 Mission Control');scheduleRender();}catch(e){toast('保存失敗:'+e.message,true);}}
+async function saveMissionControlMobile(){try{const globalGoal=($('#setGlobalGoal')||{}).value||'';const r=await api('/api/mission-control',{method:'PATCH',body:JSON.stringify({projectPath:currentMobileProject(),globalGoal,updatedBy:localStorage.getItem('swarm-tguser')||'mobile'})});state.missionControl=r.missionControl;toast('已保存呢個 repo 嘅目標');scheduleRender();}catch(e){toast('保存失敗:'+e.message,true);}}
+function formatMissionTargetMobile(t){if(!t)return'';return [t.summary,t.acquire&&('Acquire: '+t.acquire),t.optimize&&('Optimize: '+t.optimize),t.acceptance&&('Acceptance: '+t.acceptance),t.nonGoals&&('Non-goals: '+t.nonGoals)].filter(Boolean).join('\n');}
+async function draftTargetMobile(taskId,targetId){const task=(($('#'+taskId)||{}).value||'').trim();if(!task){toast('先寫任務內容，AI 先知點起草 target',true);return;}try{const r=await api('/api/mission-target/draft',{method:'POST',body:JSON.stringify({taskBrief:task,projectPath:currentMobileProject(),globalGoal:(state.missionControl&&state.missionControl.globalGoal)||''})});const el=$('#'+targetId);if(el)el.value=formatMissionTargetMobile(r.target);toast(r.target&&r.target.source==='ai'?'AI target 已起草':'target 已用 fallback 起草');}catch(e){toast('起草失敗:'+e.message,true);}}
 function setTheme(t){state.theme=t;document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('swarm-theme',t);}catch(e){}scheduleRender();}
 function goDesktop(){try{localStorage.setItem('m-prefer-desktop','1');}catch(e){}location.href='/?desktop=1';}
 
@@ -517,7 +524,7 @@ async function actRevise(){const r=focusedRun();const note=prompt('想點改?（
 async function actResume(){const r=focusedRun();try{await api('/api/runs/'+r.id+'/resume',{method:'POST',body:'{}'});toast('▶ 續行緊');}catch(e){toast(e.message,true);}}
 async function actStop(){const r=focusedRun();if(!confirm('停止呢個 run?'))return;try{await api('/api/runs/'+r.id+'/stop',{method:'POST',body:'{}'});toast('⏹ 已停');}catch(e){toast(e.message,true);}}
 function actExecute(){const r=focusedRun();const mv=(localStorage.getItem('m-model')||'codex|gpt-5.5').split('|');const p=r.pipeline||{};openSheet('▶ 落實 plan',`<p style="font-size:13px;color:var(--muted)">將議會終稿交 code pipeline,喺 project 真正改 code（build → review → fix → verify）。</p>
-   <div class="card" style="padding:10px;margin-bottom:10px;font-size:12px;color:var(--muted)">Project: ${esc(r.projectPath||'')}<br>Owner: ${esc(r.ownerUser||'owner')} / Notify: ${esc(r.notifyUser||r.ownerUser||'owner')}<br>Plan: v${esc(p.councilPlanVersion||'?')}<br>Target: ${esc((targetText(r)||r.topic||'').slice(0,180))}<br>Warnings: ${esc(((r.coordinationWarnings||[]).slice(0,3).join(' / ')||'-'))}<br>Agents: frontend, backend, database(if needed), test, reviewer, fixer, verifier<br>Gate: review strict + VERIFY PASS 先完成；同 project 忙緊會排隊。</div>
+   <div class="card" style="padding:10px;margin-bottom:10px;font-size:12px;color:var(--muted)">Project: ${esc(r.projectPath||'')}<br>Owner: ${esc(r.ownerUser||'owner')} / Notify: ${esc(r.notifyUser||r.ownerUser||'owner')}<br>Plan: v${esc(p.councilPlanVersion||'?')}<br>Target: ${esc((targetText(r)||r.topic||'').slice(0,180))}<br>Latest handoff: ${esc(latestHandoffText(r)||'-')}<br>Agents: frontend, backend, database(if needed), test, reviewer, fixer, verifier<br>Gate: review strict + VERIFY PASS 先完成；同 project 忙緊會排隊。</div>
    <label style="font-size:12px;color:var(--faint)">寫 code model</label>
    <div class="mchips" id="exModels">${state.models.map(m=>`<span class="mchip ${m.model===mv[1]?'on':''}" data-cli="${m.cli}" data-model="${m.model}">${esc(m.short||m.label)}</span>`).join('')}</div>
    <div class="row-btns"><button onclick="closeSheet()">取消</button><button class="go" onclick="doExecute()">▶ 落實</button></div>`);
@@ -576,24 +583,24 @@ async function doNextStep(type,argEnc){const r=focusedRun();const arg=decodeURIC
 function spawnMissionFromText(brief){const r=focusedRun();const proj=(r&&r.projectPath)||localStorage.getItem('m-proj')||(state.projects[0]&&state.projects[0].path)||'';const mv=(localStorage.getItem('m-model')||'codex|gpt-5.5').split('|');
   openSheet('🔧 開 mission 做呢件事',`<p style="font-size:12px;color:var(--muted)">會喺 <b>${esc((proj||'').split('/').pop()||'project')}</b> 開新 mission（research→build→review→fix）。落手前可以改 brief。</p>
    <textarea id="nsMissionBrief" style="min-height:128px">${esc(brief)}</textarea>
-   <textarea id="nsMissionTarget" style="min-height:82px;margin-top:8px" placeholder="今次 mission target（可選）">${esc(brief)}</textarea>
-   <textarea id="nsMissionWarnings" style="min-height:82px;margin-top:8px" placeholder="Agent warnings（可選，每行一點）">${esc(((r&&r.coordinationWarnings)||defaultWarnings()).join('\n'))}</textarea>
+   <textarea id="nsMissionTarget" style="min-height:82px;margin-top:8px" placeholder="AI Mission Target Draft（可改；留空就自動起草）"></textarea>
+   <div class="row-btns" style="margin-top:8px"><button onclick="draftTargetMobile('nsMissionBrief','nsMissionTarget')">AI 起草 Target</button></div>
    <label style="font-size:12px;color:var(--faint);margin:8px 0 0;display:block">寫 code model</label>
    <div class="mchips" id="nsExModels">${state.models.map(m=>`<span class="mchip ${m.model===mv[1]?'on':''}" data-cli="${m.cli}" data-model="${m.model}">${esc(m.short||m.label)}</span>`).join('')}</div>
    <div class="row-btns" style="margin-top:12px"><button onclick="closeSheet()">取消</button><button class="go" onclick="doSpawnMission()">🔀 開工</button></div>`);
   let pick={cli:mv[0],model:mv[1]};setTimeout(()=>{document.querySelectorAll('#nsExModels .mchip').forEach(c=>c.onclick=()=>{document.querySelectorAll('#nsExModels .mchip').forEach(x=>x.classList.remove('on'));c.classList.add('on');pick={cli:c.dataset.cli,model:c.dataset.model};});},0);
   window._nsMissionPick=()=>pick;window._nsMissionProj=proj;}
-async function doSpawnMission(){const brief=(($('#nsMissionBrief')||{}).value||'').trim();if(!brief){toast('寫低做咩先',true);return;}const target=(($('#nsMissionTarget')||{}).value||'').trim();const warnings=splitWarnings((($('#nsMissionWarnings')||{}).value||''));const pick=window._nsMissionPick();const proj=window._nsMissionProj;const tg=localStorage.getItem('swarm-tguser')||undefined;closeSheet();
-  try{const r=await api('/api/plans/run',{method:'POST',body:JSON.stringify({staged:true,taskBrief:brief,projectPath:proj||undefined,deliveryMode:'code',cli:pick.cli,model:pick.model,tgUser:tg,ownerUser:tg||undefined,notifyUser:tg||undefined,...missionPayload(brief,target,warnings)})});toast(r.queued?('⏳ 新 mission 已排隊 #'+(r.position||'')):'🔀 新 mission 開工!');if(r.run){state.focusRunId=r.run.id;state.byId[r.run.id]=r.run;state.tab='mission';state.missionSub='overview';}await loadAll();}catch(e){toast(e.message,true);}}
+async function doSpawnMission(){const brief=(($('#nsMissionBrief')||{}).value||'').trim();if(!brief){toast('寫低做咩先',true);return;}const target=(($('#nsMissionTarget')||{}).value||'').trim();const pick=window._nsMissionPick();const proj=window._nsMissionProj;const tg=localStorage.getItem('swarm-tguser')||undefined;closeSheet();
+  try{const r=await api('/api/plans/run',{method:'POST',body:JSON.stringify({staged:true,taskBrief:brief,projectPath:proj||undefined,deliveryMode:'code',cli:pick.cli,model:pick.model,tgUser:tg,ownerUser:tg||undefined,notifyUser:tg||undefined,...missionPayload(brief,target)})});toast(r.queued?('⏳ 新 mission 已排隊 #'+(r.position||'')):'🔀 新 mission 開工!');if(r.run){state.focusRunId=r.run.id;state.byId[r.run.id]=r.run;state.tab='mission';state.missionSub='overview';}await loadAll();}catch(e){toast(e.message,true);}}
 
 /* ───────── Quick Run sheet ───────── */
 function openQuickRun(){const proj=localStorage.getItem('m-proj')||(state.projects[0]&&state.projects[0].path)||'';
   openSheet('▶ Quick Run',`<textarea id="qrTask" placeholder="例如:幫 grading 頁加 rubric 預覽 modal,要 responsive"></textarea>
-   <textarea id="qrTarget" placeholder="今次 mission target（可選）：要 acquire / optimize / success criteria…" style="min-height:82px;margin-top:8px"></textarea>
-   <textarea id="qrWarnings" placeholder="Agent reminders / warnings（可選，每行一點）" style="min-height:82px;margin-top:8px">${esc(defaultWarnings().join('\n'))}</textarea>
+   <textarea id="qrTarget" placeholder="AI Mission Target Draft（可改；留空就自動起草）" style="min-height:82px;margin-top:8px"></textarea>
+   <div class="row-btns" style="margin-top:8px"><button onclick="draftTargetMobile('qrTask','qrTarget')">AI 起草 Target</button></div>
    <div class="row-btns"><button onclick="closeSheet()">取消</button><button class="go" onclick="doQuickRun()">🔀 分波開工</button></div>
    <p style="font-size:11px;color:var(--faint);margin-top:8px">→ ${esc((proj||'').split('/').pop())} · research→build→review→fix</p>`);}
-async function doQuickRun(){const task=$('#qrTask').value.trim();if(!task){toast('寫低任務先',true);return;}const target=(($('#qrTarget')||{}).value||'').trim();const warnings=splitWarnings((($('#qrWarnings')||{}).value||''));const proj=localStorage.getItem('m-proj')||(state.projects[0]&&state.projects[0].path)||undefined;const mv=(localStorage.getItem('m-model')||'codex|gpt-5.5').split('|');const tg=localStorage.getItem('swarm-tguser')||undefined;closeSheet();try{const r=await api('/api/plans/run',{method:'POST',body:JSON.stringify({staged:true,taskBrief:task,projectPath:proj,deliveryMode:'code',cli:mv[0],model:mv[1],tgUser:tg,ownerUser:tg||undefined,notifyUser:tg||undefined,...missionPayload(task,target,warnings)})});toast(r.queued?('⏳ 已排隊 #'+(r.position||'')):'🔀 開工!');if(r.run){state.focusRunId=r.run.id;state.byId[r.run.id]=r.run;state.tab='mission';}await loadAll();}catch(e){toast(e.message,true);}}
+async function doQuickRun(){const task=$('#qrTask').value.trim();if(!task){toast('寫低任務先',true);return;}const target=(($('#qrTarget')||{}).value||'').trim();const proj=localStorage.getItem('m-proj')||(state.projects[0]&&state.projects[0].path)||undefined;const mv=(localStorage.getItem('m-model')||'codex|gpt-5.5').split('|');const tg=localStorage.getItem('swarm-tguser')||undefined;closeSheet();try{const r=await api('/api/plans/run',{method:'POST',body:JSON.stringify({staged:true,taskBrief:task,projectPath:proj,deliveryMode:'code',cli:mv[0],model:mv[1],tgUser:tg,ownerUser:tg||undefined,notifyUser:tg||undefined,...missionPayload(task,target)})});toast(r.queued?('⏳ 已排隊 #'+(r.position||'')):'🔀 開工!');if(r.run){state.focusRunId=r.run.id;state.byId[r.run.id]=r.run;state.tab='mission';}await loadAll();}catch(e){toast(e.message,true);}}
 
 /* ───────── 開新嘢:直接 code / 傾諗法+開 AI 聯合國（三模議會）（同 Telegram /council 一致）───────── */
 const COUNCIL_STRENGTH={standard:null,fable:{council_a:{cli:'claude',model:'claude-fable-5'},council_b:{cli:'codex',model:'gpt-5.5'},council_c:{cli:'glm',model:'glm-5.2'},moderator:{cli:'claude',model:'opus'},explainer:{cli:'claude',model:'sonnet'}}};
@@ -628,7 +635,7 @@ function chooseCouncilStrength(taskBrief){if(!state.councilDraft)state.councilDr
   <button class="big-choice" onclick="startCouncilFromDraft(state.councilDraft.brief,'fable')"><b>👑 Fable 領銜</b><span>Fable 5 · Codex · GLM（seat A 升旗艦）</span></button>`);}
 async function startCouncilFromDraft(taskBrief,strength){taskBrief=(taskBrief||'').trim();if(!taskBrief){toast('冇內容開會',true);return;}
   const tg=localStorage.getItem('swarm-tguser')||undefined;const models=strength?COUNCIL_STRENGTH[strength]:null;closeSheet();
-  try{const cr=await api('/api/runs',{method:'POST',body:JSON.stringify({topic:taskBrief.slice(0,70),taskBrief,tgUser:tg,ownerUser:tg||undefined,notifyUser:tg||undefined,...missionPayload(taskBrief,taskBrief,defaultWarnings())})});
+  try{const cr=await api('/api/runs',{method:'POST',body:JSON.stringify({topic:taskBrief.slice(0,70),taskBrief,projectPath:currentMobileProject()||undefined,tgUser:tg,ownerUser:tg||undefined,notifyUser:tg||undefined,...missionPayload(taskBrief,'')})});
     const run=cr.run;if(!run){toast('開 run 失敗',true);return;}
     await api('/api/runs/'+run.id+'/council/start',{method:'POST',body:JSON.stringify(Object.assign({tgUser:tg},models?{perAgentModels:models}:{}))});
     toast('🗳 AI 聯合國開波!');state.focusRunId=run.id;state.byId[run.id]=run;state.tab='mission';state.councilDraft=null;await loadAll();}
@@ -654,7 +661,7 @@ socket.on('swarm-start',run=>{if(run&&run.id)ingestRun(run);loadAll();pushFeed('
 socket.on('swarm-reset',()=>{state.focusRunId=null;loadAll();});
 socket.on('execution-agent-started',d=>{const r=state.byId[d.runId];if(r){const i=r.agents.findIndex(a=>a.id===d.agent.id);if(i>=0)r.agents[i]=d.agent;else r.agents.push(d.agent);}pushFeed('router',`<b>${esc(d.agent.name)}</b> 開工`);scheduleRender();});
 socket.on('execution-agent-log',d=>{state.logBuf[d.agentId]=((state.logBuf[d.agentId]||'')+(d.chunk||'')).slice(-8000);const f=findAgentById(d.agentId);if(f&&d.action)f.a.action=d.action;if(state.tab==='activity'&&state.activityView==='agent'&&state.selAgentId===d.agentId)scheduleRender();});
-socket.on('execution-agent-complete',d=>{const r=state.byId[d.runId];if(r){const i=r.agents.findIndex(a=>a.id===d.agent.id);if(i>=0)r.agents[i]=d.agent;}const ok=d.agent.status==='completed';pushFeed(ok?'verify':'feedback',`<b>${esc(d.agent.name)}</b> ${ok?'完成':'失敗'}`);scheduleRender();});
+socket.on('execution-agent-complete',d=>{const r=state.byId[d.runId];if(r){const i=r.agents.findIndex(a=>a.id===d.agent.id);if(i>=0)r.agents[i]=d.agent;if(d.agent.handoff){r.handoffs=r.handoffs||[];if(!r.handoffs.find(h=>h.id===d.agent.handoff.id))r.handoffs.unshift(d.agent.handoff);r.handoffCount=r.handoffs.length;r.latestHandoff=r.handoffs[0];}}const ok=d.agent.status==='completed';pushFeed(ok?'verify':'feedback',`<b>${esc(d.agent.name)}</b> ${ok?'完成':'失敗'}${d.agent.handoff?' · 交棒已記錄':''}`);scheduleRender();});
 socket.on('artifact-added',d=>{const r=state.byId[d.runId];if(r){r.artifacts=r.artifacts||[];r.artifacts.unshift(d.artifact);}pushFeed('upload',`artifact <b>${esc(d.artifact.title||'')}</b>`,truncBody(d.artifact.content));});
 socket.on('council-paused',d=>{const r=state.byId[d.runId];if(r&&r.pipeline)r.pipeline.councilPaused=true;toast('⏸ 議會收斂完,等你御准');scheduleRender();});
 socket.on('council-review-paused',d=>{const r=state.byId[d.runId];if(r&&r.pipeline)r.pipeline.councilReviewPaused=true;toast('🔎 三模 review 完,撳「開始拗」');scheduleRender();});

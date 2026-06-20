@@ -30,9 +30,9 @@ const DEFAULT_GLOBAL_GOAL = [
   '每個 mission 都要服務同一個大目標：令產品更清晰、更穩、更接近真正可交付，而唔係只完成單一 task。',
 ].join('\n');
 const DEFAULT_COORDINATION_WARNINGS = [
-  '所有 agent 要先對齊共同大目標同今次 mission target，唔好各自為政。',
+  '交棒俾下一個 agent 時，要用清楚 summary/reminder/warning 補返自己做過乜、下一步要留意乜。',
+  '下一個 agent 未必有你嘅完整記憶；唔好假設佢睇過你全部 log。',
   '唔好為咗局部完成而破壞整體系統、資料流、測試策略或用戶原意。',
-  '落 code 前要講清楚假設、依賴、會改嘅範圍同風險；唔確定就保守處理。',
   '同一 project 可能有其他 agent / partner 正在工作；唔好 revert 或覆蓋自己冇做嘅改動。',
   '產品方向、安全、權限、刪資料、收費或 one-way-door 決策，必須停喺 Hugo / owner gate。',
 ];
@@ -131,6 +131,17 @@ function autoReviewOnComplete(run) {
 function notifyAgentFailed(run, agent, preset) {
   const name = (preset && preset.name) || (agent && agent.name) || 'Agent';
   tgNotify(`⚠️ *Agent 失敗* · ${tgEsc(run && run.topic)}\n\n${tgEsc(name)}：${tgEsc(agent && agent.summary)}\n\n→ 開 [Swarm Dashboard](${SWARM_DASH_URL}) 睇 log`, null, run && run.tgChatId);
+}
+const SWARM_TG_HANDOFF = envFlag('SWARM_TG_HANDOFF', true);
+function notifyAgentHandoff(run, agent, handoff) {
+  if (!SWARM_TG_HANDOFF || !run || !run.tgChatId || !handoff) return;
+  const reminders = (handoff.reminders || []).slice(0, 2).map((x) => `• ${tgEsc(x)}`).join('\n');
+  const warnings = (handoff.warnings || []).slice(0, 2).map((x) => `• ${tgEsc(x)}`).join('\n');
+  tgNotify(
+    `📨 *Agent 交棒*\n\n🏛 ${tgEsc(run.topic)}\n👤 ${tgEsc(agent.name)}\n\n摘要：${tgEsc(handoff.summary)}${reminders ? `\n\n提醒：\n${reminders}` : ''}${warnings ? `\n\n警告：\n${warnings}` : ''}`,
+    null,
+    run.tgChatId
+  );
 }
 
 // ─── 任務一:Push gate（code pipeline 完 → Telegram/UI 確認 → git push origin）───
@@ -821,8 +832,9 @@ function normalizeStringList(value, fallback = [], maxItems = 10, maxChars = 420
 function defaultMissionControl() {
   return {
     version: 1,
-    globalGoal: normalizeTextField(process.env.SWARM_GLOBAL_GOAL || DEFAULT_GLOBAL_GOAL),
-    defaultWarnings: normalizeStringList(process.env.SWARM_COORDINATION_WARNINGS || DEFAULT_COORDINATION_WARNINGS, DEFAULT_COORDINATION_WARNINGS),
+    defaultGlobalGoal: normalizeTextField(process.env.SWARM_GLOBAL_GOAL || DEFAULT_GLOBAL_GOAL),
+    projects: {},
+    handoffGuidelines: normalizeStringList(process.env.SWARM_COORDINATION_WARNINGS || DEFAULT_COORDINATION_WARNINGS, DEFAULT_COORDINATION_WARNINGS),
     updatedAt: null,
     updatedBy: 'system',
   };
@@ -830,12 +842,56 @@ function defaultMissionControl() {
 
 function normalizeMissionControl(raw = {}) {
   const base = defaultMissionControl();
+  const projects = {};
+  const rawProjects = raw.projects && typeof raw.projects === 'object' ? raw.projects : {};
+  Object.entries(rawProjects).forEach(([key, value]) => {
+    if (!value || typeof value !== 'object') return;
+    const projectPath = normalizeTextField(value.projectPath || key, 1000);
+    projects[key] = {
+      projectPath,
+      label: normalizeTextField(value.label || path.basename(projectPath), 160),
+      globalGoal: normalizeTextField(value.globalGoal || value.goal || base.defaultGlobalGoal),
+      updatedAt: value.updatedAt || null,
+      updatedBy: normalizeUserLabel(value.updatedBy || 'system', 'system'),
+    };
+  });
   return {
     version: Number(raw.version || base.version) || 1,
-    globalGoal: normalizeTextField(raw.globalGoal || base.globalGoal),
-    defaultWarnings: normalizeStringList(raw.defaultWarnings, base.defaultWarnings),
+    defaultGlobalGoal: normalizeTextField(raw.defaultGlobalGoal || raw.globalGoal || base.defaultGlobalGoal),
+    projects,
+    handoffGuidelines: normalizeStringList(raw.handoffGuidelines || raw.defaultWarnings, base.handoffGuidelines),
     updatedAt: raw.updatedAt || base.updatedAt,
     updatedBy: normalizeUserLabel(raw.updatedBy || base.updatedBy, 'system'),
+  };
+}
+
+function projectMissionKey(projectPath) {
+  const raw = projectPath || DEFAULT_PROJECT_ROOT;
+  try { return safeProjectPath(raw); } catch (_) { return path.resolve(String(raw || DEFAULT_PROJECT_ROOT)); }
+}
+
+function projectMissionControl(projectPath) {
+  const control = readMissionControl();
+  const key = projectMissionKey(projectPath || DEFAULT_PROJECT_ROOT);
+  const entry = control.projects[key] || null;
+  const globalGoal = (entry && entry.globalGoal) || control.defaultGlobalGoal || DEFAULT_GLOBAL_GOAL;
+  return {
+    version: control.version || 1,
+    projectPath: key,
+    label: (entry && entry.label) || path.basename(key),
+    globalGoal,
+    defaultGlobalGoal: control.defaultGlobalGoal,
+    handoffGuidelines: control.handoffGuidelines || [],
+    // Back-compat for old clients; no longer user-editable warnings.
+    defaultWarnings: control.handoffGuidelines || [],
+    updatedAt: (entry && entry.updatedAt) || control.updatedAt,
+    updatedBy: (entry && entry.updatedBy) || control.updatedBy,
+    projectGoals: Object.values(control.projects || {}).map((p) => ({
+      projectPath: p.projectPath,
+      label: p.label,
+      updatedAt: p.updatedAt,
+      updatedBy: p.updatedBy,
+    })),
   };
 }
 
@@ -851,12 +907,24 @@ function readMissionControl() {
 
 function writeMissionControl(patch = {}) {
   const current = readMissionControl();
-  const next = normalizeMissionControl({
-    ...current,
-    ...patch,
-    version: Math.max(1, Number(current.version || 1) + 1),
-    updatedAt: new Date().toISOString(),
-  });
+  const updatedAt = new Date().toISOString();
+  const updatedBy = normalizeUserLabel(patch.updatedBy || current.updatedBy || 'dashboard', 'dashboard');
+  let nextRaw = { ...current, version: Math.max(1, Number(current.version || 1) + 1), updatedAt, updatedBy };
+  if (patch.projectPath !== undefined || patch.globalGoal !== undefined) {
+    const key = projectMissionKey(patch.projectPath || DEFAULT_PROJECT_ROOT);
+    nextRaw.projects = { ...(current.projects || {}) };
+    nextRaw.projects[key] = {
+      ...(nextRaw.projects[key] || {}),
+      projectPath: key,
+      label: normalizeTextField(patch.label || (nextRaw.projects[key] && nextRaw.projects[key].label) || path.basename(key), 160),
+      globalGoal: normalizeTextField(patch.globalGoal || (nextRaw.projects[key] && nextRaw.projects[key].globalGoal) || current.defaultGlobalGoal),
+      updatedAt,
+      updatedBy,
+    };
+  }
+  if (patch.defaultGlobalGoal !== undefined) nextRaw.defaultGlobalGoal = normalizeTextField(patch.defaultGlobalGoal);
+  if (patch.handoffGuidelines !== undefined) nextRaw.handoffGuidelines = normalizeStringList(patch.handoffGuidelines, current.handoffGuidelines || []);
+  const next = normalizeMissionControl(nextRaw);
   fs.mkdirSync(DATA_DIR, { recursive: true });
   fs.writeFileSync(MISSION_CONTROL_FILE, JSON.stringify(next, null, 2));
   return next;
@@ -869,6 +937,9 @@ function normalizeMissionTarget(value, fallback = '') {
     optimize: '',
     acceptance: '',
     nonGoals: '',
+    source: '',
+    draftedAt: null,
+    draftModel: '',
   };
   if (typeof value === 'string') {
     base.summary = value;
@@ -878,23 +949,29 @@ function normalizeMissionTarget(value, fallback = '') {
     base.optimize = value.optimize || value.optimizeTargets || value.optimization || '';
     base.acceptance = value.acceptance || value.acceptanceCriteria || value.successCriteria || '';
     base.nonGoals = value.nonGoals || value.avoid || value.outOfScope || '';
+    base.source = value.source || value.status || '';
+    base.draftedAt = value.draftedAt || value.createdAt || null;
+    base.draftModel = value.draftModel || value.model || '';
   }
   base.summary = normalizeTextField(base.summary || fallback, 1600);
   base.acquire = normalizeTextField(base.acquire, 1200);
   base.optimize = normalizeTextField(base.optimize, 1200);
   base.acceptance = normalizeTextField(base.acceptance, 1200);
   base.nonGoals = normalizeTextField(base.nonGoals, 1200);
+  base.source = normalizeTextField(base.source || (value ? 'manual' : 'auto'), 80);
+  base.draftModel = normalizeTextField(base.draftModel, 80);
   return base;
 }
 
-function buildRunMissionContext({ topic, taskBrief, globalGoal, missionTarget, coordinationWarnings } = {}) {
-  const control = readMissionControl();
+function buildRunMissionContext({ topic, taskBrief, projectPath, globalGoal, missionTarget, coordinationWarnings } = {}) {
+  const control = projectMissionControl(projectPath || DEFAULT_PROJECT_ROOT);
   const fallback = taskBrief || topic || '';
   return {
     globalGoal: normalizeTextField(globalGoal || control.globalGoal),
     missionTarget: normalizeMissionTarget(missionTarget, fallback),
-    coordinationWarnings: normalizeStringList(coordinationWarnings, control.defaultWarnings),
+    coordinationWarnings: normalizeStringList(coordinationWarnings, control.handoffGuidelines),
     missionControlVersion: control.version || 1,
+    missionControlProjectPath: control.projectPath,
   };
 }
 
@@ -903,6 +980,7 @@ function ensureRunMissionContext(run) {
   const ctx = buildRunMissionContext({
     topic: run.topic,
     taskBrief: run.taskBrief,
+    projectPath: run.projectPath,
     globalGoal: run.globalGoal,
     missionTarget: run.missionTarget,
     coordinationWarnings: run.coordinationWarnings,
@@ -911,6 +989,7 @@ function ensureRunMissionContext(run) {
   run.missionTarget = ctx.missionTarget;
   run.coordinationWarnings = ctx.coordinationWarnings;
   run.missionControlVersion = run.missionControlVersion || ctx.missionControlVersion;
+  run.missionControlProjectPath = run.missionControlProjectPath || ctx.missionControlProjectPath;
   return ctx;
 }
 
@@ -920,27 +999,114 @@ function missionTargetSummary(target) {
   return truncate([target.summary, target.acquire, target.optimize, target.acceptance, target.nonGoals].filter(Boolean).join(' | '), 900);
 }
 
+function parseJsonObject(raw) {
+  let text = String(raw || '').trim();
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence) text = fence[1].trim();
+  const obj = text.match(/\{[\s\S]*\}/);
+  if (obj) text = obj[0];
+  try { return JSON.parse(text); } catch (_) { return null; }
+}
+
+function fallbackMissionTarget({ topic, taskBrief, globalGoal } = {}) {
+  const source = truncate(taskBrief || topic || '', 1200);
+  return normalizeMissionTarget({
+    summary: source || '將今次需求收斂成可交付 mission。',
+    acquire: '取得足夠 context、現有實作位置、成功準則同風險。',
+    optimize: '改善同共同大目標直接相關嘅工作流，避免只做局部 patch。',
+    acceptance: '有清楚變更範圍、測試 / 驗證結果、剩餘風險同下一步。',
+    nonGoals: '唔擴大 scope；唔改安全 / billing / irreversible 設定；唔覆蓋其他人改動。',
+    source: 'fallback',
+    draftedAt: new Date().toISOString(),
+    draftModel: 'heuristic',
+  }, source || globalGoal || '');
+}
+
+async function draftMissionTargetAI({ topic, taskBrief, projectPath, globalGoal, cli, model } = {}) {
+  const fallback = fallbackMissionTarget({ topic, taskBrief, globalGoal });
+  if (process.env.SWARM_MISSION_TARGET_AI === '0') return fallback;
+  const picked = { cli: cli || 'claude', model: safeModelFlag(model) || 'sonnet' };
+  const prompt = [
+    '你係 Swarm Mission 嘅 mission-target planner。請根據 repo 大目標同用戶任務，為今次 mission 起草一份 mission-specific target。',
+    '要求：',
+    '- 用繁體中文 / 廣東話，短而具體。',
+    '- target 要講清楚今次要 acquire 到乜、要 optimize 邊個系統 / flow、acceptance criteria、non-goals。',
+    '- 唔好將 handoff reminder/warning 寫成用戶要填嘅項目；handoff 係 agent 完成後交棒先產生。',
+    '- 嚴格只輸出 JSON object，schema:',
+    '{"summary":"一句 mission goal","acquire":"要取得 / 查明 / 補齊嘅資料或成果","optimize":"要優化嘅 repo flow / 系統位置","acceptance":"成功準則","nonGoals":"今次唔做乜 / 避免乜"}',
+    '',
+    `Repo / Project: ${projectPath || '-'}`,
+    `Repo 大目標:\n${globalGoal || DEFAULT_GLOBAL_GOAL}`,
+    '',
+    `Mission request:\n${truncate(taskBrief || topic || '', 5000)}`,
+    '',
+    'JSON:',
+  ].join('\n');
+  try {
+    const raw = await spawnOneShot(prompt, picked, 'swarm-target-draft', Number(process.env.SWARM_TARGET_DRAFT_TIMEOUT_MS || 90000));
+    const obj = parseJsonObject(raw);
+    if (!obj) return fallback;
+    return normalizeMissionTarget({
+      ...obj,
+      source: 'ai',
+      draftedAt: new Date().toISOString(),
+      draftModel: `${picked.cli}:${picked.model}`,
+    }, taskBrief || topic || '');
+  } catch (error) {
+    console.warn('[mission-target] AI draft failed:', error.message);
+    return fallback;
+  }
+}
+
+async function ensureMissionTargetDraft(run, options = {}) {
+  if (!run) return null;
+  const existing = normalizeMissionTarget(run.missionTarget, run.taskBrief || run.topic || '');
+  const hasUserTarget = options.force !== true && existing.summary && !['auto', 'fallback'].includes(String(existing.source || '').toLowerCase());
+  if (hasUserTarget) {
+    run.missionTarget = existing;
+    return existing;
+  }
+  const target = await draftMissionTargetAI({
+    topic: run.topic,
+    taskBrief: options.taskBrief || run.taskBrief,
+    projectPath: run.projectPath,
+    globalGoal: run.globalGoal,
+    cli: options.cli,
+    model: options.model,
+  });
+  run.missionTarget = target;
+  run.updatedAt = new Date().toISOString();
+  addArtifact(run, {
+    type: 'mission-target',
+    title: target.source === 'ai' ? '🎯 AI Mission Target Draft' : '🎯 Mission Target Draft (fallback)',
+    content: missionTargetSummary(target),
+  });
+  scheduleSave();
+  return target;
+}
+
 function buildMissionContextBlock(run) {
   const ctx = ensureRunMissionContext(run || {});
   const t = ctx.missionTarget || {};
   const lines = [
-    '## Mission North Star / Shared Goal',
-    '所有 council/build/review agent 都要以呢個共同目標做判斷基準，唔好只係完成自己手上嗰粒 task。',
+    '## Mission North Star / Repo Goal',
+    '以下大目標係對應呢個 repo / project，不係全 server 共用。所有 agent 要以佢做判斷基準，唔好只係完成自己手上嗰粒 task。',
     '',
-    '### Default Global Goal',
+    '### Repo Goal',
     ctx.globalGoal || '(not set)',
     '',
-    '### This Mission Target',
+    '### This Mission Target（AI 起草，可由 owner 改）',
     `Mission goal: ${t.summary || '(not set)'}`,
     t.acquire ? `Acquire / obtain: ${t.acquire}` : '',
     t.optimize ? `Optimize / improve: ${t.optimize}` : '',
     t.acceptance ? `Acceptance criteria: ${t.acceptance}` : '',
     t.nonGoals ? `Non-goals / avoid: ${t.nonGoals}` : '',
+    t.source ? `Target source: ${t.source}${t.draftModel ? ` · ${t.draftModel}` : ''}` : '',
     '',
-    '### Coordination Warnings',
+    '### Handoff Discipline',
     ...(ctx.coordinationWarnings.length ? ctx.coordinationWarnings.map((w) => `- ${w}`) : ['- (none)']),
     '',
-    'Agent handoff rule: 回報時要寫明你依賴咗邊個 context、你留低咩 assumption / risk、下一個 agent 要留意咩。',
+    'Agent handoff rule: 完成時要產生 summary/reminder/warning 俾下一個 agent，因為下一個 agent 未必有你嘅完整記憶。',
   ].filter((line) => line !== '');
   return truncate(lines.join('\n'), MISSION_TARGET_MAX_CHARS);
 }
@@ -973,10 +1139,12 @@ function normalizeRun(run) {
     if (agent.cli === undefined) agent.cli = '';
     if (agent.pid === undefined) agent.pid = null;
     if (agent.sessionId === undefined) agent.sessionId = null;
+    if (agent.handoff === undefined) agent.handoff = null;
   });
   run.edges = Array.isArray(run.edges) ? run.edges : [];
   run.artifacts = Array.isArray(run.artifacts) ? run.artifacts : [];
   run.contextHistory = Array.isArray(run.contextHistory) ? run.contextHistory : [];
+  run.handoffs = Array.isArray(run.handoffs) ? run.handoffs : [];
   run.sessionLinks = Array.isArray(run.sessionLinks) ? run.sessionLinks : [];
   run.messages = Array.isArray(run.messages) ? run.messages : [];
   run.proposals = run.proposals || {};
@@ -1030,6 +1198,7 @@ function makeAgent(name, layer, role, skill, index, extra = {}) {
     startedAt: extra.startedAt || null,
     completedAt: extra.completedAt || null,
     updatedAt: new Date().toISOString(),
+    handoff: extra.handoff || null,
   };
 }
 
@@ -1214,7 +1383,8 @@ function createRun({ topic, personas, chatContext, sessionId, projectPath, sourc
     : (seed === false ? [] : seedAgents(template || 'cloudcli', `${topic || ''}\n${chatContext || ''}`));
   const owner = normalizeUserLabel(ownerUser || tgUser || (tgChatId ? `tg:${tgChatId}` : ''), 'owner');
   const notify = normalizeUserLabel(notifyUser || tgUser || owner, owner);
-  const missionCtx = buildRunMissionContext({ topic, taskBrief, globalGoal, missionTarget, coordinationWarnings });
+  const resolvedProjectPath = projectPath ? safeProjectPath(projectPath) : DEFAULT_PROJECT_ROOT;
+  const missionCtx = buildRunMissionContext({ topic, taskBrief, projectPath: resolvedProjectPath, globalGoal, missionTarget, coordinationWarnings });
 
   const run = {
     id: id('run'),
@@ -1224,7 +1394,7 @@ function createRun({ topic, personas, chatContext, sessionId, projectPath, sourc
     status: 'active',
     stage: agents.some((agent) => agent.layer === 'research') ? 'research' : 'stakeholder',
     sessionId: sessionId || null,
-    projectPath: projectPath ? safeProjectPath(projectPath) : DEFAULT_PROJECT_ROOT,
+    projectPath: resolvedProjectPath,
     background: background || '',
     backgroundSource: background ? 'manual' : '',
     taskBrief: taskBrief || '',
@@ -1241,6 +1411,7 @@ function createRun({ topic, personas, chatContext, sessionId, projectPath, sourc
     missionTarget: missionCtx.missionTarget,
     coordinationWarnings: missionCtx.coordinationWarnings,
     missionControlVersion: missionCtx.missionControlVersion,
+    missionControlProjectPath: missionCtx.missionControlProjectPath,
     startedAt: now,
     updatedAt: now,
     completedAt: null,
@@ -1251,6 +1422,8 @@ function createRun({ topic, personas, chatContext, sessionId, projectPath, sourc
     artifacts: [],
     messages: [],
     contextHistory: [],
+    handoffs: [],
+    handoffs: [],
     sessionLinks: [],
     proposals: {},
     debates: [],
@@ -1373,10 +1546,11 @@ function freshIdleState() {
     chatProjectPath: null,
     chatBusy: false,
     missionBrief: null,
-    globalGoal: readMissionControl().globalGoal,
+    globalGoal: projectMissionControl(DEFAULT_PROJECT_ROOT).globalGoal,
     missionTarget: normalizeMissionTarget('', ''),
-    coordinationWarnings: readMissionControl().defaultWarnings,
-    missionControlVersion: readMissionControl().version,
+    coordinationWarnings: projectMissionControl(DEFAULT_PROJECT_ROOT).handoffGuidelines,
+    missionControlVersion: projectMissionControl(DEFAULT_PROJECT_ROOT).version,
+    missionControlProjectPath: projectMissionControl(DEFAULT_PROJECT_ROOT).projectPath,
     proposals: {},
     debates: [],
     synthesis: null,
@@ -2391,6 +2565,69 @@ function councilResearchBlock(research) {
   ].filter(Boolean).join('\n');
 }
 
+function parseListBlock(text, label) {
+  const re = new RegExp(`${label}:?\\s*\\n([\\s\\S]*?)(?=\\n[A-Z_ ]{6,}:|\\n##|$)`, 'i');
+  const m = String(text || '').match(re);
+  if (!m) return [];
+  return m[1]
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*[-*•]\s*/, '').trim())
+    .filter(Boolean)
+    .slice(0, 5)
+    .map((line) => truncate(line, 320));
+}
+
+function extractHandoffFromLogs(logs, fallbackSummary = '') {
+  const text = String(logs || '');
+  const summaryMatch = text.match(/HANDOFF_SUMMARY:\s*([\s\S]*?)(?=\nHANDOFF_REMINDERS?:|\nHANDOFF_WARNINGS?:|\n##|$)/i);
+  const summary = truncate((summaryMatch && summaryMatch[1].trim()) || fallbackSummary || text.split(/\r?\n/).filter(Boolean).slice(-8).join(' '), 520);
+  return {
+    summary: summary || 'Agent 已完成；未提供詳細 summary。',
+    reminders: parseListBlock(text, 'HANDOFF_REMINDERS?'),
+    warnings: parseListBlock(text, 'HANDOFF_WARNINGS?'),
+  };
+}
+
+function recordAgentHandoff(run, agent, preset, code) {
+  const parsed = extractHandoffFromLogs(agent.logs, agent.summary);
+  const warnings = [...parsed.warnings];
+  if (code !== 0 && agent.summary) warnings.unshift(agent.summary);
+  const handoff = {
+    id: id('handoff'),
+    runId: run.id,
+    agentId: agent.id,
+    agentName: agent.name,
+    stage: preset && (preset.key || preset.layer || preset.name),
+    summary: parsed.summary,
+    reminders: parsed.reminders.slice(0, 5),
+    warnings: warnings.map((w) => truncate(w, 320)).filter(Boolean).slice(0, 5),
+    status: agent.status,
+    createdAt: new Date().toISOString(),
+  };
+  agent.handoff = handoff;
+  run.handoffs = Array.isArray(run.handoffs) ? run.handoffs : [];
+  run.handoffs.unshift(handoff);
+  run.handoffs = run.handoffs.slice(0, 80);
+  return handoff;
+}
+
+function buildHandoffContext(run, agent) {
+  const handoffs = (run.handoffs || [])
+    .filter((h) => h && h.agentId !== (agent && agent.id))
+    .slice(0, 8);
+  if (!handoffs.length) return '## Previous Agent Handoffs\nNone yet.';
+  return [
+    '## Previous Agent Handoffs',
+    '下一個 agent 未必有上一個 agent 嘅完整記憶；以下係最近交棒 summary/reminder/warning，請優先讀。',
+    ...handoffs.map((h, idx) => [
+      `### Handoff ${idx + 1}: ${h.agentName || h.agentId} · ${h.status || ''}`,
+      `Summary: ${h.summary || '-'}`,
+      (h.reminders && h.reminders.length) ? `Reminders:\n${h.reminders.map((x) => `- ${x}`).join('\n')}` : '',
+      (h.warnings && h.warnings.length) ? `Warnings:\n${h.warnings.map((x) => `- ${x}`).join('\n')}` : '',
+    ].filter(Boolean).join('\n')),
+  ].join('\n\n');
+}
+
 function buildExecutionPrompt(run, preset, agent, options = {}) {
   const contexts = run.contextHistory
     .slice(-3)
@@ -2406,6 +2643,7 @@ function buildExecutionPrompt(run, preset, agent, options = {}) {
   const background = run.background || buildAutoBackground(run);
   const taskBrief = run.taskBrief || options.taskBrief || '';
   const memoryPack = buildMemoryPack(run);
+  const handoffBlock = buildHandoffContext(run, agent);
   const skillKeys = skillKeysForPreset(preset.key);
   const plan = run.pipeline && ['council', 'code'].includes(run.pipeline.mode) ? readLatestPlan(run) : { v: 0, md: '' };
   agent.skillKeys = skillKeys;
@@ -2417,6 +2655,7 @@ function buildExecutionPrompt(run, preset, agent, options = {}) {
       warningsCount: (run.coordinationWarnings || []).length,
       missionControlVersion: run.missionControlVersion || 0,
     },
+    handoffsPassed: (run.handoffs || []).slice(0, 8).map((h) => ({ agentName: h.agentName, status: h.status, createdAt: h.createdAt })),
     chatContextCount: run.contextHistory.length,
     artifactsPassed: run.artifacts.slice(0, 5).map((artifact) => ({ title: artifact.title, type: artifact.type })),
     planVersion: plan.v || 0,
@@ -2445,6 +2684,12 @@ function buildExecutionPrompt(run, preset, agent, options = {}) {
       : '- 修正紀律（重要）：完成主要工作後，最多做「一輪」自我 review + 修正就收手。唔好為咗清零散 warning 而無限重試 / 反覆改同一個位（呢樣會拖慢成個流程）。一輪之後若仲有未解決嘅 warning / 風險，唔好繼續鑽，直接喺回報度列出「剩低咩、點解、建議下一步」，留俾 Reviewer / Fix stage 處理。',
     '- 避免觸碰 secrets、SSH key、credentials、billing、安全設定。',
     '- 完成後用繁體中文 / 廣東話簡潔回報：改咗乜、測試結果、剩低風險。',
+    '- 回報最後必須加 Agent Handoff block，交棒俾下一個 agent：',
+    '  HANDOFF_SUMMARY: <你啱啱做咗乜 / 改咗乜 / 查到乜，3-5 句內>',
+    '  HANDOFF_REMINDERS:',
+    '  - <下一個 agent 要記住嘅背景 / 假設 / 依賴>',
+    '  HANDOFF_WARNINGS:',
+    '  - <下一個 agent 要避免或特別小心嘅風險；冇就寫 none>',
     '',
     `Swarm Run: ${run.id}`,
     `Topic: ${run.topic}`,
@@ -2454,6 +2699,8 @@ function buildExecutionPrompt(run, preset, agent, options = {}) {
     background,
     '',
     memoryPack.text,
+    '',
+    handoffBlock,
     '',
     '## This Run Task Brief',
     taskBrief || '未有手動任務說明。請先根據 Background / Chat Context 做保守分析；除非題目明確要求，不要主動改 code。',
@@ -2669,6 +2916,18 @@ function spawnAgentNow(run, preset, agent, agentCommand, options = {}) {
       content: agent.logs || agent.summary,
       agentId: agent.id,
     });
+    const handoff = recordAgentHandoff(run, agent, preset, code);
+    addArtifact(run, {
+      type: 'agent-handoff',
+      title: `📨 ${preset.name} 交棒`,
+      content: [
+        `Summary: ${handoff.summary}`,
+        handoff.reminders.length ? `\nReminders:\n${handoff.reminders.map((x) => `- ${x}`).join('\n')}` : '',
+        handoff.warnings.length ? `\nWarnings:\n${handoff.warnings.map((x) => `- ${x}`).join('\n')}` : '',
+      ].filter(Boolean).join('\n'),
+      agentId: agent.id,
+    });
+    if (agent.status === 'completed') notifyAgentHandoff(run, agent, handoff);
     if (agent.status === 'failed') notifyAgentFailed(run, agent, preset);
     updateSessionStatus(run, agent.sessionId);
     if (!run.pipeline && !run.agents.some((item) => ['delivery', 'review'].includes(item.layer) && item.status === 'running')) {
@@ -3056,6 +3315,9 @@ app.get('/api/runs', (req, res) => {
 	    missionTarget: run.missionTarget,
 	    coordinationWarnings: run.coordinationWarnings,
 	    missionControlVersion: run.missionControlVersion,
+	    missionControlProjectPath: run.missionControlProjectPath,
+	    handoffCount: (run.handoffs || []).length,
+	    latestHandoff: (run.handoffs || [])[0] || null,
 	    memoryPackStatus: run.memoryPackStatus,
 	    startedAt: run.startedAt,
     updatedAt: run.updatedAt,
@@ -3084,19 +3346,40 @@ app.get('/api/models', (req, res) => {
 });
 
 app.get('/api/mission-control', (req, res) => {
-  res.json({ ok: true, missionControl: readMissionControl() });
+  res.json({ ok: true, missionControl: projectMissionControl(req.query.projectPath || DEFAULT_PROJECT_ROOT) });
 });
 
 app.patch('/api/mission-control', (req, res) => {
   try {
     const body = req.body || {};
     const patch = { updatedBy: body.updatedBy || body.ownerUser || body.user || 'dashboard' };
+    patch.projectPath = body.projectPath || req.query.projectPath || DEFAULT_PROJECT_ROOT;
     if (body.globalGoal !== undefined) patch.globalGoal = body.globalGoal;
-    if (body.defaultWarnings !== undefined || body.coordinationWarnings !== undefined) {
-      patch.defaultWarnings = body.defaultWarnings !== undefined ? body.defaultWarnings : body.coordinationWarnings;
-    }
-    const next = writeMissionControl(patch);
-    res.json({ ok: true, missionControl: next });
+    if (body.defaultGlobalGoal !== undefined) patch.defaultGlobalGoal = body.defaultGlobalGoal;
+    if (body.handoffGuidelines !== undefined) patch.handoffGuidelines = body.handoffGuidelines;
+    writeMissionControl(patch);
+    res.json({ ok: true, missionControl: projectMissionControl(patch.projectPath) });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/mission-target/draft', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const taskBrief = String(body.taskBrief || body.task || '').trim();
+    const topic = String(body.topic || '').trim() || taskBrief.split('\n')[0] || 'Swarm Mission';
+    const projectPath = body.projectPath ? safeProjectPath(body.projectPath) : DEFAULT_PROJECT_ROOT;
+    const control = projectMissionControl(projectPath);
+    const target = await draftMissionTargetAI({
+      topic,
+      taskBrief,
+      projectPath,
+      globalGoal: body.globalGoal || control.globalGoal,
+      cli: body.cli,
+      model: body.model,
+    });
+    res.json({ ok: true, target, missionControl: control });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -3270,6 +3553,9 @@ function buildNextStepsContext(run) {
   if (revTxt) parts.push(`覆核 / 驗證 agent 輸出:\n${revTxt}`);
   const failedAgents = (run.agents || []).filter((a) => a.status === 'failed' || a.status === 'interrupted');
   if (failedAgents.length) parts.push(`失敗 / 中斷 agent: ${failedAgents.map((a) => a.name).join(', ')}`);
+  if ((run.handoffs || []).length) {
+    parts.push(`最近 Agent Handoffs:\n${(run.handoffs || []).slice(0, 8).map((h) => `- ${h.agentName}: ${truncate(h.summary || '', 220)}${(h.warnings || []).length ? ` | warnings: ${h.warnings.slice(0, 2).join(' / ')}` : ''}`).join('\n')}`);
+  }
   const arts = (run.artifacts || []).slice(0, 6).map((a) => `${a.title || a.type}: ${truncate(a.content || '', 220)}`).filter(Boolean).join('\n');
   if (arts) parts.push(`產出 artifact: ${arts}`);
   return parts.join('\n\n');
@@ -3387,11 +3673,16 @@ app.get('/api/tasks', (req, res) => {
   res.json({ tasksDir: SWARM_TASKS_DIR, tasks: out.slice(0, 60) });
 });
 
-app.post('/api/runs', (req, res) => {
-  const run = createRun(req.body || {});
-  io.emit('swarm-start', publicRun(run));
-  emitSnapshot();
-  res.json({ ok: true, run });
+app.post('/api/runs', async (req, res) => {
+  try {
+    const run = createRun(req.body || {});
+    if (!(req.body || {}).missionTarget) await ensureMissionTargetDraft(run, { cli: (req.body || {}).cli, model: (req.body || {}).model });
+    io.emit('swarm-start', publicRun(run));
+    emitSnapshot();
+    res.json({ ok: true, run });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 app.patch('/api/runs/:id/settings', (req, res) => {
@@ -3510,7 +3801,7 @@ app.delete('/api/runs/:id', (req, res) => {
   res.json({ ok: true, deletedRunId: runId, currentRunId: store.currentRunId });
 });
 
-app.post('/api/runs/:id/execution/start', (req, res) => {
+app.post('/api/runs/:id/execution/start', async (req, res) => {
   const run = findRunOr404(req.params.id, res);
   if (!run) return;
   if (!lockRun(run.id)) return res.status(409).json({ error: '呢個 run 啱啱有動作處理緊,等一兩秒先再試' });
@@ -3544,6 +3835,7 @@ app.post('/api/runs/:id/execution/start', (req, res) => {
         })),
       });
     }
+    if (!body.missionTarget) await ensureMissionTargetDraft(run, { taskBrief: body.taskBrief, cli: body.cli, model: body.model });
     const { agents } = startExecutionAgents(run, body.agents, {
       cli: body.cli,
       model: body.model,
@@ -3558,7 +3850,7 @@ app.post('/api/runs/:id/execution/start', (req, res) => {
 });
 
 // Drop-zone one-shot: create a plan AND start its first execution session in one call.
-app.post('/api/plans/run', (req, res) => {
+app.post('/api/plans/run', async (req, res) => {
   try {
     const body = req.body || {};
     const taskBrief = String(body.taskBrief || body.task || '').trim();
@@ -3581,6 +3873,7 @@ app.post('/api/plans/run', (req, res) => {
 	      coordinationWarnings: body.coordinationWarnings,
 	      seed: false, // drop-zone plans start clean; agents come from the wave/pipeline we spawn
 	    });
+	    if (!body.missionTarget) await ensureMissionTargetDraft(run, { taskBrief, cli: body.cli, model: body.model });
 	    const deliveryMode = body.deliveryMode || body.mode || 'code';
 	    const deliverable = body.deliverable || (deliveryMode === 'code' ? 'code' : 'text');
 	    const startOptions = {
@@ -3971,7 +4264,7 @@ app.post('/api/runs/:id/chat/finalize', (req, res) => {
 });
 
 // 交議會:用 chat 定稿嘅 brief,喺同一 run 開 council pipeline(Phase 2)。
-app.post('/api/runs/:id/council/start', (req, res) => {
+app.post('/api/runs/:id/council/start', async (req, res) => {
   const run = findRunOr404(req.params.id, res);
   if (!run) return;
   if (!lockRun(run.id)) return res.status(409).json({ error: '呢個 run 啱啱有動作處理緊,等一兩秒先再試' });
@@ -4004,6 +4297,7 @@ app.post('/api/runs/:id/council/start', (req, res) => {
   const wantPath = (brief && brief.projectPath) || run.chatProjectPath;
   if (wantPath) { try { run.projectPath = safeProjectPath(wantPath); } catch (_) {} }
   try {
+    await ensureMissionTargetDraft(run, { taskBrief, cli: 'claude', model: 'sonnet' });
     const pipeline = startPipeline(run, { deliveryMode: 'council', perAgentModels, taskBrief });
     io.emit('run-updated', publicRun(run));
     res.json({ ok: true, pipeline });
