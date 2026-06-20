@@ -61,7 +61,7 @@ const SWARM_GATE_TIME_BUDGET_MS = Number(process.env.SWARM_GATE_TIME_BUDGET_MS |
 const telegram = require('./lib/telegram');
 const SWARM_DASH_URL = process.env.SWARM_DASH_URL || 'http://187.127.115.235:3010';
 
-// ─── Council research（Perplexity，B 模式：三模提角度 → 集中 call 一次 → 結果派返）───
+// ─── Council research（Perplexity，reviewer 提角度 → 集中 call 一次 → 結果派返）───
 const { runResearch } = require('./lib/perplexity-research');
 const PPLX_BUDGET = Number(process.env.PPLX_BUDGET || 5);
 const PPLX_MODEL = process.env.PPLX_MODEL || 'sonar';
@@ -89,7 +89,7 @@ function notifyCouncilGate(run, p, reason) {
 function notifyCouncilReviewGate(run, reviews) {
   const disagreements = (reviews || []).filter((r) => !r.agree).length;
   tgNotify(
-    `🔎 *三模獨立 review 完成*\n\n🏛 ${tgEsc(run.topic)}\n已收到 ${reviews.length} 份 review｜有異議 ${disagreements}\n\n撳「開始拗」進入 moderator 收斂,或開 [Swarm Dashboard](${SWARM_DASH_URL}) 睇全文。`,
+    `🔎 *Council review 完成*\n\n🏛 ${tgEsc(run.topic)}\n已收到 ${reviews.length} 份 review｜有異議 ${disagreements}\n\n撳「開始拗」進入 moderator 收斂,或開 [Swarm Dashboard](${SWARM_DASH_URL}) 睇全文。`,
     { inline_keyboard: [[{ text: '🥊 開始拗', callback_data: 'debate' }]] },
     run && run.tgChatId
   );
@@ -242,7 +242,7 @@ function notifyPushResult(run, r) {
     );
   }
 }
-// ─── Swarm Council (三模議會 · Phase 2-4): 三模共識收斂 + 人手御准閘 + 人話講解 ───
+// ─── Swarm Council (Council 議會 · Phase 2-4): 共識收斂 + 人手御准閘 + 人話講解 ───
 // 三個你揀嘅 model 讀真 project + plan,互相博弈到零爭議,moderator 改寫 plan.vN;
 // 收斂(或用盡 round)後停低交人手御准,批准後 explainer 用人話講解。全程沿用 CLI spawn
 // (OAuth Max,零增量成本)。全部邏輯 gate by p.mode==='council',唔影響既有 code/thinking pipeline。
@@ -417,7 +417,7 @@ const EXECUTION_PRESETS = [
 
 // ─── Swarm Council system prompts (注入 preset.scope) ───
 const COUNCIL_REVIEWER_SCOPE = [
-  '你係「三模議會」三個共識評審之一。另外仲有兩個*唔同 model* 嘅評審同你並行,之後有一個 moderator 會 merge 大家意見、改寫 plan。你哋嘅職責唔係快速通過,而係**逼出一個「揀邊個 file、改邊段、點驗收」都講得清嘅 plan**。寧願拗多幾轉,都唔好留含糊。',
+  '你係「AI 聯合國 Council」嘅共識評審之一。其他 reviewer 可能係唔同 model、唔同角色，之後有一個 moderator 會 merge 大家意見、改寫 plan。你哋嘅職責唔係快速通過，而係**逼出一個「揀邊個 file、改邊段、點驗收」都講得清嘅 plan**。寧願拗多幾轉，都唔好留含糊。',
   '你嘅 cwd 就係真實 project 根目錄。你**必須真係用 Read / grep / Bash(ls/cat/git log)去查項目入面嘅實際文件**先發言 —— 引用要落到具體 file path + 函數 / 行號做證據,唔准淨係讀 plan 文字就估,亦唔准講空泛原則(例如淨係講「要注意安全」而唔指明邊個 endpoint / 邊個 query)。',
   '輸入:① 當前 plan(喺下面 task brief)② project 實際 code / 結構 / config。',
   '**深度紀律(必守)**:你嘅評審至少要逐一過呢 9 個維度,每個寫一句結論(冇問題都要講「已 check：…」,有問題就升做 OPEN_ISSUES):',
@@ -431,7 +431,7 @@ const COUNCIL_REVIEWER_SCOPE = [
   '  8) 向後兼容 — 會唔會整爛現有功能 / 資料 / 既有 API。',
   '  9) 驗收 — plan 有冇講明「點先算做完」(可執行嘅驗證指令 + 期望 output)。',
   '根據 goal,逐點寫低你嘅評審:1. 要改善(plan 邊度弱、漏咗咩、邊度過度設計);2. 要做 / 要捉 fix(實際 code 入面有咩 bug / 缺口 / 風險要喺 plan 反映);3. 環節之間關係(步驟之間嘅依賴、UI、data flow 有冇斷層或矛盾)。',
-  '博弈紀律:主動挑另外兩位(上一 round)嘅論點骨頭,標出歧義同矛盾。每一 round 都要帶**新嘢**(新 edge case / 新風險 / 更佳方案),唔好淨係複製上一 round 嘅嘢。目標係**傾到三個全部同意、零爭議,而且 plan 已落到 file 級**。但**唔好為咗快而 AGREE** —— 只有當你逐個維度都 check 過、真係搵唔到可改善先 AGREE;同樣亦唔好為拗而拗。',
+  '博弈紀律:主動挑其他 reviewer(上一 round)嘅論點骨頭，標出歧義同矛盾。每一 round 都要帶**新嘢**(新 edge case / 新風險 / 更佳方案)，唔好淨係複製上一 round 嘅嘢。目標係**傾到 reviewer 全部同意、零爭議，而且 plan 已落到 file 級**。但**唔好為咗快而 AGREE** —— 只有當你逐個維度都 check 過、真係搵唔到可改善先 AGREE;同樣亦唔好為拗而拗。',
   '**唔好自己直接改 plan 文字檔** —— 你只負責提出結構化改動建議,由 moderator 落實(避免三人撞同一個 file)。',
   '最後**必須**用呢個固定格式收尾(俾機器 parse,前後唔好加多餘文字):',
   'CONSENSUS: AGREE        # 或 DISPUTE(你對當前 plan 仲有未解爭議)',
@@ -442,23 +442,23 @@ const COUNCIL_REVIEWER_SCOPE = [
 ].join('\n');
 
 const COUNCIL_MODERATOR_SCOPE = [
-  '你係「三模議會」嘅 moderator(仲裁收斂)。三個評審(A/B/C)今 round 嘅完整輸出**會以 file path 形式喺 task brief 列出** —— 你**必須先用 Read tool 逐個讀晒嗰啲 file 全文**先 merge,唔好只靠摘要(摘要會缺料,尤其體積大嗰份)。讀埋當前 plan,有需要自己 Read / grep project 核實。',
-  '1. Merge:將三人嘅 PROPOSED_CHANGES 合併、去重、解衝突,**改寫出新一版完整 plan**。三人有衝突嘅地方,揀技術上最穩陣嗰個,並一句講點解。**每一條評審提出嘅 proposal 都要有下場:要麼 incorporate 入 plan,要麼喺 DISPUTES 寫明點解 reject** —— 唔准靜靜雞當冇睇到。若某評審缺席(fail),照 merge 在席者意見,唔好因為少咗一把聲就 block。',
+  '你係「AI 聯合國 Council」嘅 moderator(仲裁收斂)。所有 reviewer 今 round 嘅完整輸出**會以 file path 形式喺 task brief 列出** —— 你**必須先用 Read tool 逐個讀晒嗰啲 file 全文**先 merge，唔好只靠摘要(摘要會缺料，尤其體積大嗰份)。讀埋當前 plan，有需要自己 Read / grep project 核實。',
+  '1. Merge:將所有 reviewer 嘅 PROPOSED_CHANGES 合併、去重、解衝突，**改寫出新一版完整 plan**。有衝突嘅地方，揀技術上最穩陣嗰個，並一句講點解。**每一條評審提出嘅 proposal 都要有下場:要麼 incorporate 入 plan，要麼喺 DISPUTES 寫明點解 reject** —— 唔准靜靜雞當冇睇到。若某評審缺席(fail)，照 merge 在席者意見，唔好因為少咗一把聲就 block。',
   '2. 重新評估每條 OPEN_ISSUES:已解決就剔走;仍未解就保留,標明邊位提出、卡喺邊。',
   '3. **必須**將新 plan 全文用呢個 fenced block 輸出(系統會寫去 plan.vN.md):',
   '```plan-final',
   '<完整 markdown plan 全文 —— 要落到 file 級:每個改動講到改邊個 file / 介面 / 邊界條件 / 點驗收>',
   '```',
   '**⚠️ 區分兩種未決項(關鍵,防兜圈 / dead-loop)**:',
-  '  • **技術爭議** = 三個 model 之間真係拗緊、未有共識嘅技術點 → 計入 OPEN_DISPUTES,要繼續拗到解決。',
+  '  • **技術爭議** = reviewer 之間真係拗緊、未有共識嘅技術點 → 計入 OPEN_DISPUTES,要繼續拗到解決。',
   '  • **需要人類(Hugo)拍板** = 產品 / 管治 / 安全取捨 / one-way-door 等**結構上要老闆揀**嘅決定(唔係技術拗唔掂,而係你哋冇權代佢決定)→ **唔好當 OPEN_DISPUTE**,放入獨立 ESCALATE 清單,並**照樣可以 CONVERGED**。再拗幾多 round 都解唔到一個本來唔屬於你哋決定嘅嘢 —— 一偵測到就收斂 + escalate,唔好為佢兜圈。',
   '**收斂門檻(嚴格,唔好為咗收工亂報,但亦唔好為咗一個 Hugo-decision 兜圈)**:以下全部成立就寫 CONVERGED —',
-  '  (a) 三人零未解**技術**爭議(Hugo-decision 放 ESCALATE,唔阻收斂);',
+  '  (a) reviewer 零未解**技術**爭議(Hugo-decision 放 ESCALATE,唔阻收斂);',
   '  (b) plan 已落到**檔案 / 介面 / 邊界條件 / 驗收方式**級別,唔再停留喺概括或抽象層面;',
   '  (c) 冇未驗證嘅關鍵假設(有就喺 plan 講明點 verify)。',
   '若 ESCALATE 有項,喺 plan-final 入面開一段「## 需要 Hugo 決定(ESCALATE)」逐項列:係咩、點解要佢揀、你哋建議邊個 default + 理由(令就算佢未覆,落實都有個安全 default)。',
   '4. 之後**必須**用呢個固定格式收尾(俾機器 parse):',
-  'COUNCIL: CONVERGED      # 三人零未解「技術」爭議 + plan 已落 file 級(Hugo-decision 放 ESCALATE 唔阻);仲有技術爭議先寫 OPEN',
+  'COUNCIL: CONVERGED      # reviewer 零未解「技術」爭議 + plan 已落 file 級(Hugo-decision 放 ESCALATE 唔阻);仲有技術爭議先寫 OPEN',
   'OPEN_DISPUTES: <整數>     # 只計技術爭議,唔計 ESCALATE',
   'DISPUTES:',
   '- [id] 一句講未解技術爭議(CONVERGED 就寫「(none)」)',
@@ -479,9 +479,9 @@ const COUNCIL_EXPLAINER_SCOPE = [
 
 // 最終仲裁者 (Opus 4.8)：只可仲裁技術爭議；產品/安全/one-way-door 仍然交 Hugo / owner。
 const COUNCIL_ARBITER_SCOPE = [
-  '你係「三模議會」嘅**最終技術仲裁者**,用緊 Opus 4.8 —— 三個 model 拗咗好多 round 都未完全收斂,而家由你處理**技術爭議**。你唔可以代 Hugo / owner 拍產品、安全、付費、資料刪除、權限放寬、one-way-door 等決策。',
+  '你係「AI 聯合國 Council」嘅**最終技術仲裁者**,用緊 Opus 4.8 —— reviewer 拗咗好多 round 都未完全收斂，而家由你處理**技術爭議**。你唔可以代 Hugo / owner 拍產品、安全、付費、資料刪除、權限放寬、one-way-door 等決策。',
   '你嘅 cwd 係真實 project 根目錄,有需要可以用 Read / grep 親自核實先決定,唔好淨係靠人哋摘要。',
-  '輸入:① goal ② 議會跑足 N round 後嘅最新 plan ③ 仲未解嘅技術爭議 / 要拍板嘅 ESCALATE ④ 最後一 round 三模評審。',
+  '輸入:① goal ② 議會跑足 N round 後嘅最新 plan ③ 仲未解嘅技術爭議 / 要拍板嘅 ESCALATE ④ 最後一 round Council review。',
   '你嘅任務:逐條未解**技術爭議**做最終決定 —— 揀技術上最穩陣、最符合 goal、對現有系統最安全(唔整爛現有嘢)嗰個方案,每條一句講點解咁揀。',
   '若遇到產品 / 管治 / 安全 / 付費 / 資料刪除 / 權限放寬 / one-way-door / owner preference 類 ESCALATE,你**必須保留為「需要 Hugo 決定」**,寫明安全 default + tradeoff,但唔准假裝已拍板。',
   '輸出一份**完全收斂、file 級、可直接落 code** 嘅 final plan,用呢個 fenced block(系統會寫做新 plan 版本,俾 build agent 直接跟):',
@@ -532,7 +532,7 @@ const THINKING_PRESETS = [
     deliveryMode: 'thinking',
     deliverable: 'plan',
   },
-  // ── Swarm Council (三模議會) presets ── 3 reviewer 用硬角色分工,再配唔同 model/skills
+  // ── Swarm Council presets ── reviewer 用硬角色/自由觀點/9-grid 分工,再配唔同 model/skills
   {
     key: 'council_a',
     name: 'Council A · Architecture',
@@ -560,6 +560,126 @@ const THINKING_PRESETS = [
     role: '反方 / 風險評審',
     skill: 'red-team / edge cases / security / regressions',
     scope: `${COUNCIL_REVIEWER_SCOPE}\n\n## 你嘅硬角色（Seat C）\n你係反方同風險擔當。專注 security、edge cases、failure modes、regression、data loss、權限、one-way-door 決策。遇到產品/安全/不可逆取捨要明確 ESCALATE Hugo,唔好俾其他席位草率通過。`,
+    deliveryMode: 'thinking',
+    deliverable: 'consensus-review',
+  },
+  {
+    key: 'council_opus_free',
+    name: 'Council Opus · Free View',
+    layer: 'research',
+    role: 'Opus 自由觀點',
+    skill: 'broad product / architecture / tradeoff review',
+    scope: `${COUNCIL_REVIEWER_SCOPE}\n\n## 自由觀點（Opus）\n你唔綁定 A/B/C 硬角色。請用你作為 Opus 嘅自然判斷，從產品目標、系統設計、scope、風險、可交付性整體評審。重點係提出其他 model 可能忽略嘅大局同取捨。`,
+    deliveryMode: 'thinking',
+    deliverable: 'consensus-review',
+  },
+  {
+    key: 'council_codex_free',
+    name: 'Council Codex · Free View',
+    layer: 'research',
+    role: 'Codex 自由觀點',
+    skill: 'implementation / testing / codebase-practical review',
+    scope: `${COUNCIL_REVIEWER_SCOPE}\n\n## 自由觀點（Codex）\n你唔綁定 A/B/C 硬角色。請用你作為 Codex 嘅自然判斷，從實作可行性、code path、測試、回歸風險、developer workflow 整體評審。重點係指出落 code 時真會卡住嘅地方。`,
+    deliveryMode: 'thinking',
+    deliverable: 'consensus-review',
+  },
+  {
+    key: 'council_glm_free',
+    name: 'Council GLM · Free View',
+    layer: 'research',
+    role: 'GLM 自由觀點',
+    skill: 'independent alternative / contradiction review',
+    scope: `${COUNCIL_REVIEWER_SCOPE}\n\n## 自由觀點（GLM）\n你唔綁定 A/B/C 硬角色。請用你作為 GLM 嘅自然判斷，主動提出替代路線、矛盾、漏位、中文語境/流程上可能被忽略嘅問題。重點係補足不同公司 model 嘅獨立視角。`,
+    deliveryMode: 'thinking',
+    deliverable: 'consensus-review',
+  },
+  {
+    key: 'council_opus_arch',
+    name: 'Grid Opus · Architecture',
+    layer: 'research',
+    role: 'Opus 架構評審',
+    skill: 'architecture / scope / data-flow',
+    scope: `${COUNCIL_REVIEWER_SCOPE}\n\n## 9-grid 角色：Opus × Architecture\n你只專注架構、scope、data flow、file boundaries、dependency order。用 Opus 視角指出 plan 在系統結構上最應該保留、刪減或重排嘅地方。`,
+    deliveryMode: 'thinking',
+    deliverable: 'consensus-review',
+  },
+  {
+    key: 'council_codex_arch',
+    name: 'Grid Codex · Architecture',
+    layer: 'research',
+    role: 'Codex 架構評審',
+    skill: 'architecture / implementation boundaries',
+    scope: `${COUNCIL_REVIEWER_SCOPE}\n\n## 9-grid 角色：Codex × Architecture\n你只專注架構同 code boundary。用 Codex 視角檢查現有檔案、模組邊界、依賴方向同落 code 順序會唔會斷。`,
+    deliveryMode: 'thinking',
+    deliverable: 'consensus-review',
+  },
+  {
+    key: 'council_glm_arch',
+    name: 'Grid GLM · Architecture',
+    layer: 'research',
+    role: 'GLM 架構評審',
+    skill: 'architecture / alternative structure',
+    scope: `${COUNCIL_REVIEWER_SCOPE}\n\n## 9-grid 角色：GLM × Architecture\n你只專注架構同替代設計。用 GLM 視角提出是否有更簡單、更穩、更少耦合嘅結構安排。`,
+    deliveryMode: 'thinking',
+    deliverable: 'consensus-review',
+  },
+  {
+    key: 'council_opus_impl',
+    name: 'Grid Opus · Implementation',
+    layer: 'research',
+    role: 'Opus 實作評審',
+    skill: 'implementation feasibility / acceptance',
+    scope: `${COUNCIL_REVIEWER_SCOPE}\n\n## 9-grid 角色：Opus × Implementation\n你只專注落地方案、驗收準則同工程取捨。用 Opus 視角檢查 plan 是否太抽象、是否可交付、是否有更穩嘅拆法。`,
+    deliveryMode: 'thinking',
+    deliverable: 'consensus-review',
+  },
+  {
+    key: 'council_codex_impl',
+    name: 'Grid Codex · Implementation',
+    layer: 'research',
+    role: 'Codex 實作評審',
+    skill: 'coding feasibility / tests / build order',
+    scope: `${COUNCIL_REVIEWER_SCOPE}\n\n## 9-grid 角色：Codex × Implementation\n你只專注 coding feasibility、testability、驗收指令、rollback、build order。用 Codex 視角講清楚實作會改邊啲 file、點樣驗證。`,
+    deliveryMode: 'thinking',
+    deliverable: 'consensus-review',
+  },
+  {
+    key: 'council_glm_impl',
+    name: 'Grid GLM · Implementation',
+    layer: 'research',
+    role: 'GLM 實作評審',
+    skill: 'implementation alternatives / workflow',
+    scope: `${COUNCIL_REVIEWER_SCOPE}\n\n## 9-grid 角色：GLM × Implementation\n你只專注實作路線同替代方案。用 GLM 視角指出有冇更短、更少副作用、更容易驗收嘅做法。`,
+    deliveryMode: 'thinking',
+    deliverable: 'consensus-review',
+  },
+  {
+    key: 'council_opus_risk',
+    name: 'Grid Opus · Risk',
+    layer: 'research',
+    role: 'Opus 風險評審',
+    skill: 'risk / product safety / edge cases',
+    scope: `${COUNCIL_REVIEWER_SCOPE}\n\n## 9-grid 角色：Opus × Risk\n你只專注風險、產品安全、不可逆決策、owner gate。用 Opus 視角指出最值得停低、降 scope 或 escalate 嘅地方。`,
+    deliveryMode: 'thinking',
+    deliverable: 'consensus-review',
+  },
+  {
+    key: 'council_codex_risk',
+    name: 'Grid Codex · Risk',
+    layer: 'research',
+    role: 'Codex 風險評審',
+    skill: 'regression / failure modes / test gaps',
+    scope: `${COUNCIL_REVIEWER_SCOPE}\n\n## 9-grid 角色：Codex × Risk\n你只專注 regression、failure modes、測試缺口、部署風險。用 Codex 視角指出最容易喺 code 實作時整壞嘅位。`,
+    deliveryMode: 'thinking',
+    deliverable: 'consensus-review',
+  },
+  {
+    key: 'council_glm_risk',
+    name: 'Grid GLM · Risk',
+    layer: 'research',
+    role: 'GLM 風險評審',
+    skill: 'red-team / edge cases / contradiction',
+    scope: `${COUNCIL_REVIEWER_SCOPE}\n\n## 9-grid 角色：GLM × Risk\n你只專注反方、edge case、矛盾同漏位。用 GLM 視角挑戰其他方案，尤其係安全、資料、權限、流程死角。`,
     deliveryMode: 'thinking',
     deliverable: 'consensus-review',
   },
@@ -608,6 +728,18 @@ const AGENT_SKILL_MAP = {
   council_a:   ['brainstormers', 'architect', 'reviewer-persona'],
   council_b:   ['architect', 'reviewer-persona', 'security-auditor'],
   council_c:   ['brainstormers', 'refactor-engineer', 'reviewer-persona'],
+  council_opus_free: ['brainstormers', 'architect', 'reviewer-persona'],
+  council_codex_free: ['architect', 'debugger', 'reviewer-persona'],
+  council_glm_free: ['brainstormers', 'refactor-engineer', 'reviewer-persona'],
+  council_opus_arch: ['architect', 'brainstormers', 'reviewer-persona'],
+  council_codex_arch: ['architect', 'debugger', 'reviewer-persona'],
+  council_glm_arch: ['architect', 'brainstormers', 'reviewer-persona'],
+  council_opus_impl: ['architect', 'reviewer-persona'],
+  council_codex_impl: ['debugger', 'reviewer-persona'],
+  council_glm_impl: ['refactor-engineer', 'reviewer-persona'],
+  council_opus_risk: ['security-auditor', 'reviewer-persona'],
+  council_codex_risk: ['debugger', 'security-auditor', 'reviewer-persona'],
+  council_glm_risk: ['brainstormers', 'security-auditor', 'reviewer-persona'],
   moderator:   ['architect', 'reviewer-persona'],
   explainer:   [],  // 只靠 execution-discipline + tone prompt,免污染人話 tone
   overseer:    ['brainstormers', 'architect', 'reviewer-persona'],  // 總管:點子 + 系統思維 + 批判 review
@@ -1434,7 +1566,6 @@ function createRun({ topic, personas, chatContext, sessionId, projectPath, sourc
     messages: [],
     contextHistory: [],
     handoffs: [],
-    handoffs: [],
     sessionLinks: [],
     proposals: {},
     debates: [],
@@ -1811,7 +1942,7 @@ const CHAT_PROMPT_MAX_CHARS = 90000; // 控 argv $2 長度(Linux MAX_ARG_STRLEN 
 function buildChatPrompt(run, chatCwd, finalize) {
   const head = [
     '你係 Swarm Dashboard 嘅「策劃幕僚」,同用戶一對一傾偈,用繁體中文 / 廣東話。',
-    '目標:透過多回合對話,幫用戶由模糊念頭收斂成一份清晰、可執行嘅 mission brief(之後交俾 AI 聯合國 / 三模議會落地)。',
+    '目標:透過多回合對話,幫用戶由模糊念頭收斂成一份清晰、可執行嘅 mission brief(之後交俾 AI 聯合國 Council 落地)。',
     '風格:精簡、直接、追問最關鍵嘅缺口;唔肯定就問,唔好自己亂作 plan 細節。',
   ];
   if (chatCwd) head.push(
@@ -1870,7 +2001,7 @@ const MISSION_REFINE_PROMPT = [
   '保留用戶原意,補返佢可能漏咗嘅技術細節同 edge case;唔好擅自加佢冇要求嘅 feature 或者過度膨脹。',
 ].join('\n');
 const COUNCIL_REFINE_PROMPT = [
-  '你係資深顧問,幫手完善一個要交俾「AI 聯合國」（即三個 AI model 組成嘅三模議會）評審／討論嘅議題 brief。',
+  '你係資深顧問,幫手完善一個要交俾「AI 聯合國 Council」（可選快速 / 平衡 / 深度 9-grid）評審／討論嘅議題 brief。',
   '將用戶粗略嘅請求,整理成清晰嘅 review brief,包含：',
   '【要評審／討論乜】、【關注點同風險】、【評審準則】、【期望輸出】。',
   '保留用戶原意,唔好擴大範圍。',
@@ -2064,7 +2195,7 @@ function hasHumanEscalation(text) {
   return false;
 }
 
-// ─── Swarm Council parsers + plan IO (三模議會) ───
+// ─── Swarm Council parsers + plan IO ───
 // 讀最新一版 plan(plan.vN.md);冇就 fallback brief.md → run.taskBrief。
 function readLatestPlan(run) {
   const dir = COUNCIL_DIR(run.id);
@@ -2081,13 +2212,13 @@ function readLatestPlan(run) {
   return { v: 0, md: run.taskBrief || run.background || '' };
 }
 
-// 任務三:抽最新一 round 三模 review 重點 + 未解爭議 → 注入 code agent prompt
+// 任務三:抽最新一 round Council review 重點 + 未解爭議 → 注入 code agent prompt
 // （斷層:落 code 嘅 agent 本來完全唔知 reviewer concern,fix iteration 冇目標）。
 function collectReviewFindings(run) {
   const dir = COUNCIL_DIR(run.id);
   let files = [];
   try { files = fs.readdirSync(dir); } catch (_) { return ''; }
-  const reviewRe = /^round-(\d+)-reviewer-(\d+)\.md$/;
+  const reviewRe = /^round-(\d+)(?:-[a-z0-9_-]+)?-reviewer-(\d+)\.md$/i;
   const reviews = files.map((f) => { const m = f.match(reviewRe); return m ? { f, round: Number(m[1]), rev: Number(m[2]) } : null; }).filter(Boolean);
   if (!reviews.length) return '';
   const maxRound = Math.max(...reviews.map((r) => r.round));
@@ -2096,7 +2227,7 @@ function collectReviewFindings(run) {
     let txt = ''; try { txt = fs.readFileSync(path.join(dir, r.f), 'utf8'); } catch (_) {}
     return `### 評審 ${r.rev}\n${truncate(txt, 800)}`;
   });
-  let out = `\n\n---\n## ⚠️ 三模 review 重點（落 code 時必須兼顧 reviewer 嘅 concern）\n\n${parts.join('\n\n')}`;
+  let out = `\n\n---\n## ⚠️ Council review 重點（落 code 時必須兼顧 reviewer 嘅 concern）\n\n${parts.join('\n\n')}`;
   const disputes = (run.pipeline && run.pipeline.councilDisputes) || '';
   if (disputes && disputes.trim() && !/^\(?(none|無)\)?$/i.test(disputes.trim())) out += `\n\n## 仍未完全解決嘅爭議\n${truncate(disputes, 600)}`;
   return out;
@@ -2175,7 +2306,7 @@ function loopBackToReview(run, p) {
   advancePipeline(run);
 }
 
-// ─── Swarm Council 收斂引擎 (三模議會) ───
+// ─── Swarm Council 收斂引擎 ───
 // consensus wave 完 → 砌 moderator input(plan + 三人全文) → 行 moderator;
 // moderator wave 完 → 寫 plan vN、判收斂(CONVERGED 且 未解==0)/rewind 再 round/pause 交人手。
 function advanceCouncil(run, p, stage, session) {
@@ -2210,30 +2341,46 @@ function advanceCouncil(run, p, stage, session) {
     try {
       fs.mkdirSync(cdir, { recursive: true });
       present.forEach((r, i) => {
-        const fn = `round-${p.councilRound}-reviewer-${i + 1}.md`;
+        const fn = `round-${p.councilRound}-${stage.key || 'consensus'}-reviewer-${i + 1}.md`;
         fs.writeFileSync(path.join(cdir, fn), `# ${r.name}${r.model ? ` (${r.model})` : ''}\n\n${r.logs}`);
         reviewFiles.push({ name: r.name, model: r.model, path: path.join(cdir, fn) });
       });
     } catch (e) { console.warn('[council] write review files failed:', e.message); }
+    p.councilReviewFiles = p.councilReviewFiles || {};
+    const roundKey = String(p.councilRound);
+    const existingFiles = Array.isArray(p.councilReviewFiles[roundKey]) ? p.councilReviewFiles[roundKey] : [];
+    p.councilReviewFiles[roundKey] = existingFiles
+      .filter((f) => !reviewFiles.some((nf) => nf.path === f.path))
+      .concat(reviewFiles);
+    const allRoundFiles = p.councilReviewFiles[roundKey] || reviewFiles;
     run.taskBrief = truncate(
       `## Goal\n${run.background || run.topic || ''}\n\n## 當前 Plan (v${plan.v})\n${plan.md}\n\n` +
-      `## 三位評審今 round 完整輸出（已各自寫去 file）\n你**必須逐個用 Read tool 讀晒以下每個 file 全文先 merge**，唔好淨係靠下面摘要（摘要只係索引，會缺料）：\n` +
-      reviewFiles.map((f) => `- ${f.name}${f.model ? ` (${f.model})` : ''}: \`${f.path}\``).join('\n') +
+      `## ${councilModeLabel(p.councilMode)} · Round ${p.councilRound} 完整輸出（已各自寫去 file）\n你**必須逐個用 Read tool 讀晒以下每個 file 全文先 merge**，唔好淨係靠下面摘要（摘要只係索引，會缺料）：\n` +
+      allRoundFiles.map((f) => `- ${f.name}${f.model ? ` (${f.model})` : ''}: \`${f.path}\``).join('\n') +
       (present.length < reviews.length ? `\n(註:${reviews.length - present.length} 位評審缺席/失敗,照 merge 在席者)` : '') +
-      `\n\n## 各評審摘要（索引用，完整內容請 Read 上面 file）\n` +
+      `\n\n## 今個 stage 評審摘要（索引用，完整內容請 Read 上面 file）\n` +
       present.map((r) => `### ${r.name}${r.model ? ` (${r.model})` : ''}\n${truncate(r.logs, 1800)}`).join('\n\n'),
       MAX_CONTEXT_CHARS);
-    // 第一輪三模獨立 review 完 → 收集三模提出嘅 research 角度（撳「開始拗」後集中查一次）→ 停低俾用戶睇
-    if (p.councilRound === 1 && !p.councilDebateStarted) {
+    // 第一輪指定 review gate 完 → 收集 council 提出嘅 research 角度（撳「開始拗」後集中查一次）→ 停低俾用戶睇
+    if (stage.reviewGate !== false && p.councilRound === 1 && !p.councilDebateStarted) {
       const allAngles = [];
       let queryHint = '';
-      present.forEach((r) => {
+      const gateReviews = allRoundFiles.map((f) => {
+        let logs = '';
+        try { logs = fs.readFileSync(f.path, 'utf8'); } catch (_) {}
+        const verdict = (logs.match(/CONSENSUS\s*[:：]\s*(AGREE|DISPUTE)/i) || [])[1] || 'DISPUTE';
+        const anglesRaw = (logs.match(/RESEARCH_ANGLES\s*[:：]\s*\n([\s\S]*?)(?:\n\s*\n|\n```|\nRESEARCH_QUERY|\nCONSENSUS|\nPROPOSED_CHANGES|$)/i) || [, ''])[1];
+        const angles = (anglesRaw || '').split('\n').map((s) => s.replace(/^[-*\d.\s]+/, '').trim()).filter(Boolean).slice(0, 6);
+        const query = ((logs.match(/RESEARCH_QUERY\s*[:：]\s*(.+)/i) || [, ''])[1] || '').trim();
+        return { name: f.name, model: f.model || '', agree: /AGREE/i.test(verdict), failed: false, logs, angles, queryHint: query };
+      });
+      (gateReviews.length ? gateReviews : present).forEach((r) => {
         (r.angles || []).forEach((a) => { if (a && !allAngles.includes(a)) allAngles.push(a); });
         if (!queryHint && r.queryHint) queryHint = r.queryHint;
       });
       p.pendingResearchAngles = allAngles.slice(0, COUNCIL_RESEARCH_MAX_ANGLES);
       p.pendingResearchQuery = queryHint || run.topic || '';
-      pauseForReviewGate(run, p, reviews);
+      pauseForReviewGate(run, p, gateReviews.length ? gateReviews : reviews);
       return;
     }
     advancePipeline(run);
@@ -2281,8 +2428,11 @@ function advanceCouncil(run, p, stage, session) {
   const cIdx = p.stages.findIndex((s) => s.kind === 'consensus');
   // 踢走連續失敗嘅 model：下一 round 唔再 spawn 佢（至少保留 1 席,通常 opus+codex 仍在）
   if ((p.councilDroppedSeats || []).length) {
-    const keep = ['council_a', 'council_b', 'council_c'].filter((k) => !p.councilDroppedSeats.includes(k));
-    if (keep.length >= 1) p.stages[cIdx].agentKeys = keep;
+    (p.stages || []).forEach((s) => {
+      if (s.kind !== 'consensus' || !Array.isArray(s.agentKeys)) return;
+      const keep = s.agentKeys.filter((k) => !p.councilDroppedSeats.includes(k));
+      if (keep.length >= 1) s.agentKeys = keep;
+    });
   }
   for (let i = cIdx; i < p.stages.length && ['consensus', 'moderator'].includes(p.stages[i].kind); i += 1) {
     p.stages[i].status = 'pending';
@@ -2305,7 +2455,7 @@ function advanceCouncil(run, p, stage, session) {
   advancePipeline(run);
 }
 
-// 撳「開始拗」後：三模角度合併 → 集中 call Perplexity 一次 → 結果做 artifact + Telegram 通知 + 派返議會，然後先入仲裁。
+// 撳「開始拗」後：Council 角度合併 → 集中 call Perplexity 一次 → 結果做 artifact + Telegram 通知 + 派返議會，然後先入仲裁。
 async function runCouncilResearch(run, p, angles, query) {
   addArtifact(run, { type: 'note', title: '🔍 議會上網 research 緊…', content: `查詢：${query}\n角度：\n${angles.map((a) => `- ${a}`).join('\n')}` });
   io.emit('run-updated', publicRun(run));
@@ -2340,7 +2490,7 @@ async function runFinalArbiter(run, p, why) {
   const cdir = COUNCIL_DIR(run.id);
   let reviewerBlock = '';
   try {
-    const re = new RegExp(`^round-${p.councilRound}-reviewer-\\d+\\.md$`);
+    const re = new RegExp(`^round-${p.councilRound}(?:-[a-z0-9_-]+)?-reviewer-\\d+\\.md$`, 'i');
     reviewerBlock = fs.readdirSync(cdir).filter((f) => re.test(f))
       .map((f) => `### ${f}\n${truncate(fs.readFileSync(path.join(cdir, f), 'utf8'), 2500)}`).join('\n\n');
   } catch (_) {}
@@ -2349,7 +2499,7 @@ async function runFinalArbiter(run, p, why) {
     `## Goal\n${run.background || run.topic || ''}`,
     `## 議會跑足 ${p.councilRound} round 後最新 plan (v${plan.v})\n${plan.md}`,
     `## 仲未解嘅技術爭議 / 要拍板嘅 ESCALATE\n${p.councilDisputes || '(見 plan 內 ESCALATE / DISPUTES 段)'}`,
-    reviewerBlock ? `## 最後一 round 三模評審\n${reviewerBlock}` : '',
+    reviewerBlock ? `## 最後一 round Council review\n${reviewerBlock}` : '',
   ].filter(Boolean).join('\n\n');
   addArtifact(run, { type: 'note', title: `⚖️ 最終仲裁 (Opus 4.8) — 議會 ${p.councilRound} round 未完全收斂`, content: 'Opus 4.8 主動逐條拍板 → 強制收斂 → 直接落 code,全自動唔交人手。' });
   io.emit('run-updated', publicRun(run));
@@ -2381,7 +2531,7 @@ function pauseForHumanGate(run, p, why) {
   p.councilPaused = true;
   const plan = readLatestPlan(run);
   const reason = why.arbitrated ? 'Opus 4.8 最終仲裁收斂'
-    : why.converged ? '三模零爭議收斂'
+    : why.converged ? 'Council 零爭議收斂'
     : (why.maxedOut ? `用盡 ${SWARM_COUNCIL_MAX_ROUNDS} round` : '時間預算用盡');
   addArtifact(run, {
     type: 'council-gate',
@@ -2395,7 +2545,7 @@ function pauseForHumanGate(run, p, why) {
   scheduleSave();
 }
 
-// Review 閘:第一輪三模獨立 review(每個自己掃 project + plan)完,停低俾用戶睇齊三份,
+// Review 閘:第一輪 Council review(每個自己掃 project + plan)完,停低俾用戶睇齊,
 // 撳「開始拗」先入 moderator + 辯論收斂。
 function pauseForReviewGate(run, p, reviews) {
   p.stopped = true;
@@ -2407,8 +2557,8 @@ function pauseForReviewGate(run, p, reviews) {
   }).join('\n\n---\n\n');
   addArtifact(run, {
     type: 'council-review-gate',
-    title: `🔎 三模獨立 review（${reviews.length} 份）— 撳「開始拗」入辯論`,
-    content: `# 三模獨立 review\n三個 model 各自掃過 project + plan,以下係佢哋嘅獨立評審。睇完撳「🥊 開始拗」,佢哋就會互相挑戰、收斂改 plan。\n\n${body}`,
+    title: `🔎 ${councilModeLabel(p.councilMode)} review（${reviews.length} 份）— 撳「開始拗」入辯論`,
+    content: `# ${councilModeLabel(p.councilMode)} review\nCouncil agent 已各自掃過 project + plan,以下係獨立評審。睇完撳「🥊 開始拗」,佢哋就會互相挑戰、收斂改 plan；如多 round 未收斂,final arbiter 會保留技術仲裁。\n\n${body}`,
   });
   run.status = 'active';
   io.emit('run-updated', publicRun(run));
@@ -2459,7 +2609,7 @@ function maybeAdvancePipeline(run, session) {
     return;
   }
 
-  // ── Swarm Council consensus loop (三模議會):consensus → moderator → 收斂/rewind/pause ──
+  // ── Swarm Council consensus loop:consensus → moderator → 收斂/rewind/pause ──
   if (p.mode === 'council' && (stage.kind === 'consensus' || stage.kind === 'moderator')) {
     advanceCouncil(run, p, stage, session);
     return;
@@ -2549,7 +2699,7 @@ const PLANNER_DECOMPOSE_PROMPT = [
   '```',
 ].join('\n');
 
-// ─── Council research prompts（B 模式：三模提角度 → 集中 call → 結果派返）───
+// ─── Council research prompts（reviewer 提角度 → 集中 call → 結果派返）───
 const COUNCIL_RESEARCH_ANGLES_PROMPT = [
   '',
   '## 上網 research（淨係有需要先用）',
@@ -2559,7 +2709,7 @@ const COUNCIL_RESEARCH_ANGLES_PROMPT = [
   'RESEARCH_ANGLES:',
   '- <想覆蓋嘅角度 1>',
   '- <想覆蓋嘅角度 2>',
-  '三模嘅角度會合併，撳「開始拗」後集中上網查一次，結果喺辯論時派返大家。',
+  'Council reviewer 嘅角度會合併，撳「開始拗」後集中上網查一次，結果喺辯論時派返大家。',
   '**唔需要查證就唔好加呢個 block**（慳資源）。',
 ].join('\n');
 
@@ -3051,17 +3201,91 @@ function verifyStage() {
   return { key: 'verify', title: '實測驗證 Verify', kind: 'code', deliveryMode: 'code', agentKeys: ['verifier'] };
 }
 
+function normalizeCouncilMode(value) {
+  const raw = String(value || 'balanced').trim().toLowerCase();
+  if (['balanced', 'balance', 'standard-plus', 'medium'].includes(raw)) return 'balanced';
+  if (['deep', 'deep-grid', 'grid', '9-grid', 'nine-grid', '9grid'].includes(raw)) return 'deep-grid';
+  return 'quick';
+}
+
+function councilModeLabel(mode) {
+  const m = normalizeCouncilMode(mode);
+  if (m === 'balanced') return '平衡 Council（3自由觀點 + 3硬角色）';
+  if (m === 'deep-grid') return '深度 9-grid Council（3 model × 3角色）';
+  return '快速 Council（3硬角色）';
+}
+
+function councilStagesForMode(mode) {
+  const m = normalizeCouncilMode(mode);
+  const moderate = { key: 'moderate', title: '仲裁收斂 Moderate', kind: 'moderator', deliveryMode: 'thinking', agentKeys: ['moderator'] };
+  const explain = { key: 'explain', title: '人話講解 Explain', kind: 'explainer', deliveryMode: 'thinking', agentKeys: ['explainer'] };
+  if (m === 'balanced') {
+    return [
+      { key: 'perspectives', title: '3 model 自由觀點 Free Views', kind: 'consensus', deliveryMode: 'thinking', agentKeys: ['council_opus_free', 'council_codex_free', 'council_glm_free'], reviewGate: false },
+      { key: 'consensus', title: '硬角色評審 Role Reviews', kind: 'consensus', deliveryMode: 'thinking', agentKeys: ['council_a', 'council_b', 'council_c'], reviewGate: true },
+      moderate,
+      explain,
+    ];
+  }
+  if (m === 'deep-grid') {
+    return [
+      {
+        key: 'grid',
+        title: '9-grid 深度評審',
+        kind: 'consensus',
+        deliveryMode: 'thinking',
+        agentKeys: [
+          'council_opus_arch', 'council_codex_arch', 'council_glm_arch',
+          'council_opus_impl', 'council_codex_impl', 'council_glm_impl',
+          'council_opus_risk', 'council_codex_risk', 'council_glm_risk',
+        ],
+        reviewGate: true,
+      },
+      moderate,
+      explain,
+    ];
+  }
+  return [
+    { key: 'consensus', title: '共識評審 Consensus', kind: 'consensus', deliveryMode: 'thinking', agentKeys: ['council_a', 'council_b', 'council_c'], reviewGate: true },
+    moderate,
+    explain,
+  ];
+}
+
+function defaultCouncilModelMap(mode, overrides = {}) {
+  const base = {
+    council_a: { cli: 'claude', model: 'opus' },
+    council_b: { cli: 'codex', model: 'gpt-5.5' },
+    council_c: { cli: 'glm', model: 'glm-5.2' },
+    council_opus_free: { cli: 'claude', model: 'opus' },
+    council_codex_free: { cli: 'codex', model: 'gpt-5.5' },
+    council_glm_free: { cli: 'glm', model: 'glm-5.2' },
+    council_opus_arch: { cli: 'claude', model: 'opus' },
+    council_codex_arch: { cli: 'codex', model: 'gpt-5.5' },
+    council_glm_arch: { cli: 'glm', model: 'glm-5.2' },
+    council_opus_impl: { cli: 'claude', model: 'opus' },
+    council_codex_impl: { cli: 'codex', model: 'gpt-5.5' },
+    council_glm_impl: { cli: 'glm', model: 'glm-5.2' },
+    council_opus_risk: { cli: 'claude', model: 'opus' },
+    council_codex_risk: { cli: 'codex', model: 'gpt-5.5' },
+    council_glm_risk: { cli: 'glm', model: 'glm-5.2' },
+    moderator: { cli: 'claude', model: 'opus' },
+    explainer: { cli: 'claude', model: 'sonnet' },
+  };
+  const out = {};
+  councilStagesForMode(mode).flatMap((s) => s.agentKeys || []).forEach((key) => {
+    out[key] = normalizeModelChoice(overrides[key] || {}, base[key] || {});
+  });
+  return out;
+}
+
 // ─── Staged fan-out pipeline: research → build → review, each wave parallel, waves in order ───
 function defaultStages(mode, options = {}) {
   if (mode === 'council') {
-    // Swarm Council:consensus(3 reviewer 並行)→ moderate(仲裁改寫 plan)→ explain(人話講解)。
+    // Swarm Council:review waves → moderate(仲裁改寫 plan)→ explain(人話講解)。
     // consensus+moderate 會被 advanceCouncil rewind 重入,循環到收斂 / maxRounds;
     // Phase 3 御准閘喺 moderate 收斂後、explain 之前發生(pauseForHumanGate 用 p.stopped)。
-    return [
-      { key: 'consensus', title: '共識評審 Consensus', kind: 'consensus', deliveryMode: 'thinking', agentKeys: ['council_a', 'council_b', 'council_c'] },
-      { key: 'moderate', title: '仲裁收斂 Moderate', kind: 'moderator', deliveryMode: 'thinking', agentKeys: ['moderator'] },
-      { key: 'explain', title: '人話講解 Explain', kind: 'explainer', deliveryMode: 'thinking', agentKeys: ['explainer'] },
-    ];
+    return councilStagesForMode(options.councilMode);
   }
   if (['thinking', 'research', 'text'].includes(String(mode))) {
     return [
@@ -3091,10 +3315,13 @@ function defaultStages(mode, options = {}) {
 
 function startPipeline(run, options = {}) {
   const mode = options.deliveryMode || 'code';
+  const councilMode = mode === 'council' ? normalizeCouncilMode(options.councilMode) : null;
   const stages = (Array.isArray(options.stages) && options.stages.length ? options.stages : defaultStages(mode, options))
     .map((s) => ({ ...s, status: 'pending', sessionId: null }));
   run.pipeline = {
     mode,
+    councilMode,
+    councilModeLabel: councilMode ? councilModeLabel(councilMode) : null,
     model: options.model,
     cli: options.cli,
     perAgentModels: options.perAgentModels || {},
@@ -3116,8 +3343,9 @@ function startPipeline(run, options = {}) {
     councilPlanVersion: 0,
     councilOpenDisputes: null,
     councilDisputes: '',
+    councilReviewFiles: {},
     councilPaused: false,
-    councilReviewPaused: false,  // 第一輪三模獨立 review 後嘅「開始拗」閘
+    councilReviewPaused: false,  // 第一輪 Council review 後嘅「開始拗」閘
     councilDebateStarted: false,
   };
   if (options.taskBrief) run.taskBrief = truncate(options.taskBrief, MAX_CONTEXT_CHARS);
@@ -3329,6 +3557,8 @@ app.get('/api/runs', (req, res) => {
 	    coordinationWarnings: run.coordinationWarnings,
 	    missionControlVersion: run.missionControlVersion,
 	    missionControlProjectPath: run.missionControlProjectPath,
+	    councilMode: run.pipeline && run.pipeline.councilMode,
+	    councilModeLabel: run.pipeline && run.pipeline.councilModeLabel,
 	    handoffCount: (run.handoffs || []).length,
 	    latestHandoff: (run.handoffs || [])[0] || null,
 	    memoryPackStatus: run.memoryPackStatus,
@@ -3431,10 +3661,10 @@ const OVERSEER_SYSTEM = [
   'ACTION: execute            # 落實當前議會終稿',
   'ACTION: stop               # 中途停止當前 run',
   'ACTION: revise: <一句指示>  # 叫議會就意見再收斂一 round',
-  'ACTION: council: <題目>     # 開一個新 AI 聯合國 / 三模議會',
+  'ACTION: council: <題目>     # 開一個新 AI 聯合國 Council',
   'ACTION: mission: <plan>     # 開一個新 mission 落 code',
   '',
-  '「AI 聯合國」alias（重要）:用戶講「聯合國」「聯合國議會」「AI 聯合國」「ORCA 聯合國」「擺去聯合國」「交俾聯合國」「叫聯合國開會」,都係叫你開三模議會;唔係指真正 United Nations。呢類請求要輸出 `ACTION: council: <題目 / plan>`。',
+  '「AI 聯合國」alias（重要）:用戶講「聯合國」「聯合國議會」「AI 聯合國」「ORCA 聯合國」「擺去聯合國」「交俾聯合國」「叫聯合國開會」,都係叫你開 Council 議會;唔係指真正 United Nations。呢類請求要輸出 `ACTION: council: <題目 / plan>`。',
   '',
   '判斷執行意圖（重要）:用戶講「根據呢份 report / plan 去執行」「落實佢」「照呢個 plan 改 code / 開工做」等明確叫你落手實作 →',
   '  · 當前 run 已有議會終稿(planv≥1) → 出 `ACTION: execute`(落實終稿,會問你揀 build model)。',
@@ -3496,7 +3726,7 @@ app.post('/api/overseer', async (req, res) => {
     const aliasAction = detectCouncilAliasAction(message);
     if (aliasAction && (!parsed.action || parsed.action.type !== 'council')) {
       parsed.action = aliasAction;
-      if (!parsed.reply || parsed.reply === '(冇內容)') parsed.reply = '收到,交俾 AI 聯合國（三模議會）開會。';
+      if (!parsed.reply || parsed.reply === '(冇內容)') parsed.reply = '收到,交俾 AI 聯合國 Council 開會。';
     }
     res.json({ ok: true, reply: parsed.reply, action: parsed.action, model: picked.model });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -3517,7 +3747,7 @@ const NEXT_STEPS_SYSTEM = [
   '  execute  — 落實當前議會終稿（淨係 council 已收斂、未落 code 時啱用）',
   '  revise   — 叫議會就某意見再收斂一 round（action_arg = 一句指示）',
   '  mission  — 開一個新 mission 落 code 去修 / 做呢件事（action_arg = 清楚、可直接落手嘅 plan brief,寫明範圍）',
-  '  council  — 開一個新 AI 聯合國 / 三模議會傾呢個議題（action_arg = 議題）',
+  '  council  — 開一個新 AI 聯合國 Council 傾呢個議題（action_arg = 議題）',
   '  none     — 淨係值得傾 / 唔需要自動動作',
   '嚴格淨係輸出一個 JSON object（唔好加 markdown fence、唔好任何前言或結語）,schema:',
   '{"gaps":[{"severity":"fail|warn","title":"短","detail":"一兩句","action_type":"mission|revise|none","action_arg":"..."}],"suggestions":[{"title":"短","rationale":"點解值得做","action_type":"mission|council|execute|revise|none","action_arg":"...","discuss_seed":"用戶想傾呢項時 pre-seed 落總管對話嘅問句"}]}',
@@ -3979,7 +4209,7 @@ app.post('/api/runs/:id/resume', (req, res) => {
   }
 });
 
-// ─── Swarm Council 御准閘 endpoints (三模議會) ───
+// ─── Swarm Council 御准閘 endpoints ───
 // 批准 → 解 pause、用終稿 plan 行 explainer stage(Phase 4)。
 app.post('/api/runs/:id/council/approve', (req, res) => {
   const run = findRunOr404(req.params.id, res);
@@ -4034,7 +4264,7 @@ app.post('/api/runs/:id/council/revise', (req, res) => {
   res.json({ ok: true, revising: true, round: p.councilRound });
 });
 
-// 開始拗:三模獨立 review 後,用戶撳掣 → 入 moderator + 辯論收斂(consensus 已 complete,advancePipeline 行 moderator)。
+// 開始拗:Council review 後,用戶撳掣 → 入 moderator + 辯論收斂(consensus 已 complete,advancePipeline 行 moderator)。
 app.post('/api/runs/:id/council/debate', (req, res) => {
   const run = findRunOr404(req.params.id, res);
   if (!run) return;
@@ -4055,7 +4285,7 @@ app.post('/api/runs/:id/council/debate', (req, res) => {
       try { addArtifact(run, { type: 'note', title: '⚠ research 例外', content: e.message }); advancePipeline(run); } catch (_) {}
     });
   } else {
-    addArtifact(run, { type: 'note', title: '🥊 開始辯論 → moderator 收斂', content: '三模獨立 review 完，冇提出要 research，直接開拗。' });
+    addArtifact(run, { type: 'note', title: '🥊 開始辯論 → moderator 收斂', content: 'Council review 完，冇提出要 research，直接開拗。' });
     advancePipeline(run);
   }
 });
@@ -4092,7 +4322,7 @@ app.post('/api/runs/:id/council/execute', (req, res) => {
     reviewer: { cli: 'claude', model: 'opus' },
     verifier: { cli: 'claude', model: 'sonnet' },
   };
-  const taskBrief = `# 落實以下已通過三模議會審議嘅 plan（v${plan.v}）\n\n按呢個 plan 直接喺 project 落手實作,完成後跑驗證 / 測試。唔好重新爭論 plan 本身,佢已經三模收斂 + 人手批准。\n\n${plan.md}${collectReviewFindings(run)}`;
+  const taskBrief = `# 落實以下已通過 AI 聯合國 Council 審議嘅 plan（v${plan.v}）\n\n按呢個 plan 直接喺 project 落手實作,完成後跑驗證 / 測試。唔好重新爭論 plan 本身,佢已經 Council 收斂 + 人手批准。\n\n${plan.md}${collectReviewFindings(run)}`;
   try {
     const stages = [
       { key: 'build', title: '建造 Build', kind: 'code', deliveryMode: 'code', agentKeys: buildAgentKeys(plan.md) },
@@ -4129,18 +4359,21 @@ app.get('/api/runs/:id/council/reviews', (req, res) => {
   const excerpt = (fn) => { try { return truncate(fs.readFileSync(path.join(dir, fn), 'utf8'), 2000); } catch (_) { return ''; } };
   let files = [];
   try { files = fs.readdirSync(dir); } catch (_) { return res.json({ ok: true, rounds: [], research: [], plan: null }); }
-  const reviewRe = /^round-(\d+)-reviewer-(\d+)\.md$/;
+  const reviewRe = /^round-(\d+)(?:-([a-z0-9_-]+))?-reviewer-(\d+)\.md$/i;
   const rounds = {};
   files.filter((f) => reviewRe.test(f)).forEach((f) => {
     const m = f.match(reviewRe); const rd = Number(m[1]);
-    (rounds[rd] = rounds[rd] || []).push({ reviewer: Number(m[2]), file: f, excerpt: excerpt(f) });
+    (rounds[rd] = rounds[rd] || []).push({ stage: m[2] || 'consensus', reviewer: Number(m[3]), file: f, excerpt: excerpt(f) });
   });
   const research = files.filter((f) => /^research-\d+\.md$/.test(f)).map((f) => ({ file: f, excerpt: excerpt(f) }));
   const plan = readLatestPlan(run);
   res.json({
     ok: true,
     plan: { v: plan.v, md: plan.md },
-    rounds: Object.keys(rounds).sort((a, b) => a - b).map((r) => ({ round: Number(r), reviewers: rounds[r].sort((a, b) => a.reviewer - b.reviewer) })),
+    rounds: Object.keys(rounds).sort((a, b) => a - b).map((r) => ({
+      round: Number(r),
+      reviewers: rounds[r].sort((a, b) => (a.stage || '').localeCompare(b.stage || '') || a.reviewer - b.reviewer),
+    })),
     research,
     disputes: (run.pipeline && run.pipeline.councilDisputes) || '',
   });
@@ -4149,7 +4382,7 @@ app.get('/api/runs/:id/council/reviews/:file', (req, res) => {
   const run = findRunOr404(req.params.id, res);
   if (!run) return;
   const file = String(req.params.file || '');
-  if (!/^(round-\d+-reviewer-\d+|research-\d+|plan\.v\d+|brief)\.md$/.test(file)) {
+  if (!/^(round-\d+(?:-[a-z0-9_-]+)?-reviewer-\d+|research-\d+|plan\.v\d+|brief)\.md$/i.test(file)) {
     return res.status(400).json({ error: 'bad file name' });    // 防 path traversal:只准白名單 pattern
   }
   const dir = COUNCIL_DIR(run.id);
@@ -4298,20 +4531,16 @@ app.post('/api/runs/:id/council/start', async (req, res) => {
       run.chatThread.map((m) => `【${m.role === 'user' ? '用戶' : '幕僚'}】${m.content}`).join('\n\n');
   }
   if (!taskBrief.trim()) return res.status(400).json({ error: '未有 brief / 對話,請先喺 chat 寫低你想 review 乜' });
-  const per = (req.body || {}).perAgentModels || {};
-  // 預設 model 組合,可由前端逐個覆寫
-  const perAgentModels = {
-    council_a: per.council_a || { cli: 'claude', model: 'opus' },
-    council_b: per.council_b || { cli: 'codex', model: 'gpt-5.5' },
-    council_c: per.council_c || { cli: 'glm', model: 'glm-5.2' },
-    moderator: per.moderator || { cli: 'claude', model: 'opus' },
-    explainer: per.explainer || { cli: 'claude', model: 'sonnet' },
-  };
+  const body = req.body || {};
+  const councilMode = normalizeCouncilMode(body.councilMode);
+  const per = body.perAgentModels || {};
+  // 預設 model 組合,可由前端逐個覆寫；balanced/deep 會自動補齊額外 reviewer。
+  const perAgentModels = defaultCouncilModelMap(councilMode, per);
   const wantPath = (brief && brief.projectPath) || run.chatProjectPath;
   if (wantPath) { try { run.projectPath = safeProjectPath(wantPath); } catch (_) {} }
   try {
     await ensureMissionTargetDraft(run, { taskBrief, cli: 'claude', model: 'sonnet' });
-    const pipeline = startPipeline(run, { deliveryMode: 'council', perAgentModels, taskBrief });
+    const pipeline = startPipeline(run, { deliveryMode: 'council', councilMode, perAgentModels, taskBrief });
     io.emit('run-updated', publicRun(run));
     res.json({ ok: true, pipeline });
   } catch (e) { res.status(400).json({ error: e.message }); }

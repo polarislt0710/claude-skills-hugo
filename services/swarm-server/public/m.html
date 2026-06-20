@@ -602,12 +602,12 @@ function openQuickRun(){const proj=localStorage.getItem('m-proj')||(state.projec
    <p style="font-size:11px;color:var(--faint);margin-top:8px">→ ${esc((proj||'').split('/').pop())} · research→build→review→fix</p>`);}
 async function doQuickRun(){const task=$('#qrTask').value.trim();if(!task){toast('寫低任務先',true);return;}const target=(($('#qrTarget')||{}).value||'').trim();const proj=localStorage.getItem('m-proj')||(state.projects[0]&&state.projects[0].path)||undefined;const mv=(localStorage.getItem('m-model')||'codex|gpt-5.5').split('|');const tg=localStorage.getItem('swarm-tguser')||undefined;closeSheet();try{const r=await api('/api/plans/run',{method:'POST',body:JSON.stringify({staged:true,taskBrief:task,projectPath:proj,deliveryMode:'code',cli:mv[0],model:mv[1],tgUser:tg,ownerUser:tg||undefined,notifyUser:tg||undefined,...missionPayload(task,target)})});toast(r.queued?('⏳ 已排隊 #'+(r.position||'')):'🔀 開工!');if(r.run){state.focusRunId=r.run.id;state.byId[r.run.id]=r.run;state.tab='mission';}await loadAll();}catch(e){toast(e.message,true);}}
 
-/* ───────── 開新嘢:直接 code / 傾諗法+開 AI 聯合國（三模議會）（同 Telegram /council 一致）───────── */
-const COUNCIL_STRENGTH={standard:null};
+/* ───────── 開新嘢:直接 code / 傾諗法+開 AI 聯合國（Council 議會）（同 Telegram /council 一致）───────── */
+const COUNCIL_STRENGTH={quick:'quick',balanced:'balanced',deep:'deep-grid'};
 function openRunMenu(){openSheet('開新嘢',`
   <button class="big-choice" onclick="openQuickRun()"><b>🔀 直接落 code</b><span>你已經知要做咩 → research → build → review → fix</span></button>
   <button class="big-choice" onclick="openCouncilDraft()"><b>💡 傾諗法 + 開 AI 聯合國</b><span>諗法未完善 → Opus 幫你完善 → 過目 → 交 AI 聯合國評審收斂</span></button>`);}
-function openCouncilDraft(){openSheet('💡 新議題 → AI 聯合國（三模議會）',`
+function openCouncilDraft(){openSheet('💡 新議題 → AI 聯合國（Council 議會）',`
   <textarea id="cdRaw" placeholder="寫低你個諗法 / 想議會評審乜（粗略都得,Opus 會幫你完善）…"></textarea>
   <div class="row-btns"><button onclick="closeSheet()">取消</button><button class="go" onclick="refineCouncil()">✨ Opus 完善</button></div>
   <p style="font-size:11px;color:var(--faint);margin-top:9px">想跳過完善 → <a onclick="startCouncilFromDraft(($('#cdRaw')||{}).value,null)" style="color:var(--blue);text-decoration:underline">用原文直接交聯合國</a></p>`);}
@@ -631,12 +631,14 @@ async function doReviseCouncil(){const note=(($('#cdNote')||{}).value||'').trim(
   catch(e){toast(e.message,true);showRefinePreview();}}
 function chooseCouncilStrength(taskBrief){if(!state.councilDraft)state.councilDraft={};state.councilDraft.brief=taskBrief;openSheet('🗳 揀議會陣容',`
   <p style="font-size:12px;color:var(--muted)">所有議會都會保留開拗收斂同 final arbiter。</p>
-  <button class="big-choice" onclick="startCouncilFromDraft(state.councilDraft.brief,'standard')"><b>⚖️ 標準</b><span>Opus · Codex gpt-5.5 · GLM 5.2</span></button>`);}
+  <button class="big-choice" onclick="startCouncilFromDraft(state.councilDraft.brief,'quick')"><b>⚡ 快速</b><span>3份：A 架構 · B 實作 · C 風險</span></button>
+  <button class="big-choice" onclick="startCouncilFromDraft(state.councilDraft.brief,'balanced')"><b>⚖️ 平衡</b><span>6份：3 model 自由觀點 + 3硬角色（推薦）</span></button>
+  <button class="big-choice" onclick="startCouncilFromDraft(state.councilDraft.brief,'deep')"><b>🔬 深度 9-grid</b><span>9份：3 model × 架構 / 實作 / 風險</span></button>`);}
 async function startCouncilFromDraft(taskBrief,strength){taskBrief=(taskBrief||'').trim();if(!taskBrief){toast('冇內容開會',true);return;}
-  const tg=localStorage.getItem('swarm-tguser')||undefined;const models=strength?COUNCIL_STRENGTH[strength]:null;closeSheet();
+  const tg=localStorage.getItem('swarm-tguser')||undefined;const councilMode=COUNCIL_STRENGTH[strength]||'balanced';closeSheet();
   try{const cr=await api('/api/runs',{method:'POST',body:JSON.stringify({topic:taskBrief.slice(0,70),taskBrief,projectPath:currentMobileProject()||undefined,tgUser:tg,ownerUser:tg||undefined,notifyUser:tg||undefined,...missionPayload(taskBrief,'')})});
     const run=cr.run;if(!run){toast('開 run 失敗',true);return;}
-    await api('/api/runs/'+run.id+'/council/start',{method:'POST',body:JSON.stringify(Object.assign({tgUser:tg},models?{perAgentModels:models}:{}))});
+    await api('/api/runs/'+run.id+'/council/start',{method:'POST',body:JSON.stringify({tgUser:tg,councilMode})});
     toast('🗳 AI 聯合國開波!');state.focusRunId=run.id;state.byId[run.id]=run;state.tab='mission';state.councilDraft=null;await loadAll();}
   catch(e){toast('開聯合國失敗:'+e.message,true);}}
 
@@ -663,7 +665,7 @@ socket.on('execution-agent-log',d=>{state.logBuf[d.agentId]=((state.logBuf[d.age
 socket.on('execution-agent-complete',d=>{const r=state.byId[d.runId];if(r){const i=r.agents.findIndex(a=>a.id===d.agent.id);if(i>=0)r.agents[i]=d.agent;if(d.agent.handoff){r.handoffs=r.handoffs||[];if(!r.handoffs.find(h=>h.id===d.agent.handoff.id))r.handoffs.unshift(d.agent.handoff);r.handoffCount=r.handoffs.length;r.latestHandoff=r.handoffs[0];}}const ok=d.agent.status==='completed';pushFeed(ok?'verify':'feedback',`<b>${esc(d.agent.name)}</b> ${ok?'完成':'失敗'}${d.agent.handoff?' · 交棒已記錄':''}`);scheduleRender();});
 socket.on('artifact-added',d=>{const r=state.byId[d.runId];if(r){r.artifacts=r.artifacts||[];r.artifacts.unshift(d.artifact);}pushFeed('upload',`artifact <b>${esc(d.artifact.title||'')}</b>`,truncBody(d.artifact.content));});
 socket.on('council-paused',d=>{const r=state.byId[d.runId];if(r&&r.pipeline)r.pipeline.councilPaused=true;toast('⏸ 議會收斂完,等你御准');scheduleRender();});
-socket.on('council-review-paused',d=>{const r=state.byId[d.runId];if(r&&r.pipeline)r.pipeline.councilReviewPaused=true;toast('🔎 三模 review 完,撳「開始拗」');scheduleRender();});
+socket.on('council-review-paused',d=>{const r=state.byId[d.runId];if(r&&r.pipeline)r.pipeline.councilReviewPaused=true;toast(`🔎 Council review 完(${d.reviewCount}份),撳「開始拗」`);scheduleRender();});
 socket.on('synthesis-complete',d=>{if(d.run)ingestRun(d.run);toast('★ 收斂決策完成,可落實');scheduleRender();});
 socket.on('push-gate',d=>{const r=state.byId[d.runId];if(r)r.pendingPush=d.pendingPush;const st=d.pendingPush&&d.pendingPush.status;if(st==='awaiting')toast('⬆️ 待你確認 push 上 GitHub');else if(st==='done')toast('✅ Push 完成');else if(st==='failed')toast('⚠️ Push 失敗',true);scheduleRender();});
 function truncBody(s){s=String(s||'');return s.length>500?s.slice(0,500)+'…':s;}

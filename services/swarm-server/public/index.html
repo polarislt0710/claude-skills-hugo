@@ -248,7 +248,7 @@ canvas#office{display:block;width:100%;height:480px;image-rendering:pixelated}
    📱 Mobile / Tablet 響應式
    桌面維持三欄；≤1024 改用「滑入式抽屜 + 底部 tab」，
    令手機都睇得到左欄 Plans 同右欄 Inspector
-   （council 三模議會結果 / agent log / 人話講解全部喺右欄）。
+   （Council 議會結果 / agent log / 人話講解全部喺右欄）。
    ───────────────────────────────────────────── */
 .m-scrim,.m-tabbar{display:none}
 
@@ -411,7 +411,7 @@ canvas#office{display:block;width:100%;height:480px;image-rendering:pixelated}
 
       <div class="hero" id="chatPanel" style="margin-top:10px">
         <div class="hero-head" id="chatHead">
-          <div class="ht"><span class="glyph">💬</span>定向幕僚 <span class="hint" style="margin:0">— 同單一 model 傾掂方向 → 定稿 → 交 AI 聯合國（三模議會）</span></div>
+          <div class="ht"><span class="glyph">💬</span>定向幕僚 <span class="hint" style="margin:0">— 同單一 model 傾掂方向 → 定稿 → 交 AI 聯合國（Council 議會）</span></div>
           <button class="btn ghost sm" id="chatToggle">收起</button>
         </div>
         <div class="hero-body" id="chatBody">
@@ -425,9 +425,14 @@ canvas#office{display:block;width:100%;height:480px;image-rendering:pixelated}
             <textarea class="task" id="chatInput" style="min-height:46px;flex:1" placeholder="例如:我想 review orca-platform-mvp 個 grading 流程,目標係搵出可以改善嘅地方…（Cmd/Ctrl+Enter 送出）"></textarea>
             <button class="btn go" id="chatSendBtn">▶ 傾</button>
             <button class="btn ghost sm" id="chatFinalizeBtn" title="將傾偈結論固化成 mission brief">✓ 定稿</button>
-            <button class="btn sm" id="chatToCouncilBtn" style="display:none" title="用定稿 brief 開 AI 聯合國（三模議會）">🗳 交聯合國</button>
+            <button class="btn sm" id="chatToCouncilBtn" style="display:none" title="用定稿 brief 開 AI 聯合國（Council 議會）">🗳 交聯合國</button>
           </div>
           <div id="councilPickRow" class="row" style="display:none;margin-top:8px;align-items:flex-end">
+            <div class="fldwrap"><label>模式</label><select class="fld" id="csMode">
+              <option value="quick">快速 · 3份</option>
+              <option value="balanced">平衡 · 6份</option>
+              <option value="deep-grid">深度 · 9-grid</option>
+            </select></div>
             <div class="fldwrap"><label>議員 A</label><select class="fld" id="csA"></select></div>
             <div class="fldwrap"><label>議員 B</label><select class="fld" id="csB"></select></div>
             <div class="fldwrap"><label>議員 C</label><select class="fld" id="csC"></select></div>
@@ -450,8 +455,8 @@ canvas#office{display:block;width:100%;height:480px;image-rendering:pixelated}
           <div class="spacer" style="flex:1"></div>
           <button class="btn ghost sm" id="reviewBtn" title="加開一個 Reviewer Agent（Opus 4.8）覆核現有改動">＋ Review pass</button>
           <button class="btn ghost sm" id="resumeBtn" style="display:none" title="由斷點續跑停咗 / 中斷咗嘅 pipeline">▶ 續行</button>
-          <button class="btn go sm" id="councilDebateBtn" style="display:none" title="三模獨立 review 完 → 開始辯論收斂">🥊 開始拗</button>
-          <button class="btn go sm" id="councilApproveBtn" style="display:none" title="批准三模議會終稿 → 出人話講解">✅ 批准</button>
+          <button class="btn go sm" id="councilDebateBtn" style="display:none" title="Council review 完 → 開始辯論收斂">🥊 開始拗</button>
+          <button class="btn go sm" id="councilApproveBtn" style="display:none" title="批准議會終稿 → 出人話講解">✅ 批准</button>
           <button class="btn ghost sm" id="councilReviseBtn" style="display:none" title="加指示,叫議會再收斂多一 round">✍️ 再改</button>
           <button class="btn go sm" id="councilExecuteBtn" style="display:none" title="將議會終稿 plan 交 code pipeline 真正喺 project 實作">▶ 落實 plan</button>
           <button class="btn go sm" id="nextStepsBtn" style="display:none" title="run 完成後:睇收斂建議 / 未補嘅 gap,一鍵傾 or 做下一步">✨ 下一步</button>
@@ -651,7 +656,7 @@ function renderPipeStrip(run){
   const pp=run&&run.pendingPush;const pgEl=$('#pushGate');if(pgEl){const onGate=!!(pp&&['awaiting','pushing','failed'].includes(pp.status));pgEl.style.display=onGate?'inline-flex':'none';if(onGate){const lbl=$('#pushGateLabel');if(lbl)lbl.textContent=pp.status==='pushing'?'⬆️ Pushing…':(pp.status==='failed'?('⚠️ Push 失敗: '+(pp.branch||'')):('⬆️ 待 push: '+(pp.branch||'')));const cf=$('#pushConfirmBtn');if(cf){cf.disabled=pp.status==='pushing';cf.textContent=pp.status==='failed'?'🔁 再試':'⬆️ Confirm Push';}}}
   if(!p||!p.stages){ps.style.display='none';if(rb)rb.style.display='none';return;}
   ps.style.display='';
-  const tag=reviewPaused?' · 🔎 三模 review 完,待開拗':(paused?' · ⏸ 待御准':'');
+  const tag=reviewPaused?' · 🔎 Council review 完,待開拗':(paused?' · ⏸ 待御准':'');
   const head=p.mode==='council'?`<span class="pill" style="border-color:var(--gold);color:var(--gold)">🗳 議會 R${p.councilRound||0}${tag}</span> `:'';
   ps.innerHTML=head+p.stages.map((s,i)=>{const cls=s.status==='complete'?'complete':(s.status==='running'?'run':(s.status==='failed'||s.status==='interrupted'?'failed':''));const ic=s.status==='complete'?'✓':(s.status==='failed'||s.status==='interrupted')?'✕':(i===p.current?'▶':'▢');return `<span class="pill ${cls}">${ic} ${esc(s.title.split(' ')[0])}</span>`;}).join(' <span class="muted">→</span> ');
   if(rb){const stopped=(p.stopped&&!paused&&!reviewPaused)||p.stages.some(s=>s.status==='interrupted'||s.status==='failed');rb.style.display=stopped?'':'none';}
@@ -882,7 +887,7 @@ async function addReview(){const run=focusedRun();if(!run){toast('未揀 plan',t
 async function resumePipeline(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}try{const r=await api('/api/runs/'+run.id+'/resume',{method:'POST',body:'{}'});toast(r.done?'pipeline 已完成,冇嘢續':'▶ 由斷點續跑緊');}catch(e){toast('續行失敗:'+e.message,true);}}
 async function approveCouncil(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}try{const r=await api('/api/runs/'+run.id+'/council/approve',{method:'POST',body:'{}'});toast('✅ 已批准 plan v'+r.approvedVersion+',生成人話講解中…');if(window.__mobileNav)window.__mobileNav.pulseDetail();}catch(e){toast('批准失敗:'+e.message,true);}}
 async function reviseCouncil(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}const note=prompt('想點改?(可留空,淨係叫議會就未解爭議再收斂一 round)')||'';try{const r=await api('/api/runs/'+run.id+'/council/revise',{method:'POST',body:JSON.stringify({note})});toast('✍️ 議會重跑 round '+(r.round||'')+' 共識…');}catch(e){toast('再改失敗:'+e.message,true);}}
-async function startDebate(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}try{await api('/api/runs/'+run.id+'/council/debate',{method:'POST',body:'{}'});toast('🥊 三模開始辯論收斂…');}catch(e){toast('開拗失敗:'+e.message,true);}}
+async function startDebate(){const run=focusedRun();if(!run){toast('未揀 plan',true);return;}try{await api('/api/runs/'+run.id+'/council/debate',{method:'POST',body:'{}'});toast('🥊 議會開始辯論收斂…');}catch(e){toast('開拗失敗:'+e.message,true);}}
 
 /* ───────── 下一步（run 完成後嘅收斂層）───────── */
 function dIsDone(r){if(!r)return false;const p=r.pipeline||{};if(p.councilReviewPaused||p.councilPaused)return true;const stages=p.stages||[];const noRunning=!stages.some(s=>s.status==='running'||s.status==='pending');return ['complete','done','needs_attention','stopped'].includes(r.status)||((p.current||0)>=stages.length&&noRunning);}
@@ -953,7 +958,7 @@ function spawnMissionDesktop(brief){
   }).catch(e=>toast(e.message,true));
 }
 function spawnCouncilDesktop(topic){
-  const t=prompt('開新 AI 聯合國（三模議會）,議題:',topic||'');if(t===null||!t.trim())return;
+  const t=prompt('開新 AI 聯合國（Council 議會）,議題:',topic||'');if(t===null||!t.trim())return;
   const tgUser=localStorage.getItem('swarm-tguser')||'';
   const r=focusedRun();
   api('/api/runs',{method:'POST',body:JSON.stringify({topic:t.trim().slice(0,70),taskBrief:t.trim(),tgUser,ownerUser:tgUser||undefined,notifyUser:tgUser||undefined,globalGoal:(r&&r.globalGoal)||((state.missionControl||{}).globalGoal||'')})}).then(cr=>{
@@ -1061,11 +1066,11 @@ function renderChat(){
 function ingestChatMessage(d){const run=state.byId[d.runId];if(run){run.chatThread=run.chatThread||[];if(!run.chatThread.find(x=>x.id===d.message.id))run.chatThread.push(d.message);}if(d.runId===state.focus){state.chat.thinking=false;renderChat();}}
 async function ensureChatRun(){let run=focusedRun();if(run&&run.id)return run.id;const proj=$('#chatProjSelect').value||undefined;const tgUser=localStorage.getItem('swarm-tguser')||'';const r=await api('/api/runs',{method:'POST',body:JSON.stringify({topic:'定向幕僚 Session',seed:false,projectPath:proj,tgUser,ownerUser:tgUser||undefined,notifyUser:tgUser||undefined,globalGoal:((state.missionControl||{}).globalGoal||'')})});state.focus=r.run.id;state.byId[r.run.id]=r.run;await loadRuns();return r.run.id;}
 async function sendChat(){const msg=$('#chatInput').value.trim();if(!msg){toast('寫低你想做乜先',true);return;}let runId;try{runId=await ensureChatRun();}catch(e){toast('開 session 失敗:'+e.message,true);return;}const body={message:msg,modelOverride:state.chat.model||state.defModel,projectPath:$('#chatProjSelect').value||''};$('#chatInput').value='';state.chat.thinking=true;renderChat();try{await api('/api/runs/'+runId+'/chat',{method:'POST',body:JSON.stringify(body)});}catch(e){state.chat.thinking=false;renderChat();toast('傾偈失敗:'+e.message,true);}}
-async function finalizeChat(){const run=focusedRun();if(!run){toast('未開始傾偈',true);return;}if(!confirm('將呢段傾偈定稿成 mission brief?之後可以撳「交聯合國」開 AI 聯合國（三模議會）。'))return;state.chat.thinking=true;renderChat();try{await api('/api/runs/'+run.id+'/chat/finalize',{method:'POST',body:'{}'});toast('定稿中…（10-40s）');}catch(e){state.chat.thinking=false;renderChat();toast('定稿失敗:'+e.message,true);}}
+async function finalizeChat(){const run=focusedRun();if(!run){toast('未開始傾偈',true);return;}if(!confirm('將呢段傾偈定稿成 mission brief?之後可以撳「交聯合國」開 AI 聯合國（Council 議會）。'))return;state.chat.thinking=true;renderChat();try{await api('/api/runs/'+run.id+'/chat/finalize',{method:'POST',body:'{}'});toast('定稿中…（10-40s）');}catch(e){state.chat.thinking=false;renderChat();toast('定稿失敗:'+e.message,true);}}
 function toggleCouncilPick(){const row=$('#councilPickRow');if(!row)return;const show=row.style.display==='none';row.style.display=show?'':'none';if(show)fillCouncilSelectors();}
-function fillCouncilSelectors(){[['csA','opus'],['csB','gpt-5.5'],['csC','glm-5.2']].forEach(([sid,defModel])=>{const sel=$('#'+sid);if(!sel||sel._filled)return;sel._filled=true;state.models.forEach(m=>{const o=el('option');o.value=m.cli+'|'+m.model;o.textContent=m.short||m.label;if(m.model===defModel)o.selected=true;sel.appendChild(o);});});fillTgUserSelector();}
+function fillCouncilSelectors(){const mode=$('#csMode');if(mode&&!mode._filled){mode._filled=true;mode.value=localStorage.getItem('swarm-council-mode')||'balanced';mode.onchange=e=>localStorage.setItem('swarm-council-mode',e.target.value);} [['csA','opus'],['csB','gpt-5.5'],['csC','glm-5.2']].forEach(([sid,defModel])=>{const sel=$('#'+sid);if(!sel||sel._filled)return;sel._filled=true;state.models.forEach(m=>{const o=el('option');o.value=m.cli+'|'+m.model;o.textContent=m.short||m.label;if(m.model===defModel)o.selected=true;sel.appendChild(o);});});fillTgUserSelector();}
 async function fillTgUserSelector(){const sel=$('#csUser');if(!sel||sel._filled)return;sel._filled=true;try{const r=await api('/api/tg-users');const saved=localStorage.getItem('swarm-tguser')||'';sel.innerHTML='<option value="">（預設 owner）</option>'+(r.users||[]).map(u=>{const key=u.username||u.name||u.chatId;const lbl=u.username?('@'+u.username):(u.name||u.chatId);return `<option value="${esc(key)}"${key===saved?' selected':''}>${esc(lbl)}</option>`;}).join('');}catch(e){}}
-async function startCouncilFromChat(){const run=focusedRun();if(!run){toast('未揀 run',true);return;}const pick=sid=>{const v=($('#'+sid).value||'').split('|');return{cli:v[0]||'claude',model:v[1]||'opus'};};const perAgentModels={council_a:pick('csA'),council_b:pick('csB'),council_c:pick('csC')};const tgUser=($('#csUser')&&$('#csUser').value)||'';if(tgUser)localStorage.setItem('swarm-tguser',tgUser);try{await api('/api/runs/'+run.id+'/settings',{method:'PATCH',body:JSON.stringify({globalGoal:run.globalGoal||((state.missionControl||{}).globalGoal||''),missionTarget:run.missionTarget||undefined})});await api('/api/runs/'+run.id+'/council/start',{method:'POST',body:JSON.stringify({perAgentModels,tgUser})});toast(tgUser?('🗳 聯合國開波!通知→'+tgUser):'🗳 AI 聯合國開波!');$('#councilPickRow').style.display='none';}catch(e){toast('開聯合國失敗:'+e.message,true);}}
+async function startCouncilFromChat(){const run=focusedRun();if(!run){toast('未揀 run',true);return;}const pick=sid=>{const v=($('#'+sid).value||'').split('|');return{cli:v[0]||'claude',model:v[1]||'opus'};};const councilMode=($('#csMode')&&$('#csMode').value)||localStorage.getItem('swarm-council-mode')||'balanced';localStorage.setItem('swarm-council-mode',councilMode);const perAgentModels={council_a:pick('csA'),council_b:pick('csB'),council_c:pick('csC')};const tgUser=($('#csUser')&&$('#csUser').value)||'';if(tgUser)localStorage.setItem('swarm-tguser',tgUser);try{await api('/api/runs/'+run.id+'/settings',{method:'PATCH',body:JSON.stringify({globalGoal:run.globalGoal||((state.missionControl||{}).globalGoal||''),missionTarget:run.missionTarget||undefined})});await api('/api/runs/'+run.id+'/council/start',{method:'POST',body:JSON.stringify({councilMode,perAgentModels,tgUser})});toast(tgUser?('🗳 聯合國開波!通知→'+tgUser):'🗳 AI 聯合國開波!');$('#councilPickRow').style.display='none';}catch(e){toast('開聯合國失敗:'+e.message,true);}}
 function renderTaskPicker(){const sel=$('#taskPicker');if(!sel)return;sel.innerHTML='<option value="">📂 任務檔…</option>'+state.tasks.map((t,i)=>`<option value="${i}">${t.source==='mission'?'◆ ':'• '}${esc(t.title)}</option>`).join('');}
 
 // ─── theme ───
@@ -1087,8 +1092,8 @@ socket.on('execution-agent-started',d=>{const run=state.byId[d.runId];if(run){co
 socket.on('execution-agent-log',d=>{state.logBuf[d.agentId]=((state.logBuf[d.agentId]||'')+(d.chunk||'')).slice(-8000);const f=findAgent(d.agentId);if(f&&d.action)f.a.action=d.action;if(state.selAgent===d.agentId){const lb=$('#logbox');if(lb){const nearBottom=lb.scrollHeight-lb.scrollTop-lb.clientHeight<60;if(state.logMd){lb.innerHTML=mdLite(state.logBuf[d.agentId]);}else{lb.textContent=state.logBuf[d.agentId];}if(nearBottom)lb.scrollTop=lb.scrollHeight;}}});
 socket.on('execution-agent-complete',d=>{const run=state.byId[d.runId];if(run){const i=run.agents.findIndex(a=>a.id===d.agent.id);if(i>=0)run.agents[i]=d.agent;if(d.agent.handoff){run.handoffs=run.handoffs||[];if(!run.handoffs.find(h=>h.id===d.agent.handoff.id))run.handoffs.unshift(d.agent.handoff);}}const ok=d.agent.status==='completed';pushFeed(ok?'done':'fail',ok?'✓':'✕',`<b>${esc(d.agent.name)}</b> ${ok?'完成':'失敗'}${d.agent.handoff?' · 交棒已記錄':''}`);scheduleRender();});
 socket.on('artifact-added',d=>{const run=state.byId[d.runId];if(run){run.artifacts=run.artifacts||[];run.artifacts.unshift(d.artifact);}pushFeed('art','◈',`artifact <b>${esc(d.artifact.title||'')}</b>`);});
-socket.on('council-paused',d=>{const run=state.byId[d.runId];if(run&&run.pipeline)run.pipeline.councilPaused=true;pushFeed('art','⏸',`議會停低待御准 · plan v${d.planVersion} · 未解 ${d.openDisputes==null?0:d.openDisputes}`);if(d.runId===state.focus)scheduleRender();toast('⏸ 三模議會收斂完,等你御准');});
-socket.on('council-review-paused',d=>{const run=state.byId[d.runId];if(run&&run.pipeline)run.pipeline.councilReviewPaused=true;pushFeed('art','🔎',`三模獨立 review 完(${d.reviewCount}份),待你開拗`);if(d.runId===state.focus)scheduleRender();toast('🔎 三模 review 完,睇齊三份再撳「開始拗」');});
+socket.on('council-paused',d=>{const run=state.byId[d.runId];if(run&&run.pipeline)run.pipeline.councilPaused=true;pushFeed('art','⏸',`議會停低待御准 · plan v${d.planVersion} · 未解 ${d.openDisputes==null?0:d.openDisputes}`);if(d.runId===state.focus)scheduleRender();toast('⏸ 議會收斂完,等你御准');});
+socket.on('council-review-paused',d=>{const run=state.byId[d.runId];if(run&&run.pipeline)run.pipeline.councilReviewPaused=true;pushFeed('art','🔎',`Council review 完(${d.reviewCount}份),待你開拗`);if(d.runId===state.focus)scheduleRender();toast(`🔎 Council review 完(${d.reviewCount}份),睇完再撳「開始拗」`);});
 socket.on('chat-message',d=>ingestChatMessage(d));
 socket.on('chat-thinking',d=>{if(d.runId===state.focus){state.chat.thinking=!!d.on;const tm=$('#chatThinkModel');if(tm)tm.textContent=esc(d.model||'');const tk=$('#chatThinking');if(tk)tk.style.display=d.on?'':'none';}});
 socket.on('chat-finalized',d=>{if(d.error){toast('定稿失敗:'+d.error,true);if(d.runId===state.focus){state.chat.thinking=false;renderChat();}return;}const run=state.byId[d.runId];if(run&&d.brief)run.missionBrief=d.brief;toast('📋 Mission brief 已定稿,可撳「交聯合國」');if(d.runId===state.focus){state.chat.thinking=false;renderChat();}});
