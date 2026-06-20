@@ -78,19 +78,24 @@ function tgNotify(text, replyMarkup, chatId) {
     Promise.resolve(telegram.sendMessage(text, opts)).catch((e) => console.warn('[telegram] send failed:', e.message));
   } catch (e) { console.warn('[telegram] notify threw:', e.message); }
 }
+function runTail(run) {
+  return String((run && run.id) || '').slice(-8) || 'current';
+}
 function notifyCouncilGate(run, p, reason) {
   const disputes = p.councilOpenDisputes == null ? 0 : p.councilOpenDisputes;
+  const tail = runTail(run);
   tgNotify(
     `⏸ *御准閘 · 等你批准*\n\n🏛 ${tgEsc(run.topic)}\n${tgEsc(reason)}｜Plan v${p.councilPlanVersion}｜未解爭議 ${disputes}\n\n撳掣批准／再改,或開 [Swarm Dashboard](${SWARM_DASH_URL})`,
-    { inline_keyboard: [[{ text: '✅ 批准', callback_data: 'approve' }], [{ text: '✍️ 再改', callback_data: 'revise_hint' }]] },
+    { inline_keyboard: [[{ text: '✅ 批准', callback_data: `cg:approve:${tail}` }], [{ text: '✍️ 再改', callback_data: `cg:revise:${tail}` }]] },
     run && run.tgChatId
   );
 }
 function notifyCouncilReviewGate(run, reviews) {
   const disagreements = (reviews || []).filter((r) => !r.agree).length;
+  const tail = runTail(run);
   tgNotify(
     `🔎 *Council review 完成*\n\n🏛 ${tgEsc(run.topic)}\n已收到 ${reviews.length} 份 review｜有異議 ${disagreements}\n\n撳「開始拗」進入 moderator 收斂,或開 [Swarm Dashboard](${SWARM_DASH_URL}) 睇全文。`,
-    { inline_keyboard: [[{ text: '🥊 開始拗', callback_data: 'debate' }]] },
+    { inline_keyboard: [[{ text: '🥊 開始拗', callback_data: `cg:debate:${tail}` }]] },
     run && run.tgChatId
   );
 }
@@ -104,7 +109,7 @@ function notifyRunComplete(run, tag) {
     ? 'build → review → fix 跑完,去睇改咗咩 + 驗證結果'
     : '人話講解 + plan 終稿已出,可以開始落實';
   const markup = tag === 'synthesis'
-    ? { inline_keyboard: [[{ text: '▶ 落實 plan', callback_data: 'execute' }]] }
+    ? { inline_keyboard: [[{ text: '▶ 落實 plan', callback_data: `cg:execute:${runTail(run)}` }]] }
     : null;
   tgNotify(`${title}\n\n🏛 ${tgEsc(run.topic)}\n${note}\n\n→ 開 [Swarm Dashboard](${SWARM_DASH_URL})`, markup, run && run.tgChatId);
   if (tag === 'pipeline') autoReviewOnComplete(run);
@@ -2321,11 +2326,8 @@ function advanceCouncil(run, p, stage, session) {
     // ── 連續失敗追蹤：一個 model 連續 N round fail/缺席 → 踢走唔再 spawn（degrade 到在席者）──
     p.councilSeatFails = p.councilSeatFails || {};
     p.councilDroppedSeats = p.councilDroppedSeats || [];
-    const seatOf = (name) => /reviewer\s*a/i.test(name) ? 'council_a'
-      : /reviewer\s*b/i.test(name) ? 'council_b'
-      : /reviewer\s*c/i.test(name) ? 'council_c' : null;
     reviews.forEach((r) => {
-      const seat = seatOf(r.name);
+      const seat = councilSeatKeyFromName(r.name);
       if (!seat) return;
       if (r.failed || !r.logs.trim()) p.councilSeatFails[seat] = (p.councilSeatFails[seat] || 0) + 1;
       else p.councilSeatFails[seat] = 0;                       // 成功有輸出就 reset
@@ -2727,6 +2729,25 @@ function councilResearchBlock(research) {
   ].filter(Boolean).join('\n');
 }
 
+function isCouncilReviewerKey(key) {
+  return String(key || '').startsWith('council_');
+}
+
+function isCouncilPresetKey(key) {
+  const k = String(key || '');
+  return isCouncilReviewerKey(k) || k === 'moderator' || k === 'explainer';
+}
+
+function councilSeatKeyFromName(name) {
+  const value = String(name || '').toLowerCase();
+  if (/council\s*a\b/.test(value)) return 'council_a';
+  if (/council\s*b\b/.test(value)) return 'council_b';
+  if (/council\s*c\b/.test(value)) return 'council_c';
+  const model = /opus/.test(value) ? 'opus' : /codex/.test(value) ? 'codex' : /glm/.test(value) ? 'glm' : '';
+  const role = /free/.test(value) ? 'free' : /architecture|arch\b/.test(value) ? 'arch' : /implementation|impl\b/.test(value) ? 'impl' : /risk/.test(value) ? 'risk' : '';
+  return model && role ? `council_${model}_${role}` : null;
+}
+
 function parseListBlock(text, label) {
   const re = new RegExp(`${label}:?\\s*\\n([\\s\\S]*?)(?=\\n[A-Z_ ]{6,}:|\\n##|$)`, 'i');
   const m = String(text || '').match(re);
@@ -2802,6 +2823,8 @@ function buildExecutionPrompt(run, preset, agent, options = {}) {
   const deliveryMode = options.deliveryMode || preset.deliveryMode || run.metrics.deliveryMode || 'code';
   const deliverable = options.deliverable || preset.deliverable || run.metrics.deliverable || (deliveryMode === 'thinking' ? 'text' : 'code');
   const isThinkingMode = ['thinking', 'research', 'text'].includes(String(deliveryMode));
+  const isCouncilReviewer = isCouncilReviewerKey(preset.key);
+  const isCouncilWorker = isCouncilPresetKey(preset.key);
   const background = run.background || buildAutoBackground(run);
   const taskBrief = run.taskBrief || options.taskBrief || '';
   const memoryPack = buildMemoryPack(run);
@@ -2880,9 +2903,9 @@ function buildExecutionPrompt(run, preset, agent, options = {}) {
       'WARN / FAIL 時請具體列出要修嘅項目,俾 Fix agent 跟進。',
     ].join('\n')] : []),
     ...(preset.key === 'planner' ? [PLANNER_DECOMPOSE_PROMPT] : []),
-    ...(['council_a', 'council_b', 'council_c'].includes(preset.key) && run.pipeline && !run.pipeline.councilDebateStarted
+    ...(isCouncilReviewer && run.pipeline && !run.pipeline.councilDebateStarted
       ? [COUNCIL_RESEARCH_ANGLES_PROMPT] : []),
-    ...(['council_a', 'council_b', 'council_c', 'moderator'].includes(preset.key) && run.councilResearch
+    ...(isCouncilWorker && run.councilResearch
       ? [councilResearchBlock(run.councilResearch)] : []),
   ].join('\n');
 }
@@ -2962,7 +2985,7 @@ function spawnAgentNow(run, preset, agent, agentCommand, options = {}) {
   const isThinkingAgent = ["thinking", "research", "text"].includes(String(preset.deliveryMode));
   // Council reviewer/moderator/explainer 雖然係 thinking,但要喺真 project 查文件 → 用 run.projectPath 做 cwd
   // (其餘 thinking agent 照舊用共享 SWARM_WORKSPACE,唔受影響)。
-  const isCouncilAgent = ['council_a', 'council_b', 'council_c', 'moderator', 'explainer'].includes(preset.key);
+  const isCouncilAgent = isCouncilPresetKey(preset.key);
   const useProjectCwd = !isThinkingAgent || isCouncilAgent;
   // Create this agent's isolated worktree (parallel code waves only). On failure,
   // fail fast rather than falling back to the shared repo; shared repo fallback is

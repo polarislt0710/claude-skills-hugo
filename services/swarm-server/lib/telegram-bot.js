@@ -11,31 +11,23 @@
 //
 // /mission and /council flow: Opus 先完善 prompt → 過目 preview →
 //   ✅ 用完善版 / ✍️ 再俾意見完善（Opus 按意見再改，可無限重複）/ ↩️ 用我原本 / ❌ 取消
-//   確認後：mission 再揀 build model 落 code；council 開 AI 聯合國（三模議會）。
+//   確認後：mission 再揀 build model 落 code；council 揀快速 / 平衡 / 深度 9-grid。
 
 const http = require('http');
 const tg = require('./telegram');
 
 // Build-model choices offered when writing code. First = default (Codex).
-// Fable 5 係可揀但唔係預設 — bulk 寫 code 唔鼓勵燒旗艦,需要先手揀。
 const MODEL_CHOICES = [
   { cli: 'codex',  model: 'gpt-5.5', label: 'Codex gpt-5.5' },
   { cli: 'claude', model: 'opus',    label: 'Opus 4.8' },
   { cli: 'claude', model: 'sonnet',  label: 'Sonnet' },
   { cli: 'glm',    model: 'glm-5.2', label: 'GLM 5.2' },
-  { cli: 'claude', model: 'claude-fable-5', label: 'Fable 5 (至尊·貴)' },
 ];
 
-// AI 聯合國（三模議會）陣容：standard = server 預設(A=Opus,B=Codex,C=GLM);fable = seat A 升旗艦 Fable。
-const COUNCIL_STRENGTH = {
-  standard: null,
-  fable: {
-    council_a: { cli: 'claude', model: 'claude-fable-5' },
-    council_b: { cli: 'codex',  model: 'gpt-5.5' },
-    council_c: { cli: 'glm',    model: 'glm-5.2' },
-    moderator: { cli: 'claude', model: 'opus' },
-    explainer: { cli: 'claude', model: 'sonnet' },
-  },
+const COUNCIL_MODES = {
+  quick: { mode: 'quick', label: '快速', desc: '3份：A 架構 · B 實作 · C 風險' },
+  balanced: { mode: 'balanced', label: '平衡', desc: '6份：3 model 自由觀點 + 3硬角色' },
+  deep: { mode: 'deep-grid', label: '深度 9-grid', desc: '9份：3 model × 架構 / 實作 / 風險' },
 };
 
 const HELP = [
@@ -44,7 +36,7 @@ const HELP = [
   '*同總管傾偈*（唔使指令，直接打字）',
   '直接打一句 → 總管 AI 睇晒所有 run/project 答你。',
   '預設 *自動*：傾 idea 快答(Sonnet)，叫佢 review/查 bug 先深入(Opus+skill)。',
-  '`/auto` `/fast` `/deep` 揀模式｜`/brain opus|fable` 切深入腦',
+  '`/auto` `/fast` `/deep` 揀模式｜`/brain opus` 切深入腦',
   '📷 直接傳截圖（可加文字）→ 總管睇圖分析 error/bug/UI，仲可交去議會',
   '',
   '*睇嘢*',
@@ -52,15 +44,16 @@ const HELP = [
   '`/runs` — 列出最近 run（狀態 / stage）',
   '`/show [id]` — 某 run 詳情（gate / plan / 最近產出）；唔帶 id = 當前',
   '`/projects` — 列出可用 project',
+  '`/project <編號或 run id 尾段>` — 設定 Telegram 新 mission / council 用邊個 project',
   '',
   '*開工*',
-  '`/council <題目>` — Opus 完善 → 過目 → 揀陣容（含 👑Fable 領銜）→ 開 AI 聯合國（三模議會）',
+  '`/council <題目>` — Opus 完善 → 過目 → 揀快速 / 平衡 / 深度 9-grid → 開 AI 聯合國',
   '自然講法亦得：「開聯合國議會」「將呢個 plan 擺去聯合國」「叫 AI 聯合國審一審」。',
-  '`/mission <plan>` — Opus 完善 → 過目 → 揀 model（含 Fable）落 code',
-  '`/debate` — 三模獨立 review 完後，開始拗入 moderator 收斂',
-  '`/revise <指示>` — 御准閘度叫議會就你意見再收斂一 round',
-  '`/approve` — 批准當前御准閘',
-  '`/execute` — 將議會終稿落實（揀 build model）',
+  '`/mission <plan>` — Opus 完善 → 過目 → 揀 model 落 code',
+  '`/debate [id尾段]` — Council 獨立 review 完後，開始拗入 moderator 收斂',
+  '`/revise [id尾段] <指示>` — 御准閘度叫議會就你意見再收斂一 round',
+  '`/approve [id尾段]` — 批准御准閘',
+  '`/execute [id尾段]` — 將議會終稿落實（揀 build model）',
   '`/stop` — 中途停止當前 run（殺晒 running agent）',
   '`/resume` — 由上次未完成 stage 重跑（修咗 code 後用嚟重試 verifier）',
   '',
@@ -90,26 +83,31 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
   function blankState() {
     return { pendingMission: null, pendingCouncil: null, pendingRefine: null, awaitingRefineNote: false,
       pendingPush: null, awaitingPushBranch: false,
-      pendingOverseerRevise: null, overseerHistory: [], overseerModel: 'opus', overseerMode: 'auto' };
+      pendingOverseerRevise: null, selectedProjectPath: null,
+      overseerHistory: [], overseerModel: 'opus', overseerMode: 'auto' };
   }
   function stateFor(key) { if (!states.has(key)) states.set(key, blankState()); return states.get(key); }
 
   // 當前 dispatch 嘅 working set（updates 係 sequential 處理,逐個 await,唔會 race）
   let replyChatId = OWNER, currentRole = 'owner';
   let pendingMission, pendingCouncil, pendingRefine, awaitingRefineNote, pendingOverseerRevise, overseerHistory, overseerModel, overseerMode;
-  let pendingPush, awaitingPushBranch;
+  let pendingPush, awaitingPushBranch, selectedProjectPath;
   function loadState(key) {
     const s = stateFor(key);
     pendingMission = s.pendingMission; pendingCouncil = s.pendingCouncil; pendingRefine = s.pendingRefine;
     awaitingRefineNote = s.awaitingRefineNote; pendingOverseerRevise = s.pendingOverseerRevise;
     pendingPush = s.pendingPush; awaitingPushBranch = s.awaitingPushBranch;
+    selectedProjectPath = s.selectedProjectPath || null;
     overseerHistory = s.overseerHistory; overseerModel = s.overseerModel; overseerMode = s.overseerMode;
+    if (overseerModel === 'claude-fable-5') overseerModel = 'opus';
   }
   function saveState(key) {
     const s = stateFor(key);
     s.pendingMission = pendingMission; s.pendingCouncil = pendingCouncil; s.pendingRefine = pendingRefine;
     s.awaitingRefineNote = awaitingRefineNote; s.pendingOverseerRevise = pendingOverseerRevise;
     s.pendingPush = pendingPush; s.awaitingPushBranch = awaitingPushBranch;
+    s.selectedProjectPath = selectedProjectPath || null;
+    if (overseerModel === 'claude-fable-5') overseerModel = 'opus';
     s.overseerHistory = overseerHistory; s.overseerModel = overseerModel; s.overseerMode = overseerMode;
     persistMem();
   }
@@ -117,7 +115,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     try {
       const fs = require('fs');
       const out = {};
-      for (const [k, s] of states) out[k] = { overseerHistory: s.overseerHistory, overseerModel: s.overseerModel, overseerMode: s.overseerMode };
+      for (const [k, s] of states) out[k] = { overseerHistory: s.overseerHistory, overseerModel: s.overseerModel === 'claude-fable-5' ? 'opus' : s.overseerModel, overseerMode: s.overseerMode, selectedProjectPath: s.selectedProjectPath || null };
       fs.writeFileSync(MEM_FILE, JSON.stringify(out));
     } catch (e) { log('persistMem: ' + e.message); }
   }
@@ -127,8 +125,9 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       for (const [k, v] of Object.entries(raw)) {
         const s = stateFor(k);
         s.overseerHistory = Array.isArray(v.overseerHistory) ? v.overseerHistory : [];
-        s.overseerModel = v.overseerModel || 'opus';
+        s.overseerModel = v.overseerModel === 'claude-fable-5' ? 'opus' : (v.overseerModel || 'opus');
         s.overseerMode = v.overseerMode || 'auto';
+        s.selectedProjectPath = v.selectedProjectPath || null;
       }
     } catch (_) { /* first run / no file */ }
   }
@@ -208,8 +207,48 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     return arr.find((x) => String(x.id).endsWith(String(tail))) || null;
   }
 
+  function projectPathOf(item) {
+    return typeof item === 'string' ? item : (item && (item.path || item.projectPath || item.name)) || '';
+  }
+
+  function projectName(item) {
+    const p = projectPathOf(item);
+    return (item && item.label) || (p ? p.split('/').filter(Boolean).pop() : '') || 'project';
+  }
+
+  async function projectsPayload() {
+    const r = await api('GET', '/api/projects');
+    const projects = (r.json && r.json.projects) || [];
+    const rows = [];
+    if (r.json && r.json.defaultProjectRoot) rows.push({ path: r.json.defaultProjectRoot, label: 'default' });
+    projects.forEach((p) => {
+      const path = projectPathOf(p);
+      if (path && !rows.some((x) => x.path === path)) rows.push({ path, label: projectName(p) });
+    });
+    return { defaultProjectRoot: (r.json && r.json.defaultProjectRoot) || '', projects: rows };
+  }
+
+  async function projectForNewRun() {
+    if (selectedProjectPath) return selectedProjectPath;
+    const payload = await projectsPayload();
+    return (payload.projects[0] && payload.projects[0].path) || payload.defaultProjectRoot || undefined;
+  }
+
+  async function resolveRunFromTailOrCurrent(tail) {
+    if (tail && tail !== 'current') return findRunByTail(tail);
+    return currentRun();
+  }
+
   function modelKeyboard(prefix) {
     return { inline_keyboard: MODEL_CHOICES.map((m, i) => [{ text: (i === 0 ? '✅ ' : '') + m.label, callback_data: `${prefix}:${m.cli}:${m.model}` }]) };
+  }
+
+  function councilModeKeyboard() {
+    return { inline_keyboard: [
+      [{ text: `⚡ ${COUNCIL_MODES.quick.label} — ${COUNCIL_MODES.quick.desc}`, callback_data: 'cm:quick' }],
+      [{ text: `⚖️ ${COUNCIL_MODES.balanced.label} — ${COUNCIL_MODES.balanced.desc}`, callback_data: 'cm:balanced' }],
+      [{ text: `🔬 ${COUNCIL_MODES.deep.label} — ${COUNCIL_MODES.deep.desc}`, callback_data: 'cm:deep' }],
+    ] };
   }
 
   // council 落實：build agents = 揀嘅 model；reviewer/verifier 維持 Claude（verifier 一定要明設,否則 cli 跌 claude+gpt model 唔夾炸）。
@@ -234,7 +273,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
   async function sendRefinePreview() {
     if (!pendingRefine) return;
     const { kind, refined } = pendingRefine;
-    const verb = kind === 'council' ? '開 AI 聯合國（三模議會）' : '落 code';
+    const verb = kind === 'council' ? '開 AI 聯合國（Council）' : '落 code';
     const body = refined.length > 3400 ? refined.slice(0, 3400) + '\n…（preview 截短）' : refined;
     await say(
       `📝 Opus 完善版（${kind === 'council' ? '議題' : 'mission'}）：\n\n${body}\n\n——\n用呢個版本${verb}？或者再俾意見完善（可反覆）。`,
@@ -273,22 +312,22 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     await sendRefinePreview();
   }
 
-  // 揀 AI 聯合國（三模議會）陣容（seat A 仲裁腦）→ 確認後開會。
+  // 揀 AI 聯合國深度模式 → 確認後開會。
   async function promptCouncilStrength(taskBrief) {
     pendingCouncil = { taskBrief };
-    await say('揀 AI 聯合國陣容（seat A 仲裁腦）：', { replyMarkup: { inline_keyboard: [
-      [{ text: '⚖️ 標準（Opus·Codex·GLM）', callback_data: 'cm:standard' }],
-      [{ text: '👑 Fable 領銜（Fable·Codex·GLM）', callback_data: 'cm:fable' }],
-    ] } });
+    const proj = await projectForNewRun();
+    await say(`揀 AI 聯合國模式：\nProject：${tgline(proj || 'default')}`, { replyMarkup: councilModeKeyboard() });
   }
 
-  async function startCouncil(taskBrief, councilModels) {
-    const cr = await api('POST', '/api/runs', { topic: taskBrief.slice(0, 70), taskBrief, tgChatId: replyChatId });
+  async function startCouncil(taskBrief, councilMode = 'balanced') {
+    const projectPath = await projectForNewRun();
+    const cr = await api('POST', '/api/runs', { topic: taskBrief.slice(0, 70), taskBrief, tgChatId: replyChatId, projectPath, source: 'telegram', createdFrom: 'telegram' });
     const run = cr.json && cr.json.run;
     if (!run) { await say(`⚠️ 開 run 失敗：${(cr.json && cr.json.error) || cr.status}`); return; }
-    const sr = await api('POST', `/api/runs/${run.id}/council/start`, councilModels ? { perAgentModels: councilModels } : {});
-    const seatA = (councilModels && councilModels.council_a && councilModels.council_a.model) || 'opus';
-    if (sr.json && sr.json.ok) await say(`🗳 AI 聯合國開波（三模議會）：*${tgline(taskBrief)}*\n（seat A=${seatA}｜B=Codex｜C=GLM）獨立 review 完先 ping 你開拗；收斂到御准閘會再 ping。`);
+    const mode = (COUNCIL_MODES[councilMode] && COUNCIL_MODES[councilMode].mode) || councilMode || 'balanced';
+    const label = Object.values(COUNCIL_MODES).find((m) => m.mode === mode || m === councilMode);
+    const sr = await api('POST', `/api/runs/${run.id}/council/start`, { councilMode: mode });
+    if (sr.json && sr.json.ok) await say(`🗳 AI 聯合國開波：*${tgline(taskBrief)}*\n模式：${(label && label.label) || mode}｜Project：${tgline(projectPath || run.projectPath || 'default')}\nRun：\`${run.id.slice(-8)}\`\n獨立 review 完先 ping 你開拗；收斂到御准閘會再 ping。`);
     else await say(`⚠️ 開聯合國失敗：${(sr.json && sr.json.error) || sr.status}`);
   }
 
@@ -297,16 +336,16 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     await say('揀「寫 code」用邊個 model（研究／覆核固定 Opus）：', { replyMarkup: modelKeyboard('mm') });
   }
 
-  async function doApprove() {
-    const run = await currentRun();
+  async function doApprove(tail) {
+    const run = await resolveRunFromTailOrCurrent(tail);
     if (!run || !(run.pipeline && run.pipeline.councilPaused)) { await say('而家冇御准閘可批准。'); return; }
     const r = await api('POST', `/api/runs/${run.id}/council/approve`, {});
     if (r.json && r.json.ok) await say('✅ 已批准，出緊人話講解…');
     else await say(`⚠️ 批准失敗：${r.json.error || r.status}`);
   }
 
-  async function doDebate() {
-    const run = await currentRun();
+  async function doDebate(tail) {
+    const run = await resolveRunFromTailOrCurrent(tail);
     if (!run || !(run.pipeline && run.pipeline.councilReviewPaused)) { await say('而家冇 review 閘可開拗。'); return; }
     const r = await api('POST', `/api/runs/${run.id}/council/debate`, {});
     if (r.json && r.json.ok) await say('🥊 已開始拗，moderator 收斂緊…');
@@ -329,8 +368,8 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     else await say(`⚠️ resume 失敗：${(r.json && r.json.error) || r.status}`);
   }
 
-  async function doExecute(cli, model) {
-    const run = await currentRun();
+  async function doExecute(cli, model, tail) {
+    const run = await resolveRunFromTailOrCurrent(tail);
     if (!run) { await say('冇 run 可落實。'); return; }
     const r = await api('POST', `/api/runs/${run.id}/council/execute`, { model, perAgentModels: execPerAgent(cli, model) });
     if (r.json && r.json.ok) await say(`▶ 落實開波（build=${model}）：plan v${r.json.executingVersion}\nbuild → review → fix 跑緊，完成會 ping 你。`);
@@ -341,11 +380,12 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     if (!pendingMission) { await say('冇待落實嘅 mission（重新打 `/mission <plan>`）。'); return; }
     const { taskBrief, topic } = pendingMission;
     pendingMission = null;
+    const projectPath = await projectForNewRun();
     const r = await api('POST', '/api/plans/run', {
       taskBrief, topic, deliveryMode: 'code', staged: true,
-      cli, model, perAgentModels: missionPerAgent(cli, model), tgChatId: replyChatId,
+      cli, model, perAgentModels: missionPerAgent(cli, model), tgChatId: replyChatId, projectPath, source: 'telegram', createdFrom: 'telegram',
     });
-    if (r.json && r.json.ok) await say(`⚙️ Mission 開波（寫 code=${model}）：*${tgline(topic)}*${r.json.queued ? `（排隊中 #${r.json.position}）` : '（research → build → review → fix 跑緊）'}`);
+    if (r.json && r.json.ok) await say(`⚙️ Mission 開波（寫 code=${model}）：*${tgline(topic)}*\nProject：${tgline(projectPath || 'default')}${r.json.queued ? `\n排隊中 #${r.json.position}` : '\nresearch → build → review → fix 跑緊'}`);
     else await say(`⚠️ Mission 失敗：${(r.json && r.json.error) || r.status}`);
   }
 
@@ -375,7 +415,12 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       const topic = (action.arg || '').split('\n')[0].replace(/^#+\s*/, '').slice(0, 70);
       await promptMissionModel(action.arg || '', topic); return;
     }
-    if (t === 'execute') { await say('揀 build model 落實：', { replyMarkup: modelKeyboard('exm') }); return; }
+    if (t === 'execute') {
+      const run = await currentRun();
+      const tail = run && run.id ? run.id.slice(-8) : 'current';
+      await say('揀 build model 落實：', { replyMarkup: modelKeyboard(`exm:${tail}`) });
+      return;
+    }
     const labels = { approve: '✅ 批准御准閘', debate: '🥊 開拗收斂', revise: '✍️ 叫議會再改', stop: '⏹ 停止當前 run' };
     if (t === 'revise') pendingOverseerRevise = action.arg || '';
     await say(
@@ -435,17 +480,16 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
 
     if (c === '/brain') {
       const a = arg.toLowerCase();
-      if (a === 'fable') overseerModel = 'claude-fable-5';
-      else if (a === 'opus') overseerModel = 'opus';
-      else if (a) { await say('用法：`/brain opus` 或 `/brain fable`（深入模式先用到呢個腦）'); return; }
+      if (a === 'opus' || !a) overseerModel = 'opus';
+      else { await say('用法：`/brain opus`（深入腦用 Opus）'); return; }
       const modeLabel = overseerMode === 'deep' ? '深入(鎖)' : overseerMode === 'fast' ? '快答(鎖)' : '自動';
-      await say(`🧠 深入腦：*${overseerModel === 'claude-fable-5' ? 'Fable 5（至尊·貴）' : 'Opus 4.8'}*｜模式：*${modeLabel}*\n切腦：\`/brain opus|fable\`　模式：\`/auto\`（自己判斷）/ \`/fast\` / \`/deep\``);
+      await say(`🧠 深入腦：*Opus 4.8*｜模式：*${modeLabel}*\n切腦：\`/brain opus\`　模式：\`/auto\`（自己判斷）/ \`/fast\` / \`/deep\``);
       return;
     }
 
     if (c === '/auto') { overseerMode = 'auto'; await say('🤖 *自動模式*：我自己判斷——傾 idea 用快答(Sonnet)，叫我 review / audit / 查 bug 先深入(Opus+skill)。'); return; }
     if (c === '/fast') { overseerMode = 'fast'; await say('💬 *鎖快答*：之後一律 Sonnet 快答。返自動：`/auto`'); return; }
-    if (c === '/deep') { overseerMode = 'deep'; await say(`🧠 *鎖深入*：之後一律 ${overseerModel === 'claude-fable-5' ? 'Fable' : 'Opus'}+skill。返自動：\`/auto\``); return; }
+    if (c === '/deep') { overseerMode = 'deep'; await say('🧠 *鎖深入*：之後一律 Opus+skill。返自動：`/auto`'); return; }
 
     if (c === '/status') {
       const run = await currentRun();
@@ -453,7 +497,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       const p = run.pipeline || {};
       const gate = p.councilPaused ? '⏸ 等御准' : (p.councilReviewPaused ? '🔎 等開拗' : '');
       const mode = p.mode || (run.metrics && run.metrics.deliveryMode) || '-';
-      await say(`📊 *${tgline(run.topic)}*\n狀態：${run.status}｜stage：${run.stage || '-'} ${gate}\nmode：${mode}${p.councilPlanVersion ? `｜plan v${p.councilPlanVersion}` : ''}`);
+      await say(`📊 *${tgline(run.topic)}*\n狀態：${run.status}｜stage：${run.stage || '-'} ${gate}\nmode：${p.councilModeLabel || mode}${p.councilPlanVersion ? `｜plan v${p.councilPlanVersion}` : ''}\nProject：${tgline(run.projectPath || '-')}\nHandoffs：${(run.handoffs || []).length || 0}｜Memory：${run.memoryPackStatus ? `in ${(run.memoryPackStatus.included || []).length} / missing ${(run.memoryPackStatus.missing || []).length}` : '-'}`);
       return;
     }
 
@@ -461,7 +505,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       if (!ownerOnly()) { await denyGuest(); return; }
       if (!arg) { await say('用法：`/council <題目>`'); return; }
       const ok = await refineAndPreview('council', arg, arg.slice(0, 70));
-      if (!ok) { await say('（完善失敗，用你原本嘅題目開會）'); await startCouncil(arg); }
+      if (!ok) { await say('（完善失敗，用你原本嘅題目開會）'); await promptCouncilStrength(arg); }
       return;
     }
 
@@ -476,23 +520,29 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
 
     if (c === '/revise') {
       if (!ownerOnly()) { await denyGuest(); return; }
-      if (!arg) { await say('用法：`/revise <你嘅指示>`'); return; }
-      const run = await currentRun();
+      if (!arg) { await say('用法：`/revise [id尾段] <你嘅指示>`'); return; }
+      const m = arg.match(/^([A-Za-z0-9_-]{4,16})\s+([\s\S]+)$/);
+      let run = null; let note = arg;
+      if (m) {
+        const hit = await findRunByTail(m[1]);
+        if (hit) { run = hit; note = m[2].trim(); }
+      }
+      if (!run) run = await currentRun();
       if (!run || !(run.pipeline && run.pipeline.councilPaused)) { await say('而家冇御准閘可以再改。'); return; }
-      const r = await api('POST', `/api/runs/${run.id}/council/revise`, { note: arg });
+      const r = await api('POST', `/api/runs/${run.id}/council/revise`, { note });
       if (r.json && r.json.ok) await say(`✍️ 已要求再改，重跑第 ${r.json.round} round 共識…`);
       else await say(`⚠️ 再改失敗：${(r.json && r.json.error) || r.status}`);
       return;
     }
 
-    if (c === '/approve') { if (!ownerOnly()) { await denyGuest(); return; } await doApprove(); return; }
-    if (c === '/debate') { if (!ownerOnly()) { await denyGuest(); return; } await doDebate(); return; }
+    if (c === '/approve') { if (!ownerOnly()) { await denyGuest(); return; } await doApprove(arg || null); return; }
+    if (c === '/debate') { if (!ownerOnly()) { await denyGuest(); return; } await doDebate(arg || null); return; }
 
     if (c === '/execute') {
       if (!ownerOnly()) { await denyGuest(); return; }
-      const run = await currentRun();
+      const run = await resolveRunFromTailOrCurrent(arg || null);
       if (!run) { await say('冇 run 可落實。'); return; }
-      await say('揀 build model 落實：', { replyMarkup: modelKeyboard('exm') });
+      await say(`揀 build model 落實：\nRun：\`${run.id.slice(-8)}\``, { replyMarkup: modelKeyboard(`exm:${run.id.slice(-8)}`) });
       return;
     }
 
@@ -524,15 +574,40 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       const gate = p.councilPaused ? '⏸ 等御准' : (p.councilReviewPaused ? '🔎 等開拗' : '');
       const planV = p.councilPlanVersion ? `｜plan v${p.councilPlanVersion}` : '';
       const arts = (run.artifacts || []).slice(-4).map((a) => `· ${tgline(a.title || a.type)}`).join('\n') || '（暫無）';
-      await say(`📄 *${tgline(run.topic)}*\n狀態：${run.status}｜stage：${run.stage || '-'} ${gate}\nmode：${p.mode || (run.metrics && run.metrics.deliveryMode) || '-'}${planV}\n最近產出：\n${arts}`);
+      const mem = run.memoryPackStatus ? `included=${(run.memoryPackStatus.included || []).join(', ') || '-'}｜missing=${(run.memoryPackStatus.missing || []).join(', ') || '-'}` : '-';
+      const h = (run.handoffs || [])[0];
+      const handoff = h ? `${tgline(h.agentName)}：${tgline(h.summary || '')}${(h.warnings || []).length ? `\n警告：${tgline((h.warnings || []).slice(0, 2).join(' / '))}` : ''}` : '（暫無）';
+      await say(`📄 *${tgline(run.topic)}*\n狀態：${run.status}｜stage：${run.stage || '-'} ${gate}\nmode：${p.councilModeLabel || p.mode || (run.metrics && run.metrics.deliveryMode) || '-'}${planV}\nProject：${tgline(run.projectPath || '-')}\nMemory：${mem}\n最近 handoff：${handoff}\n最近產出：\n${arts}`);
       return;
     }
 
     if (c === '/projects') {
-      const r = await api('GET', '/api/projects');
-      const ps = (r.json && r.json.projects) || [];
-      const lines = ps.slice(0, 25).map((pr) => `• ${tgline(typeof pr === 'string' ? pr : (pr.path || pr.name || JSON.stringify(pr)))}`);
-      await say(`📁 *Project*\n${lines.join('\n') || '（無）'}`);
+      const payload = await projectsPayload();
+      const ps = payload.projects || [];
+      const lines = ps.slice(0, 12).map((pr, i) => `${i}. ${selectedProjectPath === pr.path ? '✅ ' : ''}${tgline(pr.label || projectName(pr))}\n   ${tgline(pr.path)}`);
+      const kb = ps.slice(0, 12).map((pr, i) => [{ text: `${selectedProjectPath === pr.path ? '✅ ' : ''}${tgline(pr.label || projectName(pr))}`, callback_data: `sp:${i}` }]);
+      await say(`📁 *Project*\n${lines.join('\n') || '（無）'}\n\n用 \`/project <編號>\` 設定 Telegram 新任務 target。`, { replyMarkup: kb.length ? { inline_keyboard: kb } : undefined });
+      return;
+    }
+
+    if (c === '/project') {
+      if (!ownerOnly()) { await denyGuest(); return; }
+      const payload = await projectsPayload();
+      const ps = payload.projects || [];
+      const idx = Number(arg);
+      let next = '';
+      if (Number.isInteger(idx) && ps[idx]) next = ps[idx].path;
+      else if (arg) {
+        const hitRun = await findRunByTail(arg);
+        if (hitRun && hitRun.projectPath) next = hitRun.projectPath;
+        else {
+          const hit = ps.find((p) => p.path === arg || (p.path || '').endsWith(arg) || String(p.label || '').toLowerCase() === arg.toLowerCase());
+          if (hit) next = hit.path;
+        }
+      }
+      if (!next) { await say('搵唔到 project。用 `/projects` 睇編號，或 `/project <run id尾段>` 跟返某個 run。'); return; }
+      selectedProjectPath = next;
+      await say(`📁 已設定 Telegram 新 mission / council project：\n${tgline(next)}`);
       return;
     }
 
@@ -562,17 +637,46 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     }
     if (dataStr === 'rf:x') { pendingRefine = null; awaitingRefineNote = false; await say('已取消。'); return; }
 
-    if (dataStr === 'approve') { await doApprove(); return; }
-    if (dataStr === 'debate') { await doDebate(); return; }
-    if (dataStr === 'revise_hint') { await say('打 `/revise <你嘅指示>` 叫議會就你嘅意見再收斂一 round。'); return; }
-    if (dataStr === 'execute') { await say('揀 build model 落實：', { replyMarkup: modelKeyboard('exm') }); return; }
-    if (dataStr.startsWith('exm:')) { const p = dataStr.split(':'); await doExecute(p[1], p[2]); return; }
+    if (dataStr.startsWith('cg:')) {
+      const parts = dataStr.split(':');
+      const action = parts[1]; const tail = parts[2] || null;
+      if (!ownerOnly()) { await denyGuest(); return; }
+      if (action === 'approve') { await doApprove(tail); return; }
+      if (action === 'debate') { await doDebate(tail); return; }
+      if (action === 'revise') { await say(`打 \`/revise ${tail} <你嘅指示>\` 叫呢個 run 再收斂一 round。`); return; }
+      if (action === 'execute') { await say(`揀 build model 落實：\nRun：\`${tail}\``, { replyMarkup: modelKeyboard(`exm:${tail || 'current'}`) }); return; }
+    }
+    if (dataStr === 'approve') { await doApprove(); return; } // old fallback
+    if (dataStr === 'debate') { await doDebate(); return; }   // old fallback
+    if (dataStr === 'revise_hint') { await say('打 `/revise [id尾段] <你嘅指示>` 叫議會就你嘅意見再收斂一 round。'); return; }
+    if (dataStr === 'execute') {
+      const run = await currentRun();
+      const tail = run && run.id ? run.id.slice(-8) : 'current';
+      await say('揀 build model 落實：', { replyMarkup: modelKeyboard(`exm:${tail}`) });
+      return;
+    }
+    if (dataStr.startsWith('exm:')) {
+      const p = dataStr.split(':');
+      if (p.length >= 4) await doExecute(p[2], p[3], p[1]);
+      else await doExecute(p[1], p[2]);
+      return;
+    }
     if (dataStr.startsWith('cm:')) {
       if (!pendingCouncil) { await say('冇待開嘅議會（重新打 /council）。'); return; }
       const which = dataStr.split(':')[1];
       const { taskBrief } = pendingCouncil;
       pendingCouncil = null;
-      await startCouncil(taskBrief, COUNCIL_STRENGTH[which] || null);
+      await startCouncil(taskBrief, which || 'balanced');
+      return;
+    }
+    if (dataStr.startsWith('sp:')) {
+      if (!ownerOnly()) { await denyGuest(); return; }
+      const idx = Number(dataStr.split(':')[1]);
+      const payload = await projectsPayload();
+      const pr = (payload.projects || [])[idx];
+      if (!pr || !pr.path) { await say('Project 選項已過期，打 /projects 再揀一次。'); return; }
+      selectedProjectPath = pr.path;
+      await say(`📁 已設定 Telegram 新任務 project：\n${tgline(pr.path)}`);
       return;
     }
     // 總管動作 confirm-gate（Tier 2 破壞性動作守關）

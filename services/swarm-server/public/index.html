@@ -961,9 +961,11 @@ function spawnCouncilDesktop(topic){
   const t=prompt('開新 AI 聯合國（Council 議會）,議題:',topic||'');if(t===null||!t.trim())return;
   const tgUser=localStorage.getItem('swarm-tguser')||'';
   const r=focusedRun();
-  api('/api/runs',{method:'POST',body:JSON.stringify({topic:t.trim().slice(0,70),taskBrief:t.trim(),tgUser,ownerUser:tgUser||undefined,notifyUser:tgUser||undefined,globalGoal:(r&&r.globalGoal)||((state.missionControl||{}).globalGoal||'')})}).then(cr=>{
+  const proj=(r&&r.projectPath)||($('#projSelect')&&$('#projSelect').value)||state.defaultProject||(state.projects[0]&&(state.projects[0].path||state.projects[0]))||'';
+  const councilMode=localStorage.getItem('swarm-council-mode')||'balanced';
+  api('/api/runs',{method:'POST',body:JSON.stringify({topic:t.trim().slice(0,70),taskBrief:t.trim(),projectPath:proj||undefined,tgUser,ownerUser:tgUser||undefined,notifyUser:tgUser||undefined,globalGoal:(r&&r.globalGoal)||((state.missionControl||{}).globalGoal||''),missionTarget:(r&&r.missionTarget)||undefined,coordinationWarnings:(r&&r.coordinationWarnings)||undefined})}).then(cr=>{
     if(!cr.run){toast('開 run 失敗',true);return;}
-    return api('/api/runs/'+cr.run.id+'/council/start',{method:'POST',body:'{}'}).then(()=>{
+    return api('/api/runs/'+cr.run.id+'/council/start',{method:'POST',body:JSON.stringify({councilMode})}).then(()=>{
       toast('🗳 AI 聯合國開波!');state.focus=cr.run.id;state.byId[cr.run.id]=cr.run;state.selAgent=null;closeNextSteps();loadRuns();
     });
   }).catch(e=>toast(e.message,true));

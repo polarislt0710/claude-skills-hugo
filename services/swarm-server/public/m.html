@@ -432,15 +432,16 @@ function renderActivity(){
   if(state.activityView==='agent'){
     const f=state.selAgentId?findAgentById(state.selAgentId):(r&&r.agents&&r.agents.find(a=>a.status==='running'));
     if(!f&&!(r&&r.agents&&r.agents.length)){html+='<div class="empty">未揀 agent。<br>去 Mission tab 揀一個人仔。</div>';}
-    else{const a=(f&&f.a)||r.agents[0];const mm=modelMeta(a.cli,a.model);const ctx=a.contextSources||{};const mem=ctx.memoryPack||{};const mission=ctx.mission||{};const handoff=a.handoff;
+    else{const a=(f&&f.a)||r.agents[0];const mm=modelMeta(a.cli,a.model);const ctx=a.contextSources||{};const mem=ctx.memoryPack||{};const mission=ctx.mission||{};const handoff=a.handoff;const skills=(a.skillKeys||[]).join(', ')||'none';
       const t=state.logBuf[a.id]!=null?state.logBuf[a.id]:(a.logs||'');
       html+=`<div class="card"><div style="display:flex;align-items:center;gap:11px"><canvas data-agent="${a.id}" style="width:48px;height:48px;image-rendering:pixelated"></canvas>
         <div style="flex:1;min-width:0"><div style="font-weight:700;font-size:15px">${esc((a.name||'').replace(/ Agent$/,''))}</div>
         <div style="font-size:11px;color:var(--muted)">${esc(a.role||'')}</div></div>
         <span class="chip ${a.status==='running'?'run':(a.status==='completed'?'complete':a.status)}">${esc(STATUS_LABEL[a.status]||a.status)}</span></div>
         <div class="cmeta" style="margin-top:9px"><span class="mbadge"><span style="width:7px;height:7px;border-radius:50%;background:${mm.color};display:inline-block"></span>${esc(a.cli||'claude')} · ${esc(a.model||'')}</span>
-        <span class="chip">⏱ ${a.startedAt?fmtElapsed(a.startedAt,a.completedAt):'--'}</span><span class="chip">Skills ${(a.skillKeys||[]).length}</span><span class="chip">Memory ${(mem.included||[]).length||0}</span><span class="chip" title="${esc(mission.missionTarget||'')}">Goal ${mission.globalGoalChars?'on':'-'}</span><span class="chip">Prior ${(ctx.handoffsPassed||[]).length||0}</span></div>
+        <span class="chip">⏱ ${a.startedAt?fmtElapsed(a.startedAt,a.completedAt):'--'}</span><span class="chip" title="${esc(skills)}">Skills ${(a.skillKeys||[]).length}</span><span class="chip" title="included: ${esc((mem.included||[]).join(', ')||'-')} | missing: ${esc((mem.missing||[]).join(', ')||'-')}">Memory ${(mem.included||[]).length||0}/${((mem.included||[]).length+(mem.missing||[]).length)||0}</span><span class="chip" title="${esc(mission.missionTarget||'')}">Goal ${mission.globalGoalChars?'on':'-'}</span><span class="chip">Plan v${esc(a.inputPlanVersion||0)}</span><span class="chip">Prior ${(ctx.handoffsPassed||[]).length||0}</span></div>
         <div class="aaction" style="margin-top:8px;font-size:12.5px;color:var(--muted)">${esc(a.action||'')}</div>
+        <div class="logbox" style="max-height:118px;margin-top:9px;font-size:11.5px">${mdLite(`Context\n- Skills: ${skills}\n- Memory included: ${(mem.included||[]).join(', ')||'-'}\n- Memory missing: ${(mem.missing||[]).join(', ')||'-'}\n- Input plan: v${a.inputPlanVersion||0}\n- Input context: chat ${ctx.chatContextCount||0}, artifacts ${(ctx.artifactsPassed||[]).length||0}, handoffs ${(ctx.handoffsPassed||[]).length||0}\n- Output artifacts: ${(a.artifactIds||[]).length}`)}</div>
         ${handoff?`<div class="logbox" style="max-height:150px;margin-top:9px">${mdLite(`Summary: ${handoff.summary||''}${(handoff.reminders||[]).length?`\n\nReminders:\n- ${handoff.reminders.join('\n- ')}`:''}${(handoff.warnings||[]).length?`\n\nWarnings:\n- ${handoff.warnings.join('\n- ')}`:''}`)}</div>`:''}</div>
         <div class="logbox">${t?mdLite(t):'<span style="color:var(--faint)">未有輸出…</span>'}</div>`;}
   }else{
@@ -578,7 +579,7 @@ async function doNextStep(type,argEnc){const r=focusedRun();const arg=decodeURIC
   if(type==='execute'){actExecute();return;}
   if(type==='revise'){if(!confirm('叫議會就呢點再收斂一 round?\n\n'+arg))return;try{await api('/api/runs/'+r.id+'/council/revise',{method:'POST',body:JSON.stringify({note:arg})});toast('✍️ 議會再收斂');}catch(e){toast(e.message,true);}return;}
   if(type==='mission'){spawnMissionFromText(arg);return;}
-  if(type==='council'){if(!arg.trim()){openCouncilDraft();return;}state.councilDraft={brief:arg};chooseCouncilStrength(arg);return;}
+  if(type==='council'){if(!arg.trim()){openCouncilDraft();return;}state.councilDraft={brief:arg,projectPath:(r&&r.projectPath)||'',globalGoal:(r&&r.globalGoal)||'',missionTarget:(r&&r.missionTarget)||null,coordinationWarnings:(r&&r.coordinationWarnings)||null};chooseCouncilStrength(arg);return;}
 }
 function spawnMissionFromText(brief){const r=focusedRun();const proj=(r&&r.projectPath)||localStorage.getItem('m-proj')||(state.projects[0]&&state.projects[0].path)||'';const mv=(localStorage.getItem('m-model')||'codex|gpt-5.5').split('|');
   openSheet('🔧 開 mission 做呢件事',`<p style="font-size:12px;color:var(--muted)">會喺 <b>${esc((proj||'').split('/').pop()||'project')}</b> 開新 mission（research→build→review→fix）。落手前可以改 brief。</p>
@@ -603,7 +604,7 @@ function openQuickRun(){const proj=localStorage.getItem('m-proj')||(state.projec
 async function doQuickRun(){const task=$('#qrTask').value.trim();if(!task){toast('寫低任務先',true);return;}const target=(($('#qrTarget')||{}).value||'').trim();const proj=localStorage.getItem('m-proj')||(state.projects[0]&&state.projects[0].path)||undefined;const mv=(localStorage.getItem('m-model')||'codex|gpt-5.5').split('|');const tg=localStorage.getItem('swarm-tguser')||undefined;closeSheet();try{const r=await api('/api/plans/run',{method:'POST',body:JSON.stringify({staged:true,taskBrief:task,projectPath:proj,deliveryMode:'code',cli:mv[0],model:mv[1],tgUser:tg,ownerUser:tg||undefined,notifyUser:tg||undefined,...missionPayload(task,target)})});toast(r.queued?('⏳ 已排隊 #'+(r.position||'')):'🔀 開工!');if(r.run){state.focusRunId=r.run.id;state.byId[r.run.id]=r.run;state.tab='mission';}await loadAll();}catch(e){toast(e.message,true);}}
 
 /* ───────── 開新嘢:直接 code / 傾諗法+開 AI 聯合國（Council 議會）（同 Telegram /council 一致）───────── */
-const COUNCIL_STRENGTH={quick:'quick',balanced:'balanced',deep:'deep-grid'};
+const COUNCIL_MODES={quick:'quick',balanced:'balanced',deep:'deep-grid'};
 function openRunMenu(){openSheet('開新嘢',`
   <button class="big-choice" onclick="openQuickRun()"><b>🔀 直接落 code</b><span>你已經知要做咩 → research → build → review → fix</span></button>
   <button class="big-choice" onclick="openCouncilDraft()"><b>💡 傾諗法 + 開 AI 聯合國</b><span>諗法未完善 → Opus 幫你完善 → 過目 → 交 AI 聯合國評審收斂</span></button>`);}
@@ -635,8 +636,9 @@ function chooseCouncilStrength(taskBrief){if(!state.councilDraft)state.councilDr
   <button class="big-choice" onclick="startCouncilFromDraft(state.councilDraft.brief,'balanced')"><b>⚖️ 平衡</b><span>6份：3 model 自由觀點 + 3硬角色（推薦）</span></button>
   <button class="big-choice" onclick="startCouncilFromDraft(state.councilDraft.brief,'deep')"><b>🔬 深度 9-grid</b><span>9份：3 model × 架構 / 實作 / 風險</span></button>`);}
 async function startCouncilFromDraft(taskBrief,strength){taskBrief=(taskBrief||'').trim();if(!taskBrief){toast('冇內容開會',true);return;}
-  const tg=localStorage.getItem('swarm-tguser')||undefined;const councilMode=COUNCIL_STRENGTH[strength]||'balanced';closeSheet();
-  try{const cr=await api('/api/runs',{method:'POST',body:JSON.stringify({topic:taskBrief.slice(0,70),taskBrief,projectPath:currentMobileProject()||undefined,tgUser:tg,ownerUser:tg||undefined,notifyUser:tg||undefined,...missionPayload(taskBrief,'')})});
+  const tg=localStorage.getItem('swarm-tguser')||undefined;const councilMode=COUNCIL_MODES[strength]||'balanced';closeSheet();
+  const draft=state.councilDraft||{};const payload=missionPayload(taskBrief,'');if(draft.globalGoal)payload.globalGoal=draft.globalGoal;if(draft.missionTarget)payload.missionTarget=draft.missionTarget;if(draft.coordinationWarnings)payload.coordinationWarnings=draft.coordinationWarnings;
+  try{const cr=await api('/api/runs',{method:'POST',body:JSON.stringify({topic:taskBrief.slice(0,70),taskBrief,projectPath:draft.projectPath||currentMobileProject()||undefined,tgUser:tg,ownerUser:tg||undefined,notifyUser:tg||undefined,...payload})});
     const run=cr.run;if(!run){toast('開 run 失敗',true);return;}
     await api('/api/runs/'+run.id+'/council/start',{method:'POST',body:JSON.stringify({tgUser:tg,councilMode})});
     toast('🗳 AI 聯合國開波!');state.focusRunId=run.id;state.byId[run.id]=run;state.tab='mission';state.councilDraft=null;await loadAll();}
