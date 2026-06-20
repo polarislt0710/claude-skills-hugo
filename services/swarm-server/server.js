@@ -1025,7 +1025,9 @@ function fallbackMissionTarget({ topic, taskBrief, globalGoal } = {}) {
 async function draftMissionTargetAI({ topic, taskBrief, projectPath, globalGoal, cli, model } = {}) {
   const fallback = fallbackMissionTarget({ topic, taskBrief, globalGoal });
   if (process.env.SWARM_MISSION_TARGET_AI === '0') return fallback;
-  const picked = { cli: cli || 'claude', model: safeModelFlag(model) || 'sonnet' };
+  const picked = normalizeModelChoice({ cli, model }, { cli: 'claude', model: 'sonnet' });
+  if (!picked.cli) picked.cli = 'claude';
+  if (!picked.model) picked.model = 'sonnet';
   const prompt = [
     '你係 Swarm Mission 嘅 mission-target planner。請根據 repo 大目標同用戶任務，為今次 mission 起草一份 mission-specific target。',
     '要求：',
@@ -1205,7 +1207,6 @@ function makeAgent(name, layer, role, skill, index, extra = {}) {
 // ─── Model catalog (which CLI + model each sub-agent can run on) ───
 const MODEL_CATALOG = [
   { cli: 'claude', model: 'opus',    label: 'Claude Opus 4.8', short: 'opus',   color: '#c8993f', tier: '旗艦 · 規劃腦' },
-  { cli: 'claude', model: 'claude-fable-5', label: 'Claude Fable 5', short: 'fable', color: '#d8a3ff', tier: '至尊 · 仲裁腦' },
   { cli: 'claude', model: 'sonnet',  label: 'Claude Sonnet', short: 'sonnet', color: '#87b7ff', tier: '均衡 · 預設' },
   { cli: 'claude', model: 'haiku',   label: 'Claude Haiku',  short: 'haiku',  color: '#5fb89a', tier: '快 · 輕量' },
   { cli: 'codex',  model: 'gpt-5.5', label: 'Codex gpt-5.5', short: 'codex',  color: '#9aa7b2', tier: 'OpenAI' },
@@ -1217,6 +1218,16 @@ function safeModelFlag(model) {
   if (!m) return '';
   if (!/^[a-zA-Z0-9._:/-]{1,60}$/.test(m)) return '';
   return m;
+}
+
+function normalizeModelChoice(choice = {}, fallback = {}) {
+  let cli = String(choice.cli || fallback.cli || '').trim().toLowerCase();
+  let model = safeModelFlag(choice.model || fallback.model || '');
+  if (model === 'claude-fable-5' || model === 'fable') {
+    cli = 'claude';
+    model = 'opus';
+  }
+  return { cli, model };
 }
 
 function detectDomain(text = '') {
@@ -1717,8 +1728,9 @@ function buildAutoBackground(run) {
 }
 
 function buildAgentCommand(cliName, model) {
-  const m = safeModelFlag(model);
-  let cli = String(cliName || '').trim().toLowerCase();
+  const normalized = normalizeModelChoice({ cli: cliName, model }, { cli: cliName, model });
+  const m = safeModelFlag(normalized.model);
+  let cli = String(normalized.cli || '').trim().toLowerCase();
   if (!cli) {
     // 冇明確 cli → 由 model 名推斷 provider,避免 claude+gpt-5.5 之類 cli/model 唔夾而炸
     // （verifier 等 fallback agent 攞到 build model 但 cli 跌返 claude default 嘅 bug）。
@@ -1778,13 +1790,13 @@ function pushChatMessage(run, partial) {
 
 function resolveChatModel(run, override) {
   if (override && typeof override === 'object' && override.model) {
-    return { cli: override.cli || 'claude', model: safeModelFlag(override.model) };
+    return normalizeModelChoice(override, { cli: 'claude', model: 'sonnet' });
   }
   if (typeof override === 'string' && override) {
     const hit = MODEL_CATALOG.find((m) => m.model === override || m.short === override);
     if (hit) return { cli: hit.cli, model: hit.model };
   }
-  if (run.chatModel && run.chatModel.model) return run.chatModel;
+  if (run.chatModel && run.chatModel.model) return normalizeModelChoice(run.chatModel, { cli: 'claude', model: 'sonnet' });
   return { cli: 'claude', model: 'sonnet' };
 }
 
@@ -2964,11 +2976,12 @@ function runWave(run, opts) {
     session.worktrees = [];
   }
   const agents = presets.map((p) => {
+    const picked = normalizeModelChoice(per[p.key] || {}, { cli: opts.cli, model: opts.model });
     const agentOpts = {
       deliveryMode: mode,
       session,
-      model: (per[p.key] && per[p.key].model) || opts.model,
-      cli: (per[p.key] && per[p.key].cli) || opts.cli,
+      model: picked.model,
+      cli: picked.cli,
       taskBrief: p.subScope || opts.taskBrief,
       gate: !!opts.gate,
     };
@@ -3395,7 +3408,7 @@ app.post('/api/refine', async (req, res) => {
   if (!text && !(base && note)) return res.status(400).json({ error: 'text (或 base+note) required' });
   const kind = body.kind === 'council' ? 'council' : 'mission';
   const sys = kind === 'council' ? COUNCIL_REFINE_PROMPT : MISSION_REFINE_PROMPT;
-  const picked = { cli: body.cli || 'claude', model: body.model || 'opus' };
+  const picked = normalizeModelChoice({ cli: body.cli, model: body.model }, { cli: 'claude', model: 'opus' });
   const prompt = (base && note)
     ? `${sys}\n\n以下係現有 brief：\n${base}\n\n---\n用戶想改善／補充嘅位：\n${note}\n\n---\n出修訂後嘅完整 brief（繁體中文 markdown）：保留冇提及要改嘅部分,只就用戶意見調整／補充。唔好加任何前言、解釋或「以下是」之類引導句：`
     : `${sys}\n\n---\n用戶原文：\n${text}\n\n---\n直接輸出完善版本身（繁體中文 markdown）,唔好加任何前言、解釋或「以下是」之類引導句：`;

@@ -603,7 +603,7 @@ function openQuickRun(){const proj=localStorage.getItem('m-proj')||(state.projec
 async function doQuickRun(){const task=$('#qrTask').value.trim();if(!task){toast('寫低任務先',true);return;}const target=(($('#qrTarget')||{}).value||'').trim();const proj=localStorage.getItem('m-proj')||(state.projects[0]&&state.projects[0].path)||undefined;const mv=(localStorage.getItem('m-model')||'codex|gpt-5.5').split('|');const tg=localStorage.getItem('swarm-tguser')||undefined;closeSheet();try{const r=await api('/api/plans/run',{method:'POST',body:JSON.stringify({staged:true,taskBrief:task,projectPath:proj,deliveryMode:'code',cli:mv[0],model:mv[1],tgUser:tg,ownerUser:tg||undefined,notifyUser:tg||undefined,...missionPayload(task,target)})});toast(r.queued?('⏳ 已排隊 #'+(r.position||'')):'🔀 開工!');if(r.run){state.focusRunId=r.run.id;state.byId[r.run.id]=r.run;state.tab='mission';}await loadAll();}catch(e){toast(e.message,true);}}
 
 /* ───────── 開新嘢:直接 code / 傾諗法+開 AI 聯合國（三模議會）（同 Telegram /council 一致）───────── */
-const COUNCIL_STRENGTH={standard:null,fable:{council_a:{cli:'claude',model:'claude-fable-5'},council_b:{cli:'codex',model:'gpt-5.5'},council_c:{cli:'glm',model:'glm-5.2'},moderator:{cli:'claude',model:'opus'},explainer:{cli:'claude',model:'sonnet'}}};
+const COUNCIL_STRENGTH={standard:null};
 function openRunMenu(){openSheet('開新嘢',`
   <button class="big-choice" onclick="openQuickRun()"><b>🔀 直接落 code</b><span>你已經知要做咩 → research → build → review → fix</span></button>
   <button class="big-choice" onclick="openCouncilDraft()"><b>💡 傾諗法 + 開 AI 聯合國</b><span>諗法未完善 → Opus 幫你完善 → 過目 → 交 AI 聯合國評審收斂</span></button>`);}
@@ -630,9 +630,8 @@ async function doReviseCouncil(){const note=(($('#cdNote')||{}).value||'').trim(
     if(r.ok&&r.refined)d.refined=r.refined;else toast('再完善失敗,保留上一版',true);showRefinePreview();}
   catch(e){toast(e.message,true);showRefinePreview();}}
 function chooseCouncilStrength(taskBrief){if(!state.councilDraft)state.councilDraft={};state.councilDraft.brief=taskBrief;openSheet('🗳 揀議會陣容',`
-  <p style="font-size:12px;color:var(--muted)">seat A = 仲裁腦（收斂 plan 嗰個）</p>
-  <button class="big-choice" onclick="startCouncilFromDraft(state.councilDraft.brief,'standard')"><b>⚖️ 標準</b><span>Opus · Codex gpt-5.5 · GLM 5.2</span></button>
-  <button class="big-choice" onclick="startCouncilFromDraft(state.councilDraft.brief,'fable')"><b>👑 Fable 領銜</b><span>Fable 5 · Codex · GLM（seat A 升旗艦）</span></button>`);}
+  <p style="font-size:12px;color:var(--muted)">所有議會都會保留開拗收斂同 final arbiter。</p>
+  <button class="big-choice" onclick="startCouncilFromDraft(state.councilDraft.brief,'standard')"><b>⚖️ 標準</b><span>Opus · Codex gpt-5.5 · GLM 5.2</span></button>`);}
 async function startCouncilFromDraft(taskBrief,strength){taskBrief=(taskBrief||'').trim();if(!taskBrief){toast('冇內容開會',true);return;}
   const tg=localStorage.getItem('swarm-tguser')||undefined;const models=strength?COUNCIL_STRENGTH[strength]:null;closeSheet();
   try{const cr=await api('/api/runs',{method:'POST',body:JSON.stringify({topic:taskBrief.slice(0,70),taskBrief,projectPath:currentMobileProject()||undefined,tgUser:tg,ownerUser:tg||undefined,notifyUser:tg||undefined,...missionPayload(taskBrief,'')})});
