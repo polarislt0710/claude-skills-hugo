@@ -45,6 +45,7 @@ const HELP = [
   '`/show [id]` — 某 run 詳情（gate / plan / 最近產出）；唔帶 id = 當前',
   '`/projects` — 列出可用 project',
   '`/project <編號或 run id 尾段>` — 設定 Telegram 新 mission / council 用邊個 project',
+  '`/intentpack [auto|general|mvp|full]` — 設定新 mission / council 用邊套 Intent Pack',
   '',
   '*開工*',
   '`/council <題目>` — Opus 完善 → 過目 → 揀快速 / 平衡 / 深度 9-grid → 開 AI 聯合國',
@@ -83,7 +84,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
   function blankState() {
     return { pendingMission: null, pendingCouncil: null, pendingRefine: null, awaitingRefineNote: false,
       pendingPush: null, awaitingPushBranch: false,
-      pendingOverseerRevise: null, selectedProjectPath: null,
+      pendingOverseerRevise: null, selectedProjectPath: null, selectedIntentPackKey: null,
       overseerHistory: [], overseerModel: 'opus', overseerMode: 'auto' };
   }
   function stateFor(key) { if (!states.has(key)) states.set(key, blankState()); return states.get(key); }
@@ -91,13 +92,14 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
   // 當前 dispatch 嘅 working set（updates 係 sequential 處理,逐個 await,唔會 race）
   let replyChatId = OWNER, currentRole = 'owner';
   let pendingMission, pendingCouncil, pendingRefine, awaitingRefineNote, pendingOverseerRevise, overseerHistory, overseerModel, overseerMode;
-  let pendingPush, awaitingPushBranch, selectedProjectPath;
+  let pendingPush, awaitingPushBranch, selectedProjectPath, selectedIntentPackKey;
   function loadState(key) {
     const s = stateFor(key);
     pendingMission = s.pendingMission; pendingCouncil = s.pendingCouncil; pendingRefine = s.pendingRefine;
     awaitingRefineNote = s.awaitingRefineNote; pendingOverseerRevise = s.pendingOverseerRevise;
     pendingPush = s.pendingPush; awaitingPushBranch = s.awaitingPushBranch;
     selectedProjectPath = s.selectedProjectPath || null;
+    selectedIntentPackKey = s.selectedIntentPackKey || null;
     overseerHistory = s.overseerHistory; overseerModel = s.overseerModel; overseerMode = s.overseerMode;
     if (overseerModel === 'claude-fable-5') overseerModel = 'opus';
   }
@@ -107,6 +109,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     s.awaitingRefineNote = awaitingRefineNote; s.pendingOverseerRevise = pendingOverseerRevise;
     s.pendingPush = pendingPush; s.awaitingPushBranch = awaitingPushBranch;
     s.selectedProjectPath = selectedProjectPath || null;
+    s.selectedIntentPackKey = selectedIntentPackKey || null;
     if (overseerModel === 'claude-fable-5') overseerModel = 'opus';
     s.overseerHistory = overseerHistory; s.overseerModel = overseerModel; s.overseerMode = overseerMode;
     persistMem();
@@ -115,7 +118,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     try {
       const fs = require('fs');
       const out = {};
-      for (const [k, s] of states) out[k] = { overseerHistory: s.overseerHistory, overseerModel: s.overseerModel === 'claude-fable-5' ? 'opus' : s.overseerModel, overseerMode: s.overseerMode, selectedProjectPath: s.selectedProjectPath || null };
+      for (const [k, s] of states) out[k] = { overseerHistory: s.overseerHistory, overseerModel: s.overseerModel === 'claude-fable-5' ? 'opus' : s.overseerModel, overseerMode: s.overseerMode, selectedProjectPath: s.selectedProjectPath || null, selectedIntentPackKey: s.selectedIntentPackKey || null };
       fs.writeFileSync(MEM_FILE, JSON.stringify(out));
     } catch (e) { log('persistMem: ' + e.message); }
   }
@@ -128,6 +131,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
         s.overseerModel = v.overseerModel === 'claude-fable-5' ? 'opus' : (v.overseerModel || 'opus');
         s.overseerMode = v.overseerMode || 'auto';
         s.selectedProjectPath = v.selectedProjectPath || null;
+        s.selectedIntentPackKey = v.selectedIntentPackKey || null;
       }
     } catch (_) { /* first run / no file */ }
   }
@@ -234,6 +238,55 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     return (payload.projects[0] && payload.projects[0].path) || payload.defaultProjectRoot || undefined;
   }
 
+  function normalizeIntentPackChoice(value) {
+    const k = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+    if (!k || k === 'auto' || k === 'default') return null;
+    if (k === 'mvp' || k === 'school_tracker' || k === 'mvp_school_tracker') return 'school_mvp';
+    if (k === 'full' || k === 'school_os' || k === 'learning_os') return 'school_os_full';
+    if (['general', 'school_mvp', 'school_os_full'].includes(k)) return k;
+    return undefined;
+  }
+
+  async function intentPacksPayload(projectPath) {
+    const p = projectPath || selectedProjectPath || await projectForNewRun();
+    const r = await api('GET', `/api/intent-packs?projectPath=${encodeURIComponent(p || '')}`);
+    return {
+      defaultIntentPackKey: (r.json && r.json.defaultIntentPackKey) || 'general',
+      packs: (r.json && r.json.packs) || [],
+      projectPath: (r.json && r.json.projectPath) || p || '',
+    };
+  }
+
+  function intentPackLabel(packs, key) {
+    const p = (packs || []).find((x) => x.key === key);
+    return p ? (p.shortLabel || p.label || key) : key;
+  }
+
+  async function intentPackForNewRun(projectPath) {
+    if (selectedIntentPackKey) return selectedIntentPackKey;
+    const payload = await intentPacksPayload(projectPath);
+    return payload.defaultIntentPackKey || 'general';
+  }
+
+  async function intentPackLine(projectPath, key) {
+    const payload = await intentPacksPayload(projectPath);
+    const k = key || selectedIntentPackKey || payload.defaultIntentPackKey || 'general';
+    return {
+      key: k,
+      label: intentPackLabel(payload.packs, k),
+      mode: selectedIntentPackKey ? 'manual' : 'auto',
+      projectPath: payload.projectPath,
+      packs: payload.packs,
+      defaultIntentPackKey: payload.defaultIntentPackKey,
+    };
+  }
+
+  function intentPackKeyboard(packs, selectedKey) {
+    const rows = [[{ text: selectedKey ? '跟 project default' : '✅ 跟 project default', callback_data: 'ip:auto' }]];
+    (packs || []).forEach((p) => rows.push([{ text: `${selectedKey === p.key ? '✅ ' : ''}${p.shortLabel || p.label}`, callback_data: `ip:${p.key}` }]));
+    return { inline_keyboard: rows };
+  }
+
   async function resolveRunFromTailOrCurrent(tail) {
     if (tail && tail !== 'current') return findRunByTail(tail);
     return currentRun();
@@ -316,24 +369,29 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
   async function promptCouncilStrength(taskBrief) {
     pendingCouncil = { taskBrief };
     const proj = await projectForNewRun();
-    await say(`揀 AI 聯合國模式：\nProject：${tgline(proj || 'default')}`, { replyMarkup: councilModeKeyboard() });
+    const pack = await intentPackLine(proj);
+    await say(`揀 AI 聯合國模式：\nProject：${tgline(proj || 'default')}\nIntent Pack：${tgline(pack.label)}（${pack.mode}）`, { replyMarkup: councilModeKeyboard() });
   }
 
   async function startCouncil(taskBrief, councilMode = 'balanced') {
     const projectPath = await projectForNewRun();
-    const cr = await api('POST', '/api/runs', { topic: taskBrief.slice(0, 70), taskBrief, tgChatId: replyChatId, projectPath, source: 'telegram', createdFrom: 'telegram' });
+    const intentPackKey = await intentPackForNewRun(projectPath);
+    const pack = await intentPackLine(projectPath, intentPackKey);
+    const cr = await api('POST', '/api/runs', { topic: taskBrief.slice(0, 70), taskBrief, tgChatId: replyChatId, projectPath, intentPackKey, source: 'telegram', createdFrom: 'telegram' });
     const run = cr.json && cr.json.run;
     if (!run) { await say(`⚠️ 開 run 失敗：${(cr.json && cr.json.error) || cr.status}`); return; }
     const mode = (COUNCIL_MODES[councilMode] && COUNCIL_MODES[councilMode].mode) || councilMode || 'balanced';
     const label = Object.values(COUNCIL_MODES).find((m) => m.mode === mode || m === councilMode);
     const sr = await api('POST', `/api/runs/${run.id}/council/start`, { councilMode: mode });
-    if (sr.json && sr.json.ok) await say(`🗳 AI 聯合國開波：*${tgline(taskBrief)}*\n模式：${(label && label.label) || mode}｜Project：${tgline(projectPath || run.projectPath || 'default')}\nRun：\`${run.id.slice(-8)}\`\n獨立 review 完先 ping 你開拗；收斂到御准閘會再 ping。`);
+    if (sr.json && sr.json.ok) await say(`🗳 AI 聯合國開波：*${tgline(taskBrief)}*\n模式：${(label && label.label) || mode}｜Pack：${tgline(pack.label)}｜Project：${tgline(projectPath || run.projectPath || 'default')}\nRun：\`${run.id.slice(-8)}\`\n獨立 review 完先 ping 你開拗；收斂到御准閘會再 ping。`);
     else await say(`⚠️ 開聯合國失敗：${(sr.json && sr.json.error) || sr.status}`);
   }
 
   async function promptMissionModel(taskBrief, topic) {
     pendingMission = { taskBrief, topic };
-    await say('揀「寫 code」用邊個 model（研究／覆核固定 Opus）：', { replyMarkup: modelKeyboard('mm') });
+    const projectPath = await projectForNewRun();
+    const pack = await intentPackLine(projectPath);
+    await say(`揀「寫 code」用邊個 model（研究／覆核固定 Opus）：\nProject：${tgline(projectPath || 'default')}\nIntent Pack：${tgline(pack.label)}（${pack.mode}）`, { replyMarkup: modelKeyboard('mm') });
   }
 
   async function doApprove(tail) {
@@ -381,11 +439,13 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     const { taskBrief, topic } = pendingMission;
     pendingMission = null;
     const projectPath = await projectForNewRun();
+    const intentPackKey = await intentPackForNewRun(projectPath);
+    const pack = await intentPackLine(projectPath, intentPackKey);
     const r = await api('POST', '/api/plans/run', {
       taskBrief, topic, deliveryMode: 'code', staged: true,
-      cli, model, perAgentModels: missionPerAgent(cli, model), tgChatId: replyChatId, projectPath, source: 'telegram', createdFrom: 'telegram',
+      cli, model, perAgentModels: missionPerAgent(cli, model), tgChatId: replyChatId, projectPath, intentPackKey, source: 'telegram', createdFrom: 'telegram',
     });
-    if (r.json && r.json.ok) await say(`⚙️ Mission 開波（寫 code=${model}）：*${tgline(topic)}*\nProject：${tgline(projectPath || 'default')}${r.json.queued ? `\n排隊中 #${r.json.position}` : '\nresearch → build → review → fix 跑緊'}`);
+    if (r.json && r.json.ok) await say(`⚙️ Mission 開波（寫 code=${model}）：*${tgline(topic)}*\nPack：${tgline(pack.label)}｜Project：${tgline(projectPath || 'default')}${r.json.queued ? `\n排隊中 #${r.json.position}` : '\nresearch → build → review → fix 跑緊'}`);
     else await say(`⚠️ Mission 失敗：${(r.json && r.json.error) || r.status}`);
   }
 
@@ -491,13 +551,32 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     if (c === '/fast') { overseerMode = 'fast'; await say('💬 *鎖快答*：之後一律 Sonnet 快答。返自動：`/auto`'); return; }
     if (c === '/deep') { overseerMode = 'deep'; await say('🧠 *鎖深入*：之後一律 Opus+skill。返自動：`/auto`'); return; }
 
+    if (c === '/intentpack') {
+      if (!ownerOnly()) { await denyGuest(); return; }
+      const projectPath = await projectForNewRun();
+      const payload = await intentPacksPayload(projectPath);
+      if (arg) {
+        const next = normalizeIntentPackChoice(arg);
+        if (next === undefined) { await say('用法：`/intentpack auto|general|mvp|full`'); return; }
+        selectedIntentPackKey = next;
+      }
+      const cur = selectedIntentPackKey || payload.defaultIntentPackKey || 'general';
+      const mode = selectedIntentPackKey ? 'manual override' : 'auto 跟 project default';
+      await say(
+        `🎯 Intent Pack：*${tgline(intentPackLabel(payload.packs, cur))}*\n模式：${mode}\nProject default：${tgline(intentPackLabel(payload.packs, payload.defaultIntentPackKey || 'general'))}\nProject：${tgline(projectPath || 'default')}`,
+        { replyMarkup: intentPackKeyboard(payload.packs, selectedIntentPackKey) }
+      );
+      return;
+    }
+
     if (c === '/status') {
       const run = await currentRun();
       if (!run) { await say('🟦 而家冇 active run。'); return; }
       const p = run.pipeline || {};
       const gate = p.councilPaused ? '⏸ 等御准' : (p.councilReviewPaused ? '🔎 等開拗' : '');
       const mode = p.mode || (run.metrics && run.metrics.deliveryMode) || '-';
-      await say(`📊 *${tgline(run.topic)}*\n狀態：${run.status}｜stage：${run.stage || '-'} ${gate}\nmode：${p.councilModeLabel || mode}${p.councilPlanVersion ? `｜plan v${p.councilPlanVersion}` : ''}\nProject：${tgline(run.projectPath || '-')}\nHandoffs：${(run.handoffs || []).length || 0}｜Memory：${run.memoryPackStatus ? `in ${(run.memoryPackStatus.included || []).length} / missing ${(run.memoryPackStatus.missing || []).length}` : '-'}`);
+      const pack = (run.intentPackSnapshot && (run.intentPackSnapshot.shortLabel || run.intentPackSnapshot.label)) || run.intentPackLabel || run.intentPackKey || 'General';
+      await say(`📊 *${tgline(run.topic)}*\n狀態：${run.status}｜stage：${run.stage || '-'} ${gate}\nmode：${p.councilModeLabel || mode}${p.councilPlanVersion ? `｜plan v${p.councilPlanVersion}` : ''}\nPack：${tgline(pack)}\nProject：${tgline(run.projectPath || '-')}\nHandoffs：${(run.handoffs || []).length || 0}｜Memory：${run.memoryPackStatus ? `in ${(run.memoryPackStatus.included || []).length} / missing ${(run.memoryPackStatus.missing || []).length}` : '-'}`);
       return;
     }
 
@@ -555,7 +634,8 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       if (!arr.length) { await say('🟦 冇 run。'); return; }
       const lines = arr.slice(-10).reverse().map((x) => {
         const run = (x.runningAgents ? `▶${x.runningAgents}` : x.status);
-        return `• \`${x.id}\`\n  ${tgline(x.topic)} — ${run}/${x.stage || '-'}`;
+        const pack = x.intentPackLabel || x.intentPackKey || 'General';
+        return `• \`${x.id}\`\n  ${tgline(x.topic)} — ${run}/${x.stage || '-'}｜${tgline(pack)}`;
       });
       await say(`🗂 *最近 run*\n${lines.join('\n')}\n\n詳情：\`/show <id 或尾段>\``);
       return;
@@ -575,9 +655,10 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       const planV = p.councilPlanVersion ? `｜plan v${p.councilPlanVersion}` : '';
       const arts = (run.artifacts || []).slice(-4).map((a) => `· ${tgline(a.title || a.type)}`).join('\n') || '（暫無）';
       const mem = run.memoryPackStatus ? `included=${(run.memoryPackStatus.included || []).join(', ') || '-'}｜missing=${(run.memoryPackStatus.missing || []).join(', ') || '-'}` : '-';
+      const pack = (run.intentPackSnapshot && (run.intentPackSnapshot.shortLabel || run.intentPackSnapshot.label)) || run.intentPackLabel || run.intentPackKey || 'General';
       const h = (run.handoffs || [])[0];
       const handoff = h ? `${tgline(h.agentName)}：${tgline(h.summary || '')}${(h.warnings || []).length ? `\n警告：${tgline((h.warnings || []).slice(0, 2).join(' / '))}` : ''}` : '（暫無）';
-      await say(`📄 *${tgline(run.topic)}*\n狀態：${run.status}｜stage：${run.stage || '-'} ${gate}\nmode：${p.councilModeLabel || p.mode || (run.metrics && run.metrics.deliveryMode) || '-'}${planV}\nProject：${tgline(run.projectPath || '-')}\nMemory：${mem}\n最近 handoff：${handoff}\n最近產出：\n${arts}`);
+      await say(`📄 *${tgline(run.topic)}*\n狀態：${run.status}｜stage：${run.stage || '-'} ${gate}\nmode：${p.councilModeLabel || p.mode || (run.metrics && run.metrics.deliveryMode) || '-'}${planV}\nPack：${tgline(pack)}\nProject：${tgline(run.projectPath || '-')}\nMemory：${mem}\n最近 handoff：${handoff}\n最近產出：\n${arts}`);
       return;
     }
 
@@ -607,7 +688,8 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       }
       if (!next) { await say('搵唔到 project。用 `/projects` 睇編號，或 `/project <run id尾段>` 跟返某個 run。'); return; }
       selectedProjectPath = next;
-      await say(`📁 已設定 Telegram 新 mission / council project：\n${tgline(next)}`);
+      const pack = await intentPackLine(next);
+      await say(`📁 已設定 Telegram 新 mission / council project：\n${tgline(next)}\nIntent Pack：${tgline(pack.label)}（${pack.mode}）`);
       return;
     }
 
@@ -676,7 +758,20 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       const pr = (payload.projects || [])[idx];
       if (!pr || !pr.path) { await say('Project 選項已過期，打 /projects 再揀一次。'); return; }
       selectedProjectPath = pr.path;
-      await say(`📁 已設定 Telegram 新任務 project：\n${tgline(pr.path)}`);
+      const pack = await intentPackLine(pr.path);
+      await say(`📁 已設定 Telegram 新任務 project：\n${tgline(pr.path)}\nIntent Pack：${tgline(pack.label)}（${pack.mode}）`);
+      return;
+    }
+    if (dataStr.startsWith('ip:')) {
+      if (!ownerOnly()) { await denyGuest(); return; }
+      const raw = dataStr.split(':')[1] || 'auto';
+      const next = normalizeIntentPackChoice(raw);
+      if (next === undefined) { await say('Intent Pack 選項已過期，打 `/intentpack` 再揀一次。'); return; }
+      selectedIntentPackKey = next;
+      const projectPath = await projectForNewRun();
+      const payload = await intentPacksPayload(projectPath);
+      const cur = selectedIntentPackKey || payload.defaultIntentPackKey || 'general';
+      await say(`🎯 Intent Pack 已設定：*${tgline(intentPackLabel(payload.packs, cur))}*（${selectedIntentPackKey ? 'manual' : 'auto'}）`);
       return;
     }
     // 總管動作 confirm-gate（Tier 2 破壞性動作守關）

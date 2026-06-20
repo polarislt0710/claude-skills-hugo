@@ -36,6 +36,69 @@ const DEFAULT_COORDINATION_WARNINGS = [
   '同一 project 可能有其他 agent / partner 正在工作；唔好 revert 或覆蓋自己冇做嘅改動。',
   '產品方向、安全、權限、刪資料、收費或 one-way-door 決策，必須停喺 Hugo / owner gate。',
 ];
+const INTENT_PACKS = {
+  general: {
+    key: 'general',
+    version: 1,
+    label: 'General',
+    shortLabel: 'General',
+    summary: '普通 project / coding / infra 模式；跟 repo memory、任務 brief 同 acceptance criteria，唔注入學校平台假設。',
+    priorities: [
+      '跟 repo AGENTS / memory / 現有架構做保守改動。',
+      '清楚交付 task 要求、測試結果、剩餘風險。',
+      '唔自動加入學生、改卷、tenant、plugin 或教育平台背景。',
+    ],
+    acceptance: [
+      '改動符合任務 brief，且有可重現驗證。',
+      '無 silent scope expansion，無覆蓋其他人改動。',
+    ],
+    nonGoals: [
+      '唔為一般任務引入 ORCA / 學校平台專屬設計。',
+    ],
+  },
+  school_mvp: {
+    key: 'school_mvp',
+    version: 1,
+    label: 'MVP School Learning Tracker',
+    shortLabel: 'MVP Tracker',
+    summary: 'ORCA MVP 模式；優先令改卷流程 work，並 demo 到學生改完卷後能力可按時間、試卷、能力點追蹤。',
+    priorities: [
+      '改卷流程要可用：輸入 / 上載答案、評分、產生結果。',
+      '追蹤要可展示：同一學生跨時間、跨試卷、跨能力點嘅變化。',
+      'Demo 優先：老師一眼睇到進步、退步、卡住、弱項。',
+      '資料模型要保留擴展空間：學生、試卷、題目、分數、能力點、時間。',
+    ],
+    acceptance: [
+      '至少可用一個學生跨多份卷展示能力趨勢同改卷結果。',
+      'UI / artifact 要清楚指出老師可以點睇學生能力變化。',
+      '不要為 MVP 過早做大型 plugin marketplace、billing、多校私有部署或複雜 RBAC。',
+    ],
+    nonGoals: [
+      '暫不追求完整 School OS。',
+      '暫不做全面 plugin marketplace / school-owned DB / enterprise compliance。',
+    ],
+  },
+  school_os_full: {
+    key: 'school_os_full',
+    version: 1,
+    label: 'Full School Learning OS',
+    shortLabel: 'Full School OS',
+    summary: '長遠正式版模式；把產品視為模組化 School Learning OS，必須考慮多校、獨立 database、plugin、權限、私隱同長期學生資料。',
+    priorities: [
+      '每間學校係獨立 tenant / database，學生資料屬高敏感長期資料。',
+      '改卷、生成練習、興趣班追蹤、analytics 等都係 module / plugin。',
+      'Plugin 唔可以破壞核心資料模型、權限模型或資料隔離。',
+      '支援將來 data export、school-owned DB、private deployment、audit log。',
+    ],
+    acceptance: [
+      '任何計劃都要講清 tenant / privacy / permission / plugin boundary impact。',
+      '產品、安全、權限放寬、資料刪除、付費、one-way-door 決策必須停喺 Hugo / owner gate。',
+    ],
+    nonGoals: [
+      '唔為短期 MVP 犧牲長期資料安全或 tenant isolation。',
+    ],
+  },
+};
 const DEFAULT_AGENT_CLI = process.env.SWARM_AGENT_CLI || 'claude';
 const SWARM_WORKSPACE = process.env.SWARM_WORKSPACE || path.join(require("os").homedir(), "swarm-workspace");
 const MIROFISH_BACKEND_URL = process.env.MIROFISH_BACKEND_URL || 'http://127.0.0.1:5001';
@@ -966,10 +1029,73 @@ function normalizeStringList(value, fallback = [], maxItems = 10, maxChars = 420
   return out.slice(0, maxItems);
 }
 
+function cloneIntentPack(pack) {
+  const p = pack || INTENT_PACKS.general;
+  return {
+    key: p.key,
+    version: p.version,
+    label: p.label,
+    shortLabel: p.shortLabel,
+    summary: p.summary,
+    priorities: [...(p.priorities || [])],
+    acceptance: [...(p.acceptance || [])],
+    nonGoals: [...(p.nonGoals || [])],
+  };
+}
+
+function normalizeIntentPackKey(value, fallback = 'general') {
+  const key = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+  if (INTENT_PACKS[key]) return key;
+  if (key === 'mvp' || key === 'school_tracker' || key === 'mvp_school_tracker') return 'school_mvp';
+  if (key === 'full' || key === 'school_os' || key === 'learning_os') return 'school_os_full';
+  return INTENT_PACKS[fallback] ? fallback : 'general';
+}
+
+function projectDefaultIntentPackKey(projectPath) {
+  const value = String(projectPath || DEFAULT_PROJECT_ROOT).toLowerCase();
+  const parts = value.split(/[\\/]+/).filter(Boolean);
+  return parts.some((part) => part === 'orca' || part === 'orca-platform-mvp' || /^orca-platform(?:-|$)/.test(part)) ? 'school_mvp' : 'general';
+}
+
+function resolveIntentPack({ key, projectPath, projectDefault, source } = {}) {
+  const hasExplicit = key !== undefined && key !== null && String(key).trim() !== '';
+  const base = hasExplicit ? String(key).trim() : (projectDefault || projectDefaultIntentPackKey(projectPath));
+  const normalized = normalizeIntentPackKey(base, projectDefaultIntentPackKey(projectPath));
+  const requestedUnknown = hasExplicit && !INTENT_PACKS[String(key || '').trim().toLowerCase().replace(/[-\s]+/g, '_')]
+    && !['mvp', 'school_tracker', 'mvp_school_tracker', 'full', 'school_os', 'learning_os'].includes(String(key || '').trim().toLowerCase().replace(/[-\s]+/g, '_'));
+  return {
+    key: normalized,
+    version: INTENT_PACKS[normalized].version,
+    label: INTENT_PACKS[normalized].label,
+    snapshot: cloneIntentPack(INTENT_PACKS[normalized]),
+    source: source || (hasExplicit ? 'user' : 'project-default'),
+    requestedKey: hasExplicit ? String(key).trim() : '',
+    fallbackWarning: requestedUnknown ? `Unknown intent pack "${String(key).trim()}", fallback to ${normalized}.` : '',
+  };
+}
+
+function intentPackPrompt(pack) {
+  const p = pack && pack.key ? pack : cloneIntentPack(INTENT_PACKS.general);
+  return [
+    `### ${p.label} v${p.version}`,
+    p.summary || '',
+    '',
+    'Priorities:',
+    ...((p.priorities || []).length ? p.priorities.map((x) => `- ${x}`) : ['- (none)']),
+    '',
+    'Acceptance:',
+    ...((p.acceptance || []).length ? p.acceptance.map((x) => `- ${x}`) : ['- (none)']),
+    '',
+    'Non-goals:',
+    ...((p.nonGoals || []).length ? p.nonGoals.map((x) => `- ${x}`) : ['- (none)']),
+  ].join('\n');
+}
+
 function defaultMissionControl() {
   return {
     version: 1,
     defaultGlobalGoal: normalizeTextField(process.env.SWARM_GLOBAL_GOAL || DEFAULT_GLOBAL_GOAL),
+    defaultIntentPackKey: normalizeIntentPackKey(process.env.SWARM_INTENT_PACK || '', 'general'),
     projects: {},
     handoffGuidelines: normalizeStringList(process.env.SWARM_COORDINATION_WARNINGS || DEFAULT_COORDINATION_WARNINGS, DEFAULT_COORDINATION_WARNINGS),
     updatedAt: null,
@@ -988,6 +1114,7 @@ function normalizeMissionControl(raw = {}) {
       projectPath,
       label: normalizeTextField(value.label || path.basename(projectPath), 160),
       globalGoal: normalizeTextField(value.globalGoal || value.goal || base.defaultGlobalGoal),
+      defaultIntentPackKey: normalizeIntentPackKey(value.defaultIntentPackKey || value.intentPackKey || '', projectDefaultIntentPackKey(projectPath)),
       updatedAt: value.updatedAt || null,
       updatedBy: normalizeUserLabel(value.updatedBy || 'system', 'system'),
     };
@@ -995,6 +1122,7 @@ function normalizeMissionControl(raw = {}) {
   return {
     version: Number(raw.version || base.version) || 1,
     defaultGlobalGoal: normalizeTextField(raw.defaultGlobalGoal || raw.globalGoal || base.defaultGlobalGoal),
+    defaultIntentPackKey: normalizeIntentPackKey(raw.defaultIntentPackKey || raw.intentPackKey || base.defaultIntentPackKey, 'general'),
     projects,
     handoffGuidelines: normalizeStringList(raw.handoffGuidelines || raw.defaultWarnings, base.handoffGuidelines),
     updatedAt: raw.updatedAt || base.updatedAt,
@@ -1012,12 +1140,16 @@ function projectMissionControl(projectPath) {
   const key = projectMissionKey(projectPath || DEFAULT_PROJECT_ROOT);
   const entry = control.projects[key] || null;
   const globalGoal = (entry && entry.globalGoal) || control.defaultGlobalGoal || DEFAULT_GLOBAL_GOAL;
+  const inferredIntentPackKey = projectDefaultIntentPackKey(key);
+  const globalIntentPackKey = control.defaultIntentPackKey || 'general';
+  const defaultIntentPackKey = (entry && entry.defaultIntentPackKey) || (globalIntentPackKey !== 'general' ? globalIntentPackKey : inferredIntentPackKey);
   return {
     version: control.version || 1,
     projectPath: key,
     label: (entry && entry.label) || path.basename(key),
     globalGoal,
     defaultGlobalGoal: control.defaultGlobalGoal,
+    defaultIntentPackKey: normalizeIntentPackKey(defaultIntentPackKey, projectDefaultIntentPackKey(key)),
     handoffGuidelines: control.handoffGuidelines || [],
     // Back-compat for old clients; no longer user-editable warnings.
     defaultWarnings: control.handoffGuidelines || [],
@@ -1026,6 +1158,7 @@ function projectMissionControl(projectPath) {
     projectGoals: Object.values(control.projects || {}).map((p) => ({
       projectPath: p.projectPath,
       label: p.label,
+      defaultIntentPackKey: p.defaultIntentPackKey,
       updatedAt: p.updatedAt,
       updatedBy: p.updatedBy,
     })),
@@ -1055,11 +1188,13 @@ function writeMissionControl(patch = {}) {
       projectPath: key,
       label: normalizeTextField(patch.label || (nextRaw.projects[key] && nextRaw.projects[key].label) || path.basename(key), 160),
       globalGoal: normalizeTextField(patch.globalGoal || (nextRaw.projects[key] && nextRaw.projects[key].globalGoal) || current.defaultGlobalGoal),
+      defaultIntentPackKey: normalizeIntentPackKey(patch.defaultIntentPackKey || patch.intentPackKey || (nextRaw.projects[key] && nextRaw.projects[key].defaultIntentPackKey) || projectDefaultIntentPackKey(key), projectDefaultIntentPackKey(key)),
       updatedAt,
       updatedBy,
     };
   }
   if (patch.defaultGlobalGoal !== undefined) nextRaw.defaultGlobalGoal = normalizeTextField(patch.defaultGlobalGoal);
+  if (patch.defaultIntentPackKey !== undefined) nextRaw.defaultIntentPackKey = normalizeIntentPackKey(patch.defaultIntentPackKey, 'general');
   if (patch.handoffGuidelines !== undefined) nextRaw.handoffGuidelines = normalizeStringList(patch.handoffGuidelines, current.handoffGuidelines || []);
   const next = normalizeMissionControl(nextRaw);
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1100,20 +1235,32 @@ function normalizeMissionTarget(value, fallback = '') {
   return base;
 }
 
-function buildRunMissionContext({ topic, taskBrief, projectPath, globalGoal, missionTarget, coordinationWarnings } = {}) {
+function buildRunMissionContext({ topic, taskBrief, projectPath, globalGoal, missionTarget, coordinationWarnings, intentPackKey, intentPackSource } = {}) {
   const control = projectMissionControl(projectPath || DEFAULT_PROJECT_ROOT);
   const fallback = taskBrief || topic || '';
+  const intent = resolveIntentPack({
+    key: intentPackKey,
+    projectPath: control.projectPath,
+    projectDefault: control.defaultIntentPackKey,
+    source: intentPackSource,
+  });
   return {
     globalGoal: normalizeTextField(globalGoal || control.globalGoal),
     missionTarget: normalizeMissionTarget(missionTarget, fallback),
     coordinationWarnings: normalizeStringList(coordinationWarnings, control.handoffGuidelines),
     missionControlVersion: control.version || 1,
     missionControlProjectPath: control.projectPath,
+    intentPackKey: intent.key,
+    intentPackVersion: intent.version,
+    intentPackSnapshot: intent.snapshot,
+    intentPackSource: intent.source,
+    intentPackFallbackWarning: intent.fallbackWarning,
   };
 }
 
 function ensureRunMissionContext(run) {
   if (!run) return null;
+  const hadValidIntentPack = !!(run.intentPackKey && INTENT_PACKS[run.intentPackKey]);
   const ctx = buildRunMissionContext({
     topic: run.topic,
     taskBrief: run.taskBrief,
@@ -1121,12 +1268,18 @@ function ensureRunMissionContext(run) {
     globalGoal: run.globalGoal,
     missionTarget: run.missionTarget,
     coordinationWarnings: run.coordinationWarnings,
+    intentPackKey: run.intentPackKey,
+    intentPackSource: run.intentPackSource,
   });
   run.globalGoal = ctx.globalGoal;
   run.missionTarget = ctx.missionTarget;
   run.coordinationWarnings = ctx.coordinationWarnings;
   run.missionControlVersion = run.missionControlVersion || ctx.missionControlVersion;
   run.missionControlProjectPath = run.missionControlProjectPath || ctx.missionControlProjectPath;
+  if (!hadValidIntentPack) run.intentPackKey = ctx.intentPackKey;
+  if (!hadValidIntentPack || !run.intentPackVersion) run.intentPackVersion = ctx.intentPackVersion;
+  if (!hadValidIntentPack || !run.intentPackSnapshot || run.intentPackSnapshot.key !== run.intentPackKey) run.intentPackSnapshot = ctx.intentPackSnapshot;
+  run.intentPackSource = run.intentPackSource || ctx.intentPackSource;
   return ctx;
 }
 
@@ -1227,6 +1380,7 @@ async function ensureMissionTargetDraft(run, options = {}) {
 function buildMissionContextBlock(run) {
   const ctx = ensureRunMissionContext(run || {});
   const t = ctx.missionTarget || {};
+  const pack = (run && run.intentPackSnapshot) || ctx.intentPackSnapshot || cloneIntentPack(INTENT_PACKS.general);
   const lines = [
     '## Mission North Star / Repo Goal',
     '以下大目標係對應呢個 repo / project，不係全 server 共用。所有 agent 要以佢做判斷基準，唔好只係完成自己手上嗰粒 task。',
@@ -1241,6 +1395,19 @@ function buildMissionContextBlock(run) {
     t.acceptance ? `Acceptance criteria: ${t.acceptance}` : '',
     t.nonGoals ? `Non-goals / avoid: ${t.nonGoals}` : '',
     t.source ? `Target source: ${t.source}${t.draftModel ? ` · ${t.draftModel}` : ''}` : '',
+    '',
+    '### Intent Pack',
+    `Pack: ${pack.label || pack.key} v${pack.version || 1} (${(run && run.intentPackSource) || ctx.intentPackSource || 'auto'})`,
+    pack.summary || '',
+    '',
+    'Intent priorities:',
+    ...((pack.priorities || []).length ? pack.priorities.map((x) => `- ${x}`) : ['- (none)']),
+    '',
+    'Intent acceptance:',
+    ...((pack.acceptance || []).length ? pack.acceptance.map((x) => `- ${x}`) : ['- (none)']),
+    '',
+    'Intent non-goals:',
+    ...((pack.nonGoals || []).length ? pack.nonGoals.map((x) => `- ${x}`) : ['- (none)']),
     '',
     '### Handoff Discipline',
     ...(ctx.coordinationWarnings.length ? ctx.coordinationWarnings.map((w) => `- ${w}`) : ['- (none)']),
@@ -1307,6 +1474,10 @@ function normalizeRun(run) {
   run.queuedReason = run.queuedReason || null;
   run.queuedBehindRunId = run.queuedBehindRunId || null;
   run.memoryPackStatus = run.memoryPackStatus || null;
+  run.intentPackKey = run.intentPackKey || 'general';
+  run.intentPackVersion = run.intentPackVersion || ((run.intentPackSnapshot && run.intentPackSnapshot.version) || 1);
+  run.intentPackSnapshot = run.intentPackSnapshot || cloneIntentPack(INTENT_PACKS[run.intentPackKey] || INTENT_PACKS.general);
+  run.intentPackSource = run.intentPackSource || 'auto';
   // 定向幕僚 chat (Phase 1)
   run.chatThread = Array.isArray(run.chatThread) ? run.chatThread : [];
   run.chatModel = run.chatModel || null;
@@ -1523,7 +1694,7 @@ function normalizeUserLabel(value, fallback = '') {
   return raw.replace(/^@/, '').slice(0, 80);
 }
 
-function createRun({ topic, personas, chatContext, sessionId, projectPath, source, template, background, taskBrief, seed, tgChatId, tgUser, ownerUser, notifyUser, createdFrom, globalGoal, missionTarget, coordinationWarnings } = {}) {
+function createRun({ topic, personas, chatContext, sessionId, projectPath, source, template, background, taskBrief, seed, tgChatId, tgUser, ownerUser, notifyUser, createdFrom, globalGoal, missionTarget, coordinationWarnings, intentPackKey } = {}) {
   if (!tgChatId && tgUser) tgChatId = resolveTgChat(tgUser); // console 開:username → chatId
   const now = new Date().toISOString();
   const agents = Array.isArray(personas) && personas.length
@@ -1532,7 +1703,16 @@ function createRun({ topic, personas, chatContext, sessionId, projectPath, sourc
   const owner = normalizeUserLabel(ownerUser || tgUser || (tgChatId ? `tg:${tgChatId}` : ''), 'owner');
   const notify = normalizeUserLabel(notifyUser || tgUser || owner, owner);
   const resolvedProjectPath = projectPath ? safeProjectPath(projectPath) : DEFAULT_PROJECT_ROOT;
-  const missionCtx = buildRunMissionContext({ topic, taskBrief, projectPath: resolvedProjectPath, globalGoal, missionTarget, coordinationWarnings });
+  const missionCtx = buildRunMissionContext({
+    topic,
+    taskBrief,
+    projectPath: resolvedProjectPath,
+    globalGoal,
+    missionTarget,
+    coordinationWarnings,
+    intentPackKey,
+    intentPackSource: intentPackKey ? 'user' : 'project-default',
+  });
 
   const run = {
     id: id('run'),
@@ -1560,6 +1740,10 @@ function createRun({ topic, personas, chatContext, sessionId, projectPath, sourc
     coordinationWarnings: missionCtx.coordinationWarnings,
     missionControlVersion: missionCtx.missionControlVersion,
     missionControlProjectPath: missionCtx.missionControlProjectPath,
+    intentPackKey: missionCtx.intentPackKey,
+    intentPackVersion: missionCtx.intentPackVersion,
+    intentPackSnapshot: missionCtx.intentPackSnapshot,
+    intentPackSource: missionCtx.intentPackSource,
     startedAt: now,
     updatedAt: now,
     completedAt: null,
@@ -1586,6 +1770,17 @@ function createRun({ topic, personas, chatContext, sessionId, projectPath, sourc
     queuedBehindRunId: null,
     memoryPackStatus: null,
   };
+
+  if (missionCtx.intentPackFallbackWarning) {
+    run.artifacts.unshift({
+      id: id('artifact'),
+      type: 'warning',
+      title: 'Intent Pack fallback',
+      content: missionCtx.intentPackFallbackWarning,
+      agentId: null,
+      createdAt: now,
+    });
+  }
 
   if (chatContext) addContext(run, { context: chatContext, source: 'initial', sessionId, url: null }, false);
   store.runs.unshift(run);
@@ -1698,6 +1893,10 @@ function freshIdleState() {
     coordinationWarnings: projectMissionControl(DEFAULT_PROJECT_ROOT).handoffGuidelines,
     missionControlVersion: projectMissionControl(DEFAULT_PROJECT_ROOT).version,
     missionControlProjectPath: projectMissionControl(DEFAULT_PROJECT_ROOT).projectPath,
+    intentPackKey: projectMissionControl(DEFAULT_PROJECT_ROOT).defaultIntentPackKey,
+    intentPackVersion: INTENT_PACKS[projectMissionControl(DEFAULT_PROJECT_ROOT).defaultIntentPackKey].version,
+    intentPackSnapshot: cloneIntentPack(INTENT_PACKS[projectMissionControl(DEFAULT_PROJECT_ROOT).defaultIntentPackKey]),
+    intentPackSource: 'project-default',
     proposals: {},
     debates: [],
     synthesis: null,
@@ -1788,10 +1987,14 @@ function buildMemoryPack(run) {
   const taskLine = `Task: ${truncate((run && (run.taskBrief || run.topic)) || '', 1200)}`;
   const contextLine = latestContext ? `Latest chat context (${latestContext.context.length} chars):\n${truncate(latestContext.context, 1800)}` : 'Latest chat context: none';
   const missionBlock = buildMissionContextBlock(run);
+  const pack = (run && run.intentPackSnapshot) || cloneIntentPack(INTENT_PACKS.general);
   const body = truncate([
     '## Hugo Intent Pack / Project Memory',
     ownerLine,
     taskLine,
+    '',
+    '## Active Intent Pack',
+    intentPackPrompt(pack),
     '',
     missionBlock,
     '',
@@ -1810,6 +2013,12 @@ function buildMemoryPack(run) {
     missing,
     chars: body.length,
     projectPath,
+    intentPack: {
+      key: pack.key,
+      label: pack.label,
+      version: pack.version,
+      source: (run && run.intentPackSource) || 'auto',
+    },
     generatedAt: new Date().toISOString(),
   };
   if (run) run.memoryPackStatus = status;
@@ -2840,6 +3049,12 @@ function buildExecutionPrompt(run, preset, agent, options = {}) {
       warningsCount: (run.coordinationWarnings || []).length,
       missionControlVersion: run.missionControlVersion || 0,
     },
+    intentPack: {
+      key: run.intentPackKey || 'general',
+      label: (run.intentPackSnapshot && run.intentPackSnapshot.label) || 'General',
+      version: run.intentPackVersion || 1,
+      source: run.intentPackSource || 'auto',
+    },
     handoffsPassed: (run.handoffs || []).slice(0, 8).map((h) => ({ agentName: h.agentName, status: h.status, createdAt: h.createdAt })),
     chatContextCount: run.contextHistory.length,
     artifactsPassed: run.artifacts.slice(0, 5).map((artifact) => ({ title: artifact.title, type: artifact.type })),
@@ -3580,6 +3795,10 @@ app.get('/api/runs', (req, res) => {
 	    coordinationWarnings: run.coordinationWarnings,
 	    missionControlVersion: run.missionControlVersion,
 	    missionControlProjectPath: run.missionControlProjectPath,
+	    intentPackKey: run.intentPackKey,
+	    intentPackLabel: run.intentPackSnapshot && run.intentPackSnapshot.label,
+	    intentPackVersion: run.intentPackVersion,
+	    intentPackSource: run.intentPackSource,
 	    councilMode: run.pipeline && run.pipeline.councilMode,
 	    councilModeLabel: run.pipeline && run.pipeline.councilModeLabel,
 	    handoffCount: (run.handoffs || []).length,
@@ -3611,6 +3830,21 @@ app.get('/api/models', (req, res) => {
   res.json({ defaultCli: DEFAULT_AGENT_CLI, models: MODEL_CATALOG });
 });
 
+app.get('/api/intent-packs', (req, res) => {
+  const projectPath = req.query.projectPath || DEFAULT_PROJECT_ROOT;
+  const control = projectMissionControl(projectPath);
+  const resolved = resolveIntentPack({
+    projectPath: control.projectPath,
+    projectDefault: control.defaultIntentPackKey,
+  });
+  res.json({
+    ok: true,
+    defaultIntentPackKey: resolved.key,
+    projectPath: control.projectPath,
+    packs: Object.values(INTENT_PACKS).map(cloneIntentPack),
+  });
+});
+
 app.get('/api/mission-control', (req, res) => {
   res.json({ ok: true, missionControl: projectMissionControl(req.query.projectPath || DEFAULT_PROJECT_ROOT) });
 });
@@ -3622,6 +3856,7 @@ app.patch('/api/mission-control', (req, res) => {
     patch.projectPath = body.projectPath || req.query.projectPath || DEFAULT_PROJECT_ROOT;
     if (body.globalGoal !== undefined) patch.globalGoal = body.globalGoal;
     if (body.defaultGlobalGoal !== undefined) patch.defaultGlobalGoal = body.defaultGlobalGoal;
+    if (body.defaultIntentPackKey !== undefined || body.intentPackKey !== undefined) patch.defaultIntentPackKey = body.defaultIntentPackKey || body.intentPackKey;
     if (body.handoffGuidelines !== undefined) patch.handoffGuidelines = body.handoffGuidelines;
     writeMissionControl(patch);
     res.json({ ok: true, missionControl: projectMissionControl(patch.projectPath) });
@@ -3704,7 +3939,8 @@ function buildOverseerDigest(light = false) {
     const arts = light ? '' : (r.artifacts || []).slice(-2).map((a) => a.title || a.type).filter(Boolean).join('; ');
     const mode = p.mode || (r.metrics && r.metrics.deliveryMode) || '-';
     const target = missionTargetSummary(r.missionTarget);
-    return `- [${r.id}] "${truncate(r.topic || '', 80)}" status=${r.status} stage=${r.stage || '-'} mode=${mode} ${gate}${p.councilPlanVersion ? ' planv' + p.councilPlanVersion : ''}${target ? ' | target: ' + truncate(target, 120) : ''}${arts ? ' | 近產出: ' + arts : ''}`;
+    const pack = r.intentPackSnapshot && (r.intentPackSnapshot.shortLabel || r.intentPackSnapshot.label);
+    return `- [${r.id}] "${truncate(r.topic || '', 80)}" status=${r.status} stage=${r.stage || '-'} mode=${mode}${pack ? ' pack=' + pack : ''} ${gate}${p.councilPlanVersion ? ' planv' + p.councilPlanVersion : ''}${target ? ' | target: ' + truncate(target, 120) : ''}${arts ? ' | 近產出: ' + arts : ''}`;
   }).join('\n');
   const projects = (knownProjects() || []).map((p) => (typeof p === 'string' ? p : (p.path || p.name || ''))).filter(Boolean).join(', ');
   return { runs, projects, currentRunId: cur && cur.id ? cur.id : null };
@@ -3801,7 +4037,7 @@ function buildNextStepsContext(run) {
   const parts = [];
   parts.push(buildMissionContextBlock(run));
   parts.push(`任務: ${truncate(run.taskBrief || run.background || run.topic || '', 700)}`);
-  parts.push(`Project: ${run.projectPath || '-'} · 模式: ${mode} · 狀態: ${run.status || '-'} · Owner: ${run.ownerUser || '-'} · Notify: ${run.notifyUser || '-'}`);
+  parts.push(`Project: ${run.projectPath || '-'} · 模式: ${mode} · Intent Pack: ${run.intentPackSnapshot ? run.intentPackSnapshot.label : run.intentPackKey || '-'} · 狀態: ${run.status || '-'} · Owner: ${run.ownerUser || '-'} · Notify: ${run.notifyUser || '-'}`);
   if (run.queueScope || run.queuedReason) parts.push(`Queue: ${run.queueScope || '-'} · ${run.queuedReason || ''} · behind=${run.queuedBehindRunId || '-'}`);
   if (run.completionVerdict || run.reviewVerdict || run.verifyVerdict || p.reviewVerdict || p.verifyVerdict) {
     parts.push(`Verdict: completion=${run.completionVerdict || '-'} · review=${run.reviewVerdict || p.reviewVerdict || '-'} · verify=${run.verifyVerdict || p.verifyVerdict || '-'}`);
@@ -3965,6 +4201,14 @@ app.patch('/api/runs/:id/settings', (req, res) => {
     if (body.globalGoal !== undefined) run.globalGoal = normalizeTextField(body.globalGoal);
     if (body.missionTarget !== undefined) run.missionTarget = normalizeMissionTarget(body.missionTarget, run.taskBrief || run.topic || '');
     if (body.coordinationWarnings !== undefined) run.coordinationWarnings = normalizeStringList(body.coordinationWarnings, []);
+    if (body.intentPackKey !== undefined) {
+      const intent = resolveIntentPack({ key: body.intentPackKey, projectPath: run.projectPath, source: 'user' });
+      run.intentPackKey = intent.key;
+      run.intentPackVersion = intent.version;
+      run.intentPackSnapshot = intent.snapshot;
+      run.intentPackSource = intent.source;
+      if (intent.fallbackWarning) addArtifact(run, { type: 'warning', title: 'Intent Pack fallback', content: intent.fallbackWarning });
+    }
     if (body.autoBackground && !run.background) {
       run.background = buildAutoBackground(run);
       run.backgroundSource = 'auto';
@@ -4137,6 +4381,7 @@ app.post('/api/plans/run', async (req, res) => {
 	      globalGoal: body.globalGoal,
 	      missionTarget: body.missionTarget,
 	      coordinationWarnings: body.coordinationWarnings,
+	      intentPackKey: body.intentPackKey,
 	      seed: false, // drop-zone plans start clean; agents come from the wave/pipeline we spawn
 	    });
 	    if (!body.missionTarget) await ensureMissionTargetDraft(run, { taskBrief, cli: body.cli, model: body.model });
