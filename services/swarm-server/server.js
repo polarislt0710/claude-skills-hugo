@@ -18,10 +18,24 @@ const io = new Server(server, { cors: { origin: '*' } });
 const PORT = process.env.PORT || 3010;
 const DATA_DIR = process.env.SWARM_DATA_DIR || path.join(__dirname, 'data');
 const STATE_FILE = path.join(DATA_DIR, 'swarm-v3-state.json');
+const MISSION_CONTROL_FILE = path.join(DATA_DIR, 'mission-control.json');
 const DEFAULT_PROJECT_ROOT = process.env.SWARM_PROJECT_ROOT || '/home/hugo-orca/orca-platform-mvp';
 const EXEC_TIMEOUT_MS = Number(process.env.SWARM_EXEC_TIMEOUT_MS || 45 * 60 * 1000);
 const MAX_LOG_CHARS = 120000;
 const MAX_CONTEXT_CHARS = 24000;
+const MISSION_CONTROL_MAX_CHARS = Number(process.env.SWARM_MISSION_CONTROL_MAX_CHARS || 5000);
+const MISSION_TARGET_MAX_CHARS = Number(process.env.SWARM_MISSION_TARGET_MAX_CHARS || 7000);
+const DEFAULT_GLOBAL_GOAL = [
+  '建立一個完整、可靠、可持續改善嘅系統。',
+  '每個 mission 都要服務同一個大目標：令產品更清晰、更穩、更接近真正可交付，而唔係只完成單一 task。',
+].join('\n');
+const DEFAULT_COORDINATION_WARNINGS = [
+  '所有 agent 要先對齊共同大目標同今次 mission target，唔好各自為政。',
+  '唔好為咗局部完成而破壞整體系統、資料流、測試策略或用戶原意。',
+  '落 code 前要講清楚假設、依賴、會改嘅範圍同風險；唔確定就保守處理。',
+  '同一 project 可能有其他 agent / partner 正在工作；唔好 revert 或覆蓋自己冇做嘅改動。',
+  '產品方向、安全、權限、刪資料、收費或 one-way-door 決策，必須停喺 Hugo / owner gate。',
+];
 const DEFAULT_AGENT_CLI = process.env.SWARM_AGENT_CLI || 'claude';
 const SWARM_WORKSPACE = process.env.SWARM_WORKSPACE || path.join(require("os").homedir(), "swarm-workspace");
 const MIROFISH_BACKEND_URL = process.env.MIROFISH_BACKEND_URL || 'http://127.0.0.1:5001';
@@ -787,6 +801,150 @@ function truncate(text, max = MAX_CONTEXT_CHARS) {
   return `${value.slice(0, max)}\n\n...[truncated ${value.length - max} chars]`;
 }
 
+function normalizeTextField(value, max = MISSION_CONTROL_MAX_CHARS) {
+  return truncate(String(value == null ? '' : value), max);
+}
+
+function normalizeStringList(value, fallback = [], maxItems = 10, maxChars = 420) {
+  let list = [];
+  if (Array.isArray(value)) list = value;
+  else if (typeof value === 'string') list = value.split(/\r?\n/);
+  else list = fallback;
+  const out = [];
+  list.forEach((item) => {
+    const text = truncate(String(item || '').replace(/^\s*[-*]\s*/, ''), maxChars);
+    if (text && !out.includes(text)) out.push(text);
+  });
+  return out.slice(0, maxItems);
+}
+
+function defaultMissionControl() {
+  return {
+    version: 1,
+    globalGoal: normalizeTextField(process.env.SWARM_GLOBAL_GOAL || DEFAULT_GLOBAL_GOAL),
+    defaultWarnings: normalizeStringList(process.env.SWARM_COORDINATION_WARNINGS || DEFAULT_COORDINATION_WARNINGS, DEFAULT_COORDINATION_WARNINGS),
+    updatedAt: null,
+    updatedBy: 'system',
+  };
+}
+
+function normalizeMissionControl(raw = {}) {
+  const base = defaultMissionControl();
+  return {
+    version: Number(raw.version || base.version) || 1,
+    globalGoal: normalizeTextField(raw.globalGoal || base.globalGoal),
+    defaultWarnings: normalizeStringList(raw.defaultWarnings, base.defaultWarnings),
+    updatedAt: raw.updatedAt || base.updatedAt,
+    updatedBy: normalizeUserLabel(raw.updatedBy || base.updatedBy, 'system'),
+  };
+}
+
+function readMissionControl() {
+  try {
+    if (!fs.existsSync(MISSION_CONTROL_FILE)) return defaultMissionControl();
+    return normalizeMissionControl(JSON.parse(fs.readFileSync(MISSION_CONTROL_FILE, 'utf8')));
+  } catch (error) {
+    console.warn('[mission-control] failed to read, using defaults:', error.message);
+    return defaultMissionControl();
+  }
+}
+
+function writeMissionControl(patch = {}) {
+  const current = readMissionControl();
+  const next = normalizeMissionControl({
+    ...current,
+    ...patch,
+    version: Math.max(1, Number(current.version || 1) + 1),
+    updatedAt: new Date().toISOString(),
+  });
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(MISSION_CONTROL_FILE, JSON.stringify(next, null, 2));
+  return next;
+}
+
+function normalizeMissionTarget(value, fallback = '') {
+  const base = {
+    summary: '',
+    acquire: '',
+    optimize: '',
+    acceptance: '',
+    nonGoals: '',
+  };
+  if (typeof value === 'string') {
+    base.summary = value;
+  } else if (value && typeof value === 'object') {
+    base.summary = value.summary || value.goal || value.missionGoal || '';
+    base.acquire = value.acquire || value.acquireTargets || value.acquisition || '';
+    base.optimize = value.optimize || value.optimizeTargets || value.optimization || '';
+    base.acceptance = value.acceptance || value.acceptanceCriteria || value.successCriteria || '';
+    base.nonGoals = value.nonGoals || value.avoid || value.outOfScope || '';
+  }
+  base.summary = normalizeTextField(base.summary || fallback, 1600);
+  base.acquire = normalizeTextField(base.acquire, 1200);
+  base.optimize = normalizeTextField(base.optimize, 1200);
+  base.acceptance = normalizeTextField(base.acceptance, 1200);
+  base.nonGoals = normalizeTextField(base.nonGoals, 1200);
+  return base;
+}
+
+function buildRunMissionContext({ topic, taskBrief, globalGoal, missionTarget, coordinationWarnings } = {}) {
+  const control = readMissionControl();
+  const fallback = taskBrief || topic || '';
+  return {
+    globalGoal: normalizeTextField(globalGoal || control.globalGoal),
+    missionTarget: normalizeMissionTarget(missionTarget, fallback),
+    coordinationWarnings: normalizeStringList(coordinationWarnings, control.defaultWarnings),
+    missionControlVersion: control.version || 1,
+  };
+}
+
+function ensureRunMissionContext(run) {
+  if (!run) return null;
+  const ctx = buildRunMissionContext({
+    topic: run.topic,
+    taskBrief: run.taskBrief,
+    globalGoal: run.globalGoal,
+    missionTarget: run.missionTarget,
+    coordinationWarnings: run.coordinationWarnings,
+  });
+  run.globalGoal = ctx.globalGoal;
+  run.missionTarget = ctx.missionTarget;
+  run.coordinationWarnings = ctx.coordinationWarnings;
+  run.missionControlVersion = run.missionControlVersion || ctx.missionControlVersion;
+  return ctx;
+}
+
+function missionTargetSummary(target) {
+  if (!target) return '';
+  if (typeof target === 'string') return truncate(target, 500);
+  return truncate([target.summary, target.acquire, target.optimize, target.acceptance, target.nonGoals].filter(Boolean).join(' | '), 900);
+}
+
+function buildMissionContextBlock(run) {
+  const ctx = ensureRunMissionContext(run || {});
+  const t = ctx.missionTarget || {};
+  const lines = [
+    '## Mission North Star / Shared Goal',
+    '所有 council/build/review agent 都要以呢個共同目標做判斷基準，唔好只係完成自己手上嗰粒 task。',
+    '',
+    '### Default Global Goal',
+    ctx.globalGoal || '(not set)',
+    '',
+    '### This Mission Target',
+    `Mission goal: ${t.summary || '(not set)'}`,
+    t.acquire ? `Acquire / obtain: ${t.acquire}` : '',
+    t.optimize ? `Optimize / improve: ${t.optimize}` : '',
+    t.acceptance ? `Acceptance criteria: ${t.acceptance}` : '',
+    t.nonGoals ? `Non-goals / avoid: ${t.nonGoals}` : '',
+    '',
+    '### Coordination Warnings',
+    ...(ctx.coordinationWarnings.length ? ctx.coordinationWarnings.map((w) => `- ${w}`) : ['- (none)']),
+    '',
+    'Agent handoff rule: 回報時要寫明你依賴咗邊個 context、你留低咩 assumption / risk、下一個 agent 要留意咩。',
+  ].filter((line) => line !== '');
+  return truncate(lines.join('\n'), MISSION_TARGET_MAX_CHARS);
+}
+
 function getCurrentRun() {
   const run = store.runs.find((item) => item.id === store.currentRunId) || null;
   if (run) normalizeRun(run);
@@ -833,6 +991,7 @@ function normalizeRun(run) {
   run.ownerUser = normalizeUserLabel(run.ownerUser || run.tgUser || (run.tgChatId ? `tg:${run.tgChatId}` : ''), 'owner');
   run.notifyUser = normalizeUserLabel(run.notifyUser || run.ownerUser, run.ownerUser || 'owner');
   run.createdFrom = normalizeUserLabel(run.createdFrom || run.source || 'dashboard', 'dashboard');
+  ensureRunMissionContext(run);
   run.completionVerdict = run.completionVerdict || null;
   run.reviewVerdict = run.reviewVerdict || null;
   run.verifyVerdict = run.verifyVerdict || null;
@@ -1047,7 +1206,7 @@ function normalizeUserLabel(value, fallback = '') {
   return raw.replace(/^@/, '').slice(0, 80);
 }
 
-function createRun({ topic, personas, chatContext, sessionId, projectPath, source, template, background, taskBrief, seed, tgChatId, tgUser, ownerUser, notifyUser, createdFrom } = {}) {
+function createRun({ topic, personas, chatContext, sessionId, projectPath, source, template, background, taskBrief, seed, tgChatId, tgUser, ownerUser, notifyUser, createdFrom, globalGoal, missionTarget, coordinationWarnings } = {}) {
   if (!tgChatId && tgUser) tgChatId = resolveTgChat(tgUser); // console 開:username → chatId
   const now = new Date().toISOString();
   const agents = Array.isArray(personas) && personas.length
@@ -1055,6 +1214,7 @@ function createRun({ topic, personas, chatContext, sessionId, projectPath, sourc
     : (seed === false ? [] : seedAgents(template || 'cloudcli', `${topic || ''}\n${chatContext || ''}`));
   const owner = normalizeUserLabel(ownerUser || tgUser || (tgChatId ? `tg:${tgChatId}` : ''), 'owner');
   const notify = normalizeUserLabel(notifyUser || tgUser || owner, owner);
+  const missionCtx = buildRunMissionContext({ topic, taskBrief, globalGoal, missionTarget, coordinationWarnings });
 
   const run = {
     id: id('run'),
@@ -1077,6 +1237,10 @@ function createRun({ topic, personas, chatContext, sessionId, projectPath, sourc
     chatProjectPath: null,
     chatBusy: false,
     missionBrief: null,
+    globalGoal: missionCtx.globalGoal,
+    missionTarget: missionCtx.missionTarget,
+    coordinationWarnings: missionCtx.coordinationWarnings,
+    missionControlVersion: missionCtx.missionControlVersion,
     startedAt: now,
     updatedAt: now,
     completedAt: null,
@@ -1209,6 +1373,10 @@ function freshIdleState() {
     chatProjectPath: null,
     chatBusy: false,
     missionBrief: null,
+    globalGoal: readMissionControl().globalGoal,
+    missionTarget: normalizeMissionTarget('', ''),
+    coordinationWarnings: readMissionControl().defaultWarnings,
+    missionControlVersion: readMissionControl().version,
     proposals: {},
     debates: [],
     synthesis: null,
@@ -1298,10 +1466,13 @@ function buildMemoryPack(run) {
   const ownerLine = `Owner: ${(run && run.ownerUser) || 'owner'} · Notify: ${(run && run.notifyUser) || (run && run.ownerUser) || 'owner'}`;
   const taskLine = `Task: ${truncate((run && (run.taskBrief || run.topic)) || '', 1200)}`;
   const contextLine = latestContext ? `Latest chat context (${latestContext.context.length} chars):\n${truncate(latestContext.context, 1800)}` : 'Latest chat context: none';
+  const missionBlock = buildMissionContextBlock(run);
   const body = truncate([
     '## Hugo Intent Pack / Project Memory',
     ownerLine,
     taskLine,
+    '',
+    missionBlock,
     '',
     '### Non-negotiable Operating Rules',
     '- Follow project AGENTS.md / memory files when present.',
@@ -2240,6 +2411,12 @@ function buildExecutionPrompt(run, preset, agent, options = {}) {
   agent.skillKeys = skillKeys;
   agent.contextSources = {
     memoryPack: memoryPack.status,
+    mission: {
+      globalGoalChars: (run.globalGoal || '').length,
+      missionTarget: missionTargetSummary(run.missionTarget),
+      warningsCount: (run.coordinationWarnings || []).length,
+      missionControlVersion: run.missionControlVersion || 0,
+    },
     chatContextCount: run.contextHistory.length,
     artifactsPassed: run.artifacts.slice(0, 5).map((artifact) => ({ title: artifact.title, type: artifact.type })),
     planVersion: plan.v || 0,
@@ -2875,6 +3052,10 @@ app.get('/api/runs', (req, res) => {
 	    completionVerdict: run.completionVerdict,
 	    reviewVerdict: run.reviewVerdict,
 	    verifyVerdict: run.verifyVerdict,
+	    globalGoal: run.globalGoal,
+	    missionTarget: run.missionTarget,
+	    coordinationWarnings: run.coordinationWarnings,
+	    missionControlVersion: run.missionControlVersion,
 	    memoryPackStatus: run.memoryPackStatus,
 	    startedAt: run.startedAt,
     updatedAt: run.updatedAt,
@@ -2900,6 +3081,25 @@ app.get('/api/runs', (req, res) => {
 
 app.get('/api/models', (req, res) => {
   res.json({ defaultCli: DEFAULT_AGENT_CLI, models: MODEL_CATALOG });
+});
+
+app.get('/api/mission-control', (req, res) => {
+  res.json({ ok: true, missionControl: readMissionControl() });
+});
+
+app.patch('/api/mission-control', (req, res) => {
+  try {
+    const body = req.body || {};
+    const patch = { updatedBy: body.updatedBy || body.ownerUser || body.user || 'dashboard' };
+    if (body.globalGoal !== undefined) patch.globalGoal = body.globalGoal;
+    if (body.defaultWarnings !== undefined || body.coordinationWarnings !== undefined) {
+      patch.defaultWarnings = body.defaultWarnings !== undefined ? body.defaultWarnings : body.coordinationWarnings;
+    }
+    const next = writeMissionControl(patch);
+    res.json({ ok: true, missionControl: next });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 // Opus 完善 prompt → 結構化 brief（Telegram bot 過目 gate 用；同步 spawn，等完返 refined）。
@@ -2954,7 +3154,8 @@ function buildOverseerDigest(light = false) {
     const gate = p.councilPaused ? 'GATE=等御准' : (p.councilReviewPaused ? 'GATE=等開拗' : '');
     const arts = light ? '' : (r.artifacts || []).slice(-2).map((a) => a.title || a.type).filter(Boolean).join('; ');
     const mode = p.mode || (r.metrics && r.metrics.deliveryMode) || '-';
-    return `- [${r.id}] "${truncate(r.topic || '', 80)}" status=${r.status} stage=${r.stage || '-'} mode=${mode} ${gate}${p.councilPlanVersion ? ' planv' + p.councilPlanVersion : ''}${arts ? ' | 近產出: ' + arts : ''}`;
+    const target = missionTargetSummary(r.missionTarget);
+    return `- [${r.id}] "${truncate(r.topic || '', 80)}" status=${r.status} stage=${r.stage || '-'} mode=${mode} ${gate}${p.councilPlanVersion ? ' planv' + p.councilPlanVersion : ''}${target ? ' | target: ' + truncate(target, 120) : ''}${arts ? ' | 近產出: ' + arts : ''}`;
   }).join('\n');
   const projects = (knownProjects() || []).map((p) => (typeof p === 'string' ? p : (p.path || p.name || ''))).filter(Boolean).join(', ');
   return { runs, projects, currentRunId: cur && cur.id ? cur.id : null };
@@ -3049,6 +3250,7 @@ function buildNextStepsContext(run) {
   const p = run.pipeline || {};
   const mode = p.mode || (run.metrics && run.metrics.deliveryMode) || 'code';
   const parts = [];
+  parts.push(buildMissionContextBlock(run));
   parts.push(`任務: ${truncate(run.taskBrief || run.background || run.topic || '', 700)}`);
   parts.push(`Project: ${run.projectPath || '-'} · 模式: ${mode} · 狀態: ${run.status || '-'} · Owner: ${run.ownerUser || '-'} · Notify: ${run.notifyUser || '-'}`);
   if (run.queueScope || run.queuedReason) parts.push(`Queue: ${run.queueScope || '-'} · ${run.queuedReason || ''} · behind=${run.queuedBehindRunId || '-'}`);
@@ -3203,6 +3405,9 @@ app.patch('/api/runs/:id/settings', (req, res) => {
       run.backgroundSource = run.background ? 'manual' : '';
     }
     if (body.taskBrief !== undefined) run.taskBrief = truncate(body.taskBrief, MAX_CONTEXT_CHARS);
+    if (body.globalGoal !== undefined) run.globalGoal = normalizeTextField(body.globalGoal);
+    if (body.missionTarget !== undefined) run.missionTarget = normalizeMissionTarget(body.missionTarget, run.taskBrief || run.topic || '');
+    if (body.coordinationWarnings !== undefined) run.coordinationWarnings = normalizeStringList(body.coordinationWarnings, []);
     if (body.autoBackground && !run.background) {
       run.background = buildAutoBackground(run);
       run.backgroundSource = 'auto';
@@ -3320,6 +3525,9 @@ app.post('/api/runs/:id/execution/start', (req, res) => {
       run.backgroundSource = run.background ? 'manual' : '';
     }
     if (body.taskBrief !== undefined) run.taskBrief = truncate(body.taskBrief, MAX_CONTEXT_CHARS);
+    if (body.globalGoal !== undefined) run.globalGoal = normalizeTextField(body.globalGoal);
+    if (body.missionTarget !== undefined) run.missionTarget = normalizeMissionTarget(body.missionTarget, run.taskBrief || run.topic || '');
+    if (body.coordinationWarnings !== undefined) run.coordinationWarnings = normalizeStringList(body.coordinationWarnings, []);
     if (req.body && req.body.dryRun) {
       return res.json({
         ok: true,
@@ -3368,6 +3576,9 @@ app.post('/api/plans/run', (req, res) => {
 	      ownerUser: body.ownerUser,
 	      notifyUser: body.notifyUser,
 	      createdFrom: body.createdFrom || 'dashboard',
+	      globalGoal: body.globalGoal,
+	      missionTarget: body.missionTarget,
+	      coordinationWarnings: body.coordinationWarnings,
 	      seed: false, // drop-zone plans start clean; agents come from the wave/pipeline we spawn
 	    });
 	    const deliveryMode = body.deliveryMode || body.mode || 'code';
