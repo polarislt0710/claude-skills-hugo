@@ -46,6 +46,7 @@ const HELP = [
   '`/projects` — 列出可用 project',
   '`/project <編號或 run id 尾段>` — 設定 Telegram 新 mission / council 用邊個 project',
   '`/intentpack [auto|general|mvp|full]` — 設定新 mission / council 用邊套 Intent Pack',
+  '`/domainmodule [auto|none|assessment]` — 設定改卷 / rubric domain module',
   '',
   '*開工*',
   '`/council <題目>` — Opus 完善 → 過目 → 揀快速 / 平衡 / 深度 9-grid → 開 AI 聯合國',
@@ -84,7 +85,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
   function blankState() {
     return { pendingMission: null, pendingCouncil: null, pendingRefine: null, awaitingRefineNote: false,
       pendingPush: null, awaitingPushBranch: false,
-      pendingOverseerRevise: null, selectedProjectPath: null, selectedIntentPackKey: null,
+      pendingOverseerRevise: null, selectedProjectPath: null, selectedIntentPackKey: null, selectedDomainModuleKeys: null,
       overseerHistory: [], overseerModel: 'opus', overseerMode: 'auto' };
   }
   function stateFor(key) { if (!states.has(key)) states.set(key, blankState()); return states.get(key); }
@@ -92,7 +93,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
   // 當前 dispatch 嘅 working set（updates 係 sequential 處理,逐個 await,唔會 race）
   let replyChatId = OWNER, currentRole = 'owner';
   let pendingMission, pendingCouncil, pendingRefine, awaitingRefineNote, pendingOverseerRevise, overseerHistory, overseerModel, overseerMode;
-  let pendingPush, awaitingPushBranch, selectedProjectPath, selectedIntentPackKey;
+  let pendingPush, awaitingPushBranch, selectedProjectPath, selectedIntentPackKey, selectedDomainModuleKeys;
   function loadState(key) {
     const s = stateFor(key);
     pendingMission = s.pendingMission; pendingCouncil = s.pendingCouncil; pendingRefine = s.pendingRefine;
@@ -100,6 +101,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     pendingPush = s.pendingPush; awaitingPushBranch = s.awaitingPushBranch;
     selectedProjectPath = s.selectedProjectPath || null;
     selectedIntentPackKey = s.selectedIntentPackKey || null;
+    selectedDomainModuleKeys = Array.isArray(s.selectedDomainModuleKeys) ? s.selectedDomainModuleKeys : null;
     overseerHistory = s.overseerHistory; overseerModel = s.overseerModel; overseerMode = s.overseerMode;
     if (overseerModel === 'claude-fable-5') overseerModel = 'opus';
   }
@@ -110,6 +112,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     s.pendingPush = pendingPush; s.awaitingPushBranch = awaitingPushBranch;
     s.selectedProjectPath = selectedProjectPath || null;
     s.selectedIntentPackKey = selectedIntentPackKey || null;
+    s.selectedDomainModuleKeys = Array.isArray(selectedDomainModuleKeys) ? selectedDomainModuleKeys : null;
     if (overseerModel === 'claude-fable-5') overseerModel = 'opus';
     s.overseerHistory = overseerHistory; s.overseerModel = overseerModel; s.overseerMode = overseerMode;
     persistMem();
@@ -118,7 +121,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     try {
       const fs = require('fs');
       const out = {};
-      for (const [k, s] of states) out[k] = { overseerHistory: s.overseerHistory, overseerModel: s.overseerModel === 'claude-fable-5' ? 'opus' : s.overseerModel, overseerMode: s.overseerMode, selectedProjectPath: s.selectedProjectPath || null, selectedIntentPackKey: s.selectedIntentPackKey || null };
+      for (const [k, s] of states) out[k] = { overseerHistory: s.overseerHistory, overseerModel: s.overseerModel === 'claude-fable-5' ? 'opus' : s.overseerModel, overseerMode: s.overseerMode, selectedProjectPath: s.selectedProjectPath || null, selectedIntentPackKey: s.selectedIntentPackKey || null, selectedDomainModuleKeys: Array.isArray(s.selectedDomainModuleKeys) ? s.selectedDomainModuleKeys : null };
       fs.writeFileSync(MEM_FILE, JSON.stringify(out));
     } catch (e) { log('persistMem: ' + e.message); }
   }
@@ -132,6 +135,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
         s.overseerMode = v.overseerMode || 'auto';
         s.selectedProjectPath = v.selectedProjectPath || null;
         s.selectedIntentPackKey = v.selectedIntentPackKey || null;
+        s.selectedDomainModuleKeys = Array.isArray(v.selectedDomainModuleKeys) ? v.selectedDomainModuleKeys : null;
       }
     } catch (_) { /* first run / no file */ }
   }
@@ -252,7 +256,9 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     const r = await api('GET', `/api/intent-packs?projectPath=${encodeURIComponent(p || '')}`);
     return {
       defaultIntentPackKey: (r.json && r.json.defaultIntentPackKey) || 'general',
-      packs: (r.json && r.json.packs) || [],
+      defaultDomainModuleKeys: (r.json && r.json.defaultDomainModuleKeys) || [],
+      packs: (r.json && (r.json.productScopes || r.json.packs)) || [],
+      domainModules: (r.json && r.json.domainModules) || [],
       projectPath: (r.json && r.json.projectPath) || p || '',
     };
   }
@@ -260,6 +266,19 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
   function intentPackLabel(packs, key) {
     const p = (packs || []).find((x) => x.key === key);
     return p ? (p.shortLabel || p.label || key) : key;
+  }
+
+  function domainModuleLabel(modules, key) {
+    const m = (modules || []).find((x) => x.key === key);
+    return m ? (m.shortLabel || m.label || key) : key;
+  }
+
+  function normalizeDomainModuleChoice(value) {
+    const k = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+    if (!k || k === 'auto' || k === 'default') return null;
+    if (k === 'none' || k === 'off') return [];
+    if (['assessment', 'assessment_suite', 'assessment_intelligence', 'grading', 'marking', 'rubric'].includes(k)) return ['assessment_intelligence'];
+    return undefined;
   }
 
   async function intentPackForNewRun(projectPath) {
@@ -279,6 +298,27 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       packs: payload.packs,
       defaultIntentPackKey: payload.defaultIntentPackKey,
     };
+  }
+
+  async function domainModuleLine(projectPath) {
+    const payload = await intentPacksPayload(projectPath);
+    const keys = Array.isArray(selectedDomainModuleKeys) ? selectedDomainModuleKeys : (payload.defaultDomainModuleKeys || []);
+    return {
+      keys,
+      labels: keys.map((key) => domainModuleLabel(payload.domainModules || [], key)),
+      mode: Array.isArray(selectedDomainModuleKeys) ? 'manual' : 'auto',
+      modules: payload.domainModules || [],
+    };
+  }
+
+  function domainModuleKeyboard(modules) {
+    const keys = Array.isArray(selectedDomainModuleKeys) ? selectedDomainModuleKeys : null;
+    const rows = [
+      [{ text: keys === null ? '✅ Auto' : 'Auto', callback_data: 'dm:auto' }],
+      [{ text: Array.isArray(keys) && keys.length === 0 ? '✅ None' : 'None', callback_data: 'dm:none' }],
+    ];
+    (modules || []).forEach((m) => rows.push([{ text: `${keys && keys.includes(m.key) ? '✅ ' : ''}${m.shortLabel || m.label}`, callback_data: `dm:${m.key}` }]));
+    return { inline_keyboard: rows };
   }
 
   function intentPackKeyboard(packs, selectedKey) {
@@ -370,20 +410,23 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     pendingCouncil = { taskBrief };
     const proj = await projectForNewRun();
     const pack = await intentPackLine(proj);
-    await say(`揀 AI 聯合國模式：\nProject：${tgline(proj || 'default')}\nIntent Pack：${tgline(pack.label)}（${pack.mode}）`, { replyMarkup: councilModeKeyboard() });
+    const modules = await domainModuleLine(proj);
+    await say(`揀 AI 聯合國模式：\nProject：${tgline(proj || 'default')}\nProduct Scope：${tgline(pack.label)}（${pack.mode}）\nDomain Modules：${modules.labels.length ? modules.labels.map(tgline).join(', ') : (modules.mode === 'auto' ? 'Auto' : 'None')}`, { replyMarkup: councilModeKeyboard() });
   }
 
   async function startCouncil(taskBrief, councilMode = 'balanced') {
     const projectPath = await projectForNewRun();
     const intentPackKey = await intentPackForNewRun(projectPath);
     const pack = await intentPackLine(projectPath, intentPackKey);
-    const cr = await api('POST', '/api/runs', { topic: taskBrief.slice(0, 70), taskBrief, tgChatId: replyChatId, projectPath, intentPackKey, source: 'telegram', createdFrom: 'telegram' });
+    const domainModuleKeys = Array.isArray(selectedDomainModuleKeys) ? selectedDomainModuleKeys : undefined;
+    const cr = await api('POST', '/api/runs', { topic: taskBrief.slice(0, 70), taskBrief, tgChatId: replyChatId, projectPath, intentPackKey, domainModuleKeys, source: 'telegram', createdFrom: 'telegram' });
     const run = cr.json && cr.json.run;
     if (!run) { await say(`⚠️ 開 run 失敗：${(cr.json && cr.json.error) || cr.status}`); return; }
     const mode = (COUNCIL_MODES[councilMode] && COUNCIL_MODES[councilMode].mode) || councilMode || 'balanced';
     const label = Object.values(COUNCIL_MODES).find((m) => m.mode === mode || m === councilMode);
     const sr = await api('POST', `/api/runs/${run.id}/council/start`, { councilMode: mode });
-    if (sr.json && sr.json.ok) await say(`🗳 AI 聯合國開波：*${tgline(taskBrief)}*\n模式：${(label && label.label) || mode}｜Pack：${tgline(pack.label)}｜Project：${tgline(projectPath || run.projectPath || 'default')}\nRun：\`${run.id.slice(-8)}\`\n獨立 review 完先 ping 你開拗；收斂到御准閘會再 ping。`);
+    const modules = (run.domainModuleSnapshots || []).map((m) => m.shortLabel || m.label || m.key).join(', ');
+    if (sr.json && sr.json.ok) await say(`🗳 AI 聯合國開波：*${tgline(taskBrief)}*\n模式：${(label && label.label) || mode}｜Scope：${tgline(pack.label)}${modules ? `｜Modules：${tgline(modules)}` : ''}｜Project：${tgline(projectPath || run.projectPath || 'default')}\nRun：\`${run.id.slice(-8)}\`\n獨立 review 完先 ping 你開拗；收斂到御准閘會再 ping。`);
     else await say(`⚠️ 開聯合國失敗：${(sr.json && sr.json.error) || sr.status}`);
   }
 
@@ -391,7 +434,8 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     pendingMission = { taskBrief, topic };
     const projectPath = await projectForNewRun();
     const pack = await intentPackLine(projectPath);
-    await say(`揀「寫 code」用邊個 model（研究／覆核固定 Opus）：\nProject：${tgline(projectPath || 'default')}\nIntent Pack：${tgline(pack.label)}（${pack.mode}）`, { replyMarkup: modelKeyboard('mm') });
+    const modules = await domainModuleLine(projectPath);
+    await say(`揀「寫 code」用邊個 model（研究／覆核固定 Opus）：\nProject：${tgline(projectPath || 'default')}\nProduct Scope：${tgline(pack.label)}（${pack.mode}）\nDomain Modules：${modules.labels.length ? modules.labels.map(tgline).join(', ') : (modules.mode === 'auto' ? 'Auto' : 'None')}`, { replyMarkup: modelKeyboard('mm') });
   }
 
   async function doApprove(tail) {
@@ -441,11 +485,13 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     const projectPath = await projectForNewRun();
     const intentPackKey = await intentPackForNewRun(projectPath);
     const pack = await intentPackLine(projectPath, intentPackKey);
+    const domainModuleKeys = Array.isArray(selectedDomainModuleKeys) ? selectedDomainModuleKeys : undefined;
     const r = await api('POST', '/api/plans/run', {
       taskBrief, topic, deliveryMode: 'code', staged: true,
-      cli, model, perAgentModels: missionPerAgent(cli, model), tgChatId: replyChatId, projectPath, intentPackKey, source: 'telegram', createdFrom: 'telegram',
+      cli, model, perAgentModels: missionPerAgent(cli, model), tgChatId: replyChatId, projectPath, intentPackKey, domainModuleKeys, source: 'telegram', createdFrom: 'telegram',
     });
-    if (r.json && r.json.ok) await say(`⚙️ Mission 開波（寫 code=${model}）：*${tgline(topic)}*\nPack：${tgline(pack.label)}｜Project：${tgline(projectPath || 'default')}${r.json.queued ? `\n排隊中 #${r.json.position}` : '\nresearch → build → review → fix 跑緊'}`);
+    const modules = r.json && r.json.run ? ((r.json.run.domainModuleSnapshots || []).map((m) => m.shortLabel || m.label || m.key).join(', ')) : '';
+    if (r.json && r.json.ok) await say(`⚙️ Mission 開波（寫 code=${model}）：*${tgline(topic)}*\nScope：${tgline(pack.label)}${modules ? `｜Modules：${tgline(modules)}` : ''}｜Project：${tgline(projectPath || 'default')}${r.json.queued ? `\n排隊中 #${r.json.position}` : '\nresearch → build → review → fix 跑緊'}`);
     else await say(`⚠️ Mission 失敗：${(r.json && r.json.error) || r.status}`);
   }
 
@@ -569,6 +615,23 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       return;
     }
 
+    if (c === '/domainmodule') {
+      if (!ownerOnly()) { await denyGuest(); return; }
+      const projectPath = await projectForNewRun();
+      const payload = await intentPacksPayload(projectPath);
+      if (arg) {
+        const next = normalizeDomainModuleChoice(arg);
+        if (next === undefined) { await say('用法：`/domainmodule auto|none|assessment`'); return; }
+        selectedDomainModuleKeys = next;
+      }
+      const line = await domainModuleLine(projectPath);
+      await say(
+        `🧩 Domain Modules：*${line.labels.length ? line.labels.map(tgline).join(', ') : (line.mode === 'auto' ? 'Auto' : 'None')}*\n模式：${line.mode}\nProject：${tgline(projectPath || 'default')}`,
+        { replyMarkup: domainModuleKeyboard(payload.domainModules || []) }
+      );
+      return;
+    }
+
     if (c === '/status') {
       const run = await currentRun();
       if (!run) { await say('🟦 而家冇 active run。'); return; }
@@ -576,7 +639,8 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       const gate = p.councilPaused ? '⏸ 等御准' : (p.councilReviewPaused ? '🔎 等開拗' : '');
       const mode = p.mode || (run.metrics && run.metrics.deliveryMode) || '-';
       const pack = (run.intentPackSnapshot && (run.intentPackSnapshot.shortLabel || run.intentPackSnapshot.label)) || run.intentPackLabel || run.intentPackKey || 'General';
-      await say(`📊 *${tgline(run.topic)}*\n狀態：${run.status}｜stage：${run.stage || '-'} ${gate}\nmode：${p.councilModeLabel || mode}${p.councilPlanVersion ? `｜plan v${p.councilPlanVersion}` : ''}\nPack：${tgline(pack)}\nProject：${tgline(run.projectPath || '-')}\nHandoffs：${(run.handoffs || []).length || 0}｜Memory：${run.memoryPackStatus ? `in ${(run.memoryPackStatus.included || []).length} / missing ${(run.memoryPackStatus.missing || []).length}` : '-'}`);
+      const modules = (run.domainModuleSnapshots || []).map((m) => m.shortLabel || m.label || m.key).join(', ') || '-';
+      await say(`📊 *${tgline(run.topic)}*\n狀態：${run.status}｜stage：${run.stage || '-'} ${gate}\nmode：${p.councilModeLabel || mode}${p.councilPlanVersion ? `｜plan v${p.councilPlanVersion}` : ''}\nScope：${tgline(pack)}\nModules：${tgline(modules)}\nProject：${tgline(run.projectPath || '-')}\nHandoffs：${(run.handoffs || []).length || 0}｜Memory：${run.memoryPackStatus ? `in ${(run.memoryPackStatus.included || []).length} / missing ${(run.memoryPackStatus.missing || []).length}` : '-'}`);
       return;
     }
 
@@ -635,7 +699,8 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       const lines = arr.slice(-10).reverse().map((x) => {
         const run = (x.runningAgents ? `▶${x.runningAgents}` : x.status);
         const pack = x.intentPackLabel || x.intentPackKey || 'General';
-        return `• \`${x.id}\`\n  ${tgline(x.topic)} — ${run}/${x.stage || '-'}｜${tgline(pack)}`;
+        const modules = (x.domainModuleLabels || []).join(', ');
+        return `• \`${x.id}\`\n  ${tgline(x.topic)} — ${run}/${x.stage || '-'}｜${tgline(pack)}${modules ? '｜' + tgline(modules) : ''}`;
       });
       await say(`🗂 *最近 run*\n${lines.join('\n')}\n\n詳情：\`/show <id 或尾段>\``);
       return;
@@ -656,9 +721,10 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       const arts = (run.artifacts || []).slice(-4).map((a) => `· ${tgline(a.title || a.type)}`).join('\n') || '（暫無）';
       const mem = run.memoryPackStatus ? `included=${(run.memoryPackStatus.included || []).join(', ') || '-'}｜missing=${(run.memoryPackStatus.missing || []).join(', ') || '-'}` : '-';
       const pack = (run.intentPackSnapshot && (run.intentPackSnapshot.shortLabel || run.intentPackSnapshot.label)) || run.intentPackLabel || run.intentPackKey || 'General';
+      const modules = (run.domainModuleSnapshots || []).map((m) => m.shortLabel || m.label || m.key).join(', ') || '-';
       const h = (run.handoffs || [])[0];
       const handoff = h ? `${tgline(h.agentName)}：${tgline(h.summary || '')}${(h.warnings || []).length ? `\n警告：${tgline((h.warnings || []).slice(0, 2).join(' / '))}` : ''}` : '（暫無）';
-      await say(`📄 *${tgline(run.topic)}*\n狀態：${run.status}｜stage：${run.stage || '-'} ${gate}\nmode：${p.councilModeLabel || p.mode || (run.metrics && run.metrics.deliveryMode) || '-'}${planV}\nPack：${tgline(pack)}\nProject：${tgline(run.projectPath || '-')}\nMemory：${mem}\n最近 handoff：${handoff}\n最近產出：\n${arts}`);
+      await say(`📄 *${tgline(run.topic)}*\n狀態：${run.status}｜stage：${run.stage || '-'} ${gate}\nmode：${p.councilModeLabel || p.mode || (run.metrics && run.metrics.deliveryMode) || '-'}${planV}\nScope：${tgline(pack)}\nModules：${tgline(modules)}\nProject：${tgline(run.projectPath || '-')}\nMemory：${mem}\n最近 handoff：${handoff}\n最近產出：\n${arts}`);
       return;
     }
 
@@ -772,6 +838,17 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       const payload = await intentPacksPayload(projectPath);
       const cur = selectedIntentPackKey || payload.defaultIntentPackKey || 'general';
       await say(`🎯 Intent Pack 已設定：*${tgline(intentPackLabel(payload.packs, cur))}*（${selectedIntentPackKey ? 'manual' : 'auto'}）`);
+      return;
+    }
+    if (dataStr.startsWith('dm:')) {
+      if (!ownerOnly()) { await denyGuest(); return; }
+      const raw = dataStr.split(':')[1] || 'auto';
+      const next = normalizeDomainModuleChoice(raw);
+      if (next === undefined) { await say('Domain Module 選項已過期，打 `/domainmodule` 再揀一次。'); return; }
+      selectedDomainModuleKeys = next;
+      const projectPath = await projectForNewRun();
+      const line = await domainModuleLine(projectPath);
+      await say(`🧩 Domain Modules 已設定：*${line.labels.length ? line.labels.map(tgline).join(', ') : (line.mode === 'auto' ? 'Auto' : 'None')}*（${line.mode}）`);
       return;
     }
     // 總管動作 confirm-gate（Tier 2 破壞性動作守關）

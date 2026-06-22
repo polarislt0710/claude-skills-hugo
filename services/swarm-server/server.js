@@ -99,6 +99,80 @@ const INTENT_PACKS = {
     ],
   },
 };
+const DOMAIN_MODULES = {
+  assessment_intelligence: {
+    key: 'assessment_intelligence',
+    version: 1,
+    label: 'ORCA Assessment Intelligence Suite',
+    shortLabel: 'Assessment Suite',
+    summary: '改卷系統專用 domain module；把 data capture、AI marking reliability、ability/concept layer、teacher review sync、rubric knowledge admin 連成同一條資料流。',
+    priorities: [
+      '改卷結果必須可追溯：保留原答案、AI 判分、rubric reference、confidence、老師修改同 audit trail。',
+      '批量改卷要有 batch/progress/failure/retry 記錄，唔可以只處理單份 happy path。',
+      '老師人手改分、改錯因、改 concept tag 後，student profile、錯題紀錄、班級/級別 dashboard 必須同步或標記重算。',
+      '能力分析要有層次：subject/topic/concept/skill/misconception，後續 dashboard 同 recommendation 要駁得返。',
+      'PDF、notes、rubric 要有 admin 管理：upload、轉 Markdown、編輯、版本、disable、引用記錄。',
+    ],
+    acceptance: [
+      '任何改卷 flow 改動都要講清 input → AI marking → teacher review → DB update → ability/dashboard sync。',
+      '每個 phase / plan 要列出產生咩 data、讀咩 data、寫邊啲 table/store、影響邊個 dashboard、點 verify。',
+      'AI 準確度、一致性、穩定性要有檢查：rubric reference、confidence、sample review、重跑一致性或人工覆核路徑。',
+      'Knowledge source 被 AI 使用時，要能追返 source/version；老師唔需要 fine-tune 都可以透過 notes/PDF/Markdown 改善判分。',
+    ],
+    nonGoals: [
+      '唔用 dashboard summary 代替 database persistence。',
+      '唔用老師最終分覆蓋 AI 原始判斷；要保留 before/after。',
+      '唔將 PDF/notes 當一次性 prompt，必須當可管理 knowledge source。',
+    ],
+    modules: [
+      {
+        key: 'assessment_data_capture',
+        label: 'Assessment Data Capture',
+        focus: 'Data 點收集、收集到咩、學生能力評估 data 點保存同追溯。',
+        checks: [
+          'Raw answer、AI marking、teacher override、concept tag、ability signal 是否都有保存。',
+          '每個 marking result 是否可由 assessment/question/student/rubric/source 追返。',
+        ],
+      },
+      {
+        key: 'marking_flow_reliability',
+        label: 'Marking Flow Reliability',
+        focus: '上載、AI 改卷、prompt/action、批量改卷、一致性同 failure handling。',
+        checks: [
+          'Batch marking 是否有 batch id、progress、failed item、retry。',
+          'AI output 是否包含 score、reason、rubric reference、confidence。',
+        ],
+      },
+      {
+        key: 'ability_concept_layer',
+        label: 'Ability & Concept Layer',
+        focus: '能力 layer、concept layer、misconception、後續分析可唔可以準確 connect。',
+        checks: [
+          'Question result 是否 map 到 subject/topic/concept/skill/misconception。',
+          '學生能力變化是否可以跨時間、跨試卷、跨能力點追蹤。',
+        ],
+      },
+      {
+        key: 'teacher_review_sync',
+        label: 'Teacher Review Sync',
+        focus: '老師審批、人手改分、改錯因後，DB、student record、dashboard 重新同步。',
+        checks: [
+          'Teacher override 是否寫入 persistent store 並保留 audit trail。',
+          'Dashboard summary、學生能力、錯題紀錄、班級/級別統計是否同步或標記重算。',
+        ],
+      },
+      {
+        key: 'rubric_knowledge_admin',
+        label: 'Rubric Knowledge Admin',
+        focus: 'PDF、notes、rubric、Markdown knowledge base 嘅 upload、edit、version、disable、引用。',
+        checks: [
+          'Knowledge source 是否有 owner、subject/topic、version、active/disabled 狀態。',
+          'AI marking 是否記錄引用咗邊份 PDF/Markdown/rubric version。',
+        ],
+      },
+    ],
+  },
+};
 const DEFAULT_AGENT_CLI = process.env.SWARM_AGENT_CLI || 'claude';
 const SWARM_WORKSPACE = process.env.SWARM_WORKSPACE || path.join(require("os").homedir(), "swarm-workspace");
 const MIROFISH_BACKEND_URL = process.env.MIROFISH_BACKEND_URL || 'http://127.0.0.1:5001';
@@ -1091,11 +1165,100 @@ function intentPackPrompt(pack) {
   ].join('\n');
 }
 
+function cloneDomainModule(module) {
+  const m = module || DOMAIN_MODULES.assessment_intelligence;
+  return {
+    key: m.key,
+    version: m.version,
+    label: m.label,
+    shortLabel: m.shortLabel,
+    summary: m.summary,
+    priorities: [...(m.priorities || [])],
+    acceptance: [...(m.acceptance || [])],
+    nonGoals: [...(m.nonGoals || [])],
+    modules: (m.modules || []).map((item) => ({
+      key: item.key,
+      label: item.label,
+      focus: item.focus,
+      checks: [...(item.checks || [])],
+    })),
+  };
+}
+
+function normalizeDomainModuleKey(value) {
+  const key = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
+  if (!key || key === 'none' || key === 'off') return '';
+  if (DOMAIN_MODULES[key]) return key;
+  if (['assessment', 'assessment_suite', 'assessment_intelligence_suite', 'grading', 'marking', 'rubric', '改卷'].includes(key)) return 'assessment_intelligence';
+  return '';
+}
+
+function normalizeDomainModuleKeys(value, fallback = []) {
+  const raw = Array.isArray(value) ? value
+    : (typeof value === 'string' ? value.split(/[\n,|]+/) : fallback);
+  const out = [];
+  (raw || []).forEach((item) => {
+    const key = normalizeDomainModuleKey(item);
+    if (key && !out.includes(key)) out.push(key);
+  });
+  return out;
+}
+
+function projectDefaultDomainModuleKeys(projectPath) {
+  return [];
+}
+
+function taskAutoDomainModuleKeys({ topic, taskBrief, text } = {}) {
+  const haystack = String([topic, taskBrief, text].filter(Boolean).join('\n')).toLowerCase();
+  if (/(grading|marking|rubric|assessment|exam|paper|answer|score|student ability|misconception|改卷|批改|評分|試卷|答案|錯題|能力|老師審批|老師覆核|班級|全級)/i.test(haystack)) {
+    return ['assessment_intelligence'];
+  }
+  return [];
+}
+
+function resolveDomainModules({ keys, projectDefaultKeys, topic, taskBrief, source } = {}) {
+  const hasExplicit = keys !== undefined && keys !== null;
+  const explicit = normalizeDomainModuleKeys(keys, []);
+  const projectDefaults = normalizeDomainModuleKeys(projectDefaultKeys, []);
+  const auto = hasExplicit ? [] : taskAutoDomainModuleKeys({ topic, taskBrief });
+  const merged = hasExplicit ? explicit : normalizeDomainModuleKeys([...projectDefaults, ...auto], []);
+  const snapshots = merged.map((key) => cloneDomainModule(DOMAIN_MODULES[key])).filter(Boolean);
+  return {
+    keys: merged,
+    snapshots,
+    source: source || (hasExplicit ? 'user' : (auto.length ? 'auto' : 'project-default')),
+  };
+}
+
+function domainModulePrompt(module) {
+  const m = module && module.key ? module : cloneDomainModule(DOMAIN_MODULES.assessment_intelligence);
+  return [
+    `### ${m.label} v${m.version}`,
+    m.summary || '',
+    '',
+    'Priorities:',
+    ...((m.priorities || []).length ? m.priorities.map((x) => `- ${x}`) : ['- (none)']),
+    '',
+    'Acceptance:',
+    ...((m.acceptance || []).length ? m.acceptance.map((x) => `- ${x}`) : ['- (none)']),
+    '',
+    'Internal modules:',
+    ...((m.modules || []).length ? m.modules.flatMap((item) => [
+      `- ${item.label}: ${item.focus || ''}`,
+      ...((item.checks || []).map((check) => `  - Check: ${check}`)),
+    ]) : ['- (none)']),
+    '',
+    'Non-goals:',
+    ...((m.nonGoals || []).length ? m.nonGoals.map((x) => `- ${x}`) : ['- (none)']),
+  ].join('\n');
+}
+
 function defaultMissionControl() {
   return {
     version: 1,
     defaultGlobalGoal: normalizeTextField(process.env.SWARM_GLOBAL_GOAL || DEFAULT_GLOBAL_GOAL),
     defaultIntentPackKey: normalizeIntentPackKey(process.env.SWARM_INTENT_PACK || '', 'general'),
+    defaultDomainModuleKeys: normalizeDomainModuleKeys(process.env.SWARM_DOMAIN_MODULES || '', []),
     projects: {},
     handoffGuidelines: normalizeStringList(process.env.SWARM_COORDINATION_WARNINGS || DEFAULT_COORDINATION_WARNINGS, DEFAULT_COORDINATION_WARNINGS),
     updatedAt: null,
@@ -1115,6 +1278,7 @@ function normalizeMissionControl(raw = {}) {
       label: normalizeTextField(value.label || path.basename(projectPath), 160),
       globalGoal: normalizeTextField(value.globalGoal || value.goal || base.defaultGlobalGoal),
       defaultIntentPackKey: normalizeIntentPackKey(value.defaultIntentPackKey || value.intentPackKey || '', projectDefaultIntentPackKey(projectPath)),
+      defaultDomainModuleKeys: normalizeDomainModuleKeys(value.defaultDomainModuleKeys || value.domainModuleKeys || value.intentModuleKeys || '', projectDefaultDomainModuleKeys(projectPath)),
       updatedAt: value.updatedAt || null,
       updatedBy: normalizeUserLabel(value.updatedBy || 'system', 'system'),
     };
@@ -1123,6 +1287,7 @@ function normalizeMissionControl(raw = {}) {
     version: Number(raw.version || base.version) || 1,
     defaultGlobalGoal: normalizeTextField(raw.defaultGlobalGoal || raw.globalGoal || base.defaultGlobalGoal),
     defaultIntentPackKey: normalizeIntentPackKey(raw.defaultIntentPackKey || raw.intentPackKey || base.defaultIntentPackKey, 'general'),
+    defaultDomainModuleKeys: normalizeDomainModuleKeys(raw.defaultDomainModuleKeys || raw.domainModuleKeys || raw.intentModuleKeys || base.defaultDomainModuleKeys, []),
     projects,
     handoffGuidelines: normalizeStringList(raw.handoffGuidelines || raw.defaultWarnings, base.handoffGuidelines),
     updatedAt: raw.updatedAt || base.updatedAt,
@@ -1143,6 +1308,10 @@ function projectMissionControl(projectPath) {
   const inferredIntentPackKey = projectDefaultIntentPackKey(key);
   const globalIntentPackKey = control.defaultIntentPackKey || 'general';
   const defaultIntentPackKey = (entry && entry.defaultIntentPackKey) || (globalIntentPackKey !== 'general' ? globalIntentPackKey : inferredIntentPackKey);
+  const defaultDomainModuleKeys = normalizeDomainModuleKeys(
+    (entry && entry.defaultDomainModuleKeys) || control.defaultDomainModuleKeys || projectDefaultDomainModuleKeys(key),
+    projectDefaultDomainModuleKeys(key)
+  );
   return {
     version: control.version || 1,
     projectPath: key,
@@ -1150,6 +1319,7 @@ function projectMissionControl(projectPath) {
     globalGoal,
     defaultGlobalGoal: control.defaultGlobalGoal,
     defaultIntentPackKey: normalizeIntentPackKey(defaultIntentPackKey, projectDefaultIntentPackKey(key)),
+    defaultDomainModuleKeys,
     handoffGuidelines: control.handoffGuidelines || [],
     // Back-compat for old clients; no longer user-editable warnings.
     defaultWarnings: control.handoffGuidelines || [],
@@ -1159,6 +1329,7 @@ function projectMissionControl(projectPath) {
       projectPath: p.projectPath,
       label: p.label,
       defaultIntentPackKey: p.defaultIntentPackKey,
+      defaultDomainModuleKeys: p.defaultDomainModuleKeys || [],
       updatedAt: p.updatedAt,
       updatedBy: p.updatedBy,
     })),
@@ -1189,12 +1360,14 @@ function writeMissionControl(patch = {}) {
       label: normalizeTextField(patch.label || (nextRaw.projects[key] && nextRaw.projects[key].label) || path.basename(key), 160),
       globalGoal: normalizeTextField(patch.globalGoal || (nextRaw.projects[key] && nextRaw.projects[key].globalGoal) || current.defaultGlobalGoal),
       defaultIntentPackKey: normalizeIntentPackKey(patch.defaultIntentPackKey || patch.intentPackKey || (nextRaw.projects[key] && nextRaw.projects[key].defaultIntentPackKey) || projectDefaultIntentPackKey(key), projectDefaultIntentPackKey(key)),
+      defaultDomainModuleKeys: normalizeDomainModuleKeys(patch.defaultDomainModuleKeys !== undefined ? patch.defaultDomainModuleKeys : (patch.domainModuleKeys !== undefined ? patch.domainModuleKeys : ((nextRaw.projects[key] && nextRaw.projects[key].defaultDomainModuleKeys) || projectDefaultDomainModuleKeys(key))), projectDefaultDomainModuleKeys(key)),
       updatedAt,
       updatedBy,
     };
   }
   if (patch.defaultGlobalGoal !== undefined) nextRaw.defaultGlobalGoal = normalizeTextField(patch.defaultGlobalGoal);
   if (patch.defaultIntentPackKey !== undefined) nextRaw.defaultIntentPackKey = normalizeIntentPackKey(patch.defaultIntentPackKey, 'general');
+  if (patch.defaultDomainModuleKeys !== undefined) nextRaw.defaultDomainModuleKeys = normalizeDomainModuleKeys(patch.defaultDomainModuleKeys, []);
   if (patch.handoffGuidelines !== undefined) nextRaw.handoffGuidelines = normalizeStringList(patch.handoffGuidelines, current.handoffGuidelines || []);
   const next = normalizeMissionControl(nextRaw);
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1235,7 +1408,7 @@ function normalizeMissionTarget(value, fallback = '') {
   return base;
 }
 
-function buildRunMissionContext({ topic, taskBrief, projectPath, globalGoal, missionTarget, coordinationWarnings, intentPackKey, intentPackSource } = {}) {
+function buildRunMissionContext({ topic, taskBrief, projectPath, globalGoal, missionTarget, coordinationWarnings, intentPackKey, intentPackSource, domainModuleKeys, domainModuleSource } = {}) {
   const control = projectMissionControl(projectPath || DEFAULT_PROJECT_ROOT);
   const fallback = taskBrief || topic || '';
   const intent = resolveIntentPack({
@@ -1243,6 +1416,13 @@ function buildRunMissionContext({ topic, taskBrief, projectPath, globalGoal, mis
     projectPath: control.projectPath,
     projectDefault: control.defaultIntentPackKey,
     source: intentPackSource,
+  });
+  const modules = resolveDomainModules({
+    keys: domainModuleKeys,
+    projectDefaultKeys: control.defaultDomainModuleKeys,
+    topic,
+    taskBrief,
+    source: domainModuleSource,
   });
   return {
     globalGoal: normalizeTextField(globalGoal || control.globalGoal),
@@ -1255,12 +1435,16 @@ function buildRunMissionContext({ topic, taskBrief, projectPath, globalGoal, mis
     intentPackSnapshot: intent.snapshot,
     intentPackSource: intent.source,
     intentPackFallbackWarning: intent.fallbackWarning,
+    domainModuleKeys: modules.keys,
+    domainModuleSnapshots: modules.snapshots,
+    domainModuleSource: modules.source,
   };
 }
 
 function ensureRunMissionContext(run) {
   if (!run) return null;
   const hadValidIntentPack = !!(run.intentPackKey && INTENT_PACKS[run.intentPackKey]);
+  const hadDomainModules = Array.isArray(run.domainModuleKeys);
   const ctx = buildRunMissionContext({
     topic: run.topic,
     taskBrief: run.taskBrief,
@@ -1270,6 +1454,8 @@ function ensureRunMissionContext(run) {
     coordinationWarnings: run.coordinationWarnings,
     intentPackKey: run.intentPackKey,
     intentPackSource: run.intentPackSource,
+    domainModuleKeys: run.domainModuleKeys,
+    domainModuleSource: run.domainModuleSource,
   });
   run.globalGoal = ctx.globalGoal;
   run.missionTarget = ctx.missionTarget;
@@ -1280,6 +1466,11 @@ function ensureRunMissionContext(run) {
   if (!hadValidIntentPack || !run.intentPackVersion) run.intentPackVersion = ctx.intentPackVersion;
   if (!hadValidIntentPack || !run.intentPackSnapshot || run.intentPackSnapshot.key !== run.intentPackKey) run.intentPackSnapshot = ctx.intentPackSnapshot;
   run.intentPackSource = run.intentPackSource || ctx.intentPackSource;
+  if (!hadDomainModules) run.domainModuleKeys = ctx.domainModuleKeys;
+  if (!Array.isArray(run.domainModuleSnapshots) || run.domainModuleSnapshots.map((m) => m.key).join('|') !== (run.domainModuleKeys || []).join('|')) {
+    run.domainModuleSnapshots = (run.domainModuleKeys || []).map((key) => cloneDomainModule(DOMAIN_MODULES[key])).filter(Boolean);
+  }
+  run.domainModuleSource = run.domainModuleSource || ctx.domainModuleSource;
   return ctx;
 }
 
@@ -1381,6 +1572,7 @@ function buildMissionContextBlock(run) {
   const ctx = ensureRunMissionContext(run || {});
   const t = ctx.missionTarget || {};
   const pack = (run && run.intentPackSnapshot) || ctx.intentPackSnapshot || cloneIntentPack(INTENT_PACKS.general);
+  const modules = (run && run.domainModuleSnapshots) || ctx.domainModuleSnapshots || [];
   const lines = [
     '## Mission North Star / Repo Goal',
     '以下大目標係對應呢個 repo / project，不係全 server 共用。所有 agent 要以佢做判斷基準，唔好只係完成自己手上嗰粒 task。',
@@ -1396,8 +1588,8 @@ function buildMissionContextBlock(run) {
     t.nonGoals ? `Non-goals / avoid: ${t.nonGoals}` : '',
     t.source ? `Target source: ${t.source}${t.draftModel ? ` · ${t.draftModel}` : ''}` : '',
     '',
-    '### Intent Pack',
-    `Pack: ${pack.label || pack.key} v${pack.version || 1} (${(run && run.intentPackSource) || ctx.intentPackSource || 'auto'})`,
+    '### Product Scope Pack',
+    `Scope: ${pack.label || pack.key} v${pack.version || 1} (${(run && run.intentPackSource) || ctx.intentPackSource || 'auto'})`,
     pack.summary || '',
     '',
     'Intent priorities:',
@@ -1408,6 +1600,20 @@ function buildMissionContextBlock(run) {
     '',
     'Intent non-goals:',
     ...((pack.nonGoals || []).length ? pack.nonGoals.map((x) => `- ${x}`) : ['- (none)']),
+    '',
+    '### Domain Modules',
+    ...(modules.length ? modules.flatMap((m) => [
+      `#### ${m.label || m.key} v${m.version || 1}`,
+      m.summary || '',
+      'Module priorities:',
+      ...((m.priorities || []).length ? m.priorities.map((x) => `- ${x}`) : ['- (none)']),
+      'Internal module checks:',
+      ...((m.modules || []).length ? m.modules.flatMap((item) => [
+        `- ${item.label}: ${item.focus || ''}`,
+        ...((item.checks || []).map((check) => `  - ${check}`)),
+      ]) : ['- (none)']),
+      '',
+    ]) : ['- none']),
     '',
     '### Handoff Discipline',
     ...(ctx.coordinationWarnings.length ? ctx.coordinationWarnings.map((w) => `- ${w}`) : ['- (none)']),
@@ -1478,6 +1684,9 @@ function normalizeRun(run) {
   run.intentPackVersion = run.intentPackVersion || ((run.intentPackSnapshot && run.intentPackSnapshot.version) || 1);
   run.intentPackSnapshot = run.intentPackSnapshot || cloneIntentPack(INTENT_PACKS[run.intentPackKey] || INTENT_PACKS.general);
   run.intentPackSource = run.intentPackSource || 'auto';
+  run.domainModuleKeys = normalizeDomainModuleKeys(run.domainModuleKeys || [], []);
+  run.domainModuleSnapshots = Array.isArray(run.domainModuleSnapshots) ? run.domainModuleSnapshots : run.domainModuleKeys.map((key) => cloneDomainModule(DOMAIN_MODULES[key])).filter(Boolean);
+  run.domainModuleSource = run.domainModuleSource || 'auto';
   // 定向幕僚 chat (Phase 1)
   run.chatThread = Array.isArray(run.chatThread) ? run.chatThread : [];
   run.chatModel = run.chatModel || null;
@@ -1694,7 +1903,7 @@ function normalizeUserLabel(value, fallback = '') {
   return raw.replace(/^@/, '').slice(0, 80);
 }
 
-function createRun({ topic, personas, chatContext, sessionId, projectPath, source, template, background, taskBrief, seed, tgChatId, tgUser, ownerUser, notifyUser, createdFrom, globalGoal, missionTarget, coordinationWarnings, intentPackKey } = {}) {
+function createRun({ topic, personas, chatContext, sessionId, projectPath, source, template, background, taskBrief, seed, tgChatId, tgUser, ownerUser, notifyUser, createdFrom, globalGoal, missionTarget, coordinationWarnings, intentPackKey, domainModuleKeys } = {}) {
   if (!tgChatId && tgUser) tgChatId = resolveTgChat(tgUser); // console 開:username → chatId
   const now = new Date().toISOString();
   const agents = Array.isArray(personas) && personas.length
@@ -1712,6 +1921,8 @@ function createRun({ topic, personas, chatContext, sessionId, projectPath, sourc
     coordinationWarnings,
     intentPackKey,
     intentPackSource: intentPackKey ? 'user' : 'project-default',
+    domainModuleKeys,
+    domainModuleSource: domainModuleKeys !== undefined ? 'user' : undefined,
   });
 
   const run = {
@@ -1744,6 +1955,9 @@ function createRun({ topic, personas, chatContext, sessionId, projectPath, sourc
     intentPackVersion: missionCtx.intentPackVersion,
     intentPackSnapshot: missionCtx.intentPackSnapshot,
     intentPackSource: missionCtx.intentPackSource,
+    domainModuleKeys: missionCtx.domainModuleKeys,
+    domainModuleSnapshots: missionCtx.domainModuleSnapshots,
+    domainModuleSource: missionCtx.domainModuleSource,
     startedAt: now,
     updatedAt: now,
     completedAt: null,
@@ -1897,6 +2111,9 @@ function freshIdleState() {
     intentPackVersion: INTENT_PACKS[projectMissionControl(DEFAULT_PROJECT_ROOT).defaultIntentPackKey].version,
     intentPackSnapshot: cloneIntentPack(INTENT_PACKS[projectMissionControl(DEFAULT_PROJECT_ROOT).defaultIntentPackKey]),
     intentPackSource: 'project-default',
+    domainModuleKeys: projectMissionControl(DEFAULT_PROJECT_ROOT).defaultDomainModuleKeys,
+    domainModuleSnapshots: projectMissionControl(DEFAULT_PROJECT_ROOT).defaultDomainModuleKeys.map((key) => cloneDomainModule(DOMAIN_MODULES[key])).filter(Boolean),
+    domainModuleSource: 'project-default',
     proposals: {},
     debates: [],
     synthesis: null,
@@ -1988,13 +2205,17 @@ function buildMemoryPack(run) {
   const contextLine = latestContext ? `Latest chat context (${latestContext.context.length} chars):\n${truncate(latestContext.context, 1800)}` : 'Latest chat context: none';
   const missionBlock = buildMissionContextBlock(run);
   const pack = (run && run.intentPackSnapshot) || cloneIntentPack(INTENT_PACKS.general);
+  const modules = (run && run.domainModuleSnapshots) || [];
   const body = truncate([
     '## Hugo Intent Pack / Project Memory',
     ownerLine,
     taskLine,
     '',
-    '## Active Intent Pack',
+    '## Active Product Scope Pack',
     intentPackPrompt(pack),
+    '',
+    '## Active Domain Modules',
+    ...(modules.length ? modules.map(domainModulePrompt) : ['(none)']),
     '',
     missionBlock,
     '',
@@ -2019,6 +2240,12 @@ function buildMemoryPack(run) {
       version: pack.version,
       source: (run && run.intentPackSource) || 'auto',
     },
+    domainModules: modules.map((m) => ({
+      key: m.key,
+      label: m.label,
+      version: m.version,
+      source: (run && run.domainModuleSource) || 'auto',
+    })),
     generatedAt: new Date().toISOString(),
   };
   if (run) run.memoryPackStatus = status;
@@ -3055,6 +3282,12 @@ function buildExecutionPrompt(run, preset, agent, options = {}) {
       version: run.intentPackVersion || 1,
       source: run.intentPackSource || 'auto',
     },
+    domainModules: ((run.domainModuleSnapshots || []).map((m) => ({
+      key: m.key,
+      label: m.label,
+      version: m.version,
+      source: run.domainModuleSource || 'auto',
+    }))),
     handoffsPassed: (run.handoffs || []).slice(0, 8).map((h) => ({ agentName: h.agentName, status: h.status, createdAt: h.createdAt })),
     chatContextCount: run.contextHistory.length,
     artifactsPassed: run.artifacts.slice(0, 5).map((artifact) => ({ title: artifact.title, type: artifact.type })),
@@ -3799,6 +4032,9 @@ app.get('/api/runs', (req, res) => {
 	    intentPackLabel: run.intentPackSnapshot && run.intentPackSnapshot.label,
 	    intentPackVersion: run.intentPackVersion,
 	    intentPackSource: run.intentPackSource,
+	    domainModuleKeys: run.domainModuleKeys || [],
+	    domainModuleLabels: (run.domainModuleSnapshots || []).map((m) => m.shortLabel || m.label || m.key),
+	    domainModuleSource: run.domainModuleSource,
 	    councilMode: run.pipeline && run.pipeline.councilMode,
 	    councilModeLabel: run.pipeline && run.pipeline.councilModeLabel,
 	    handoffCount: (run.handoffs || []).length,
@@ -3840,8 +4076,11 @@ app.get('/api/intent-packs', (req, res) => {
   res.json({
     ok: true,
     defaultIntentPackKey: resolved.key,
+    defaultDomainModuleKeys: control.defaultDomainModuleKeys || [],
     projectPath: control.projectPath,
     packs: Object.values(INTENT_PACKS).map(cloneIntentPack),
+    productScopes: Object.values(INTENT_PACKS).map(cloneIntentPack),
+    domainModules: Object.values(DOMAIN_MODULES).map(cloneDomainModule),
   });
 });
 
@@ -3857,6 +4096,7 @@ app.patch('/api/mission-control', (req, res) => {
     if (body.globalGoal !== undefined) patch.globalGoal = body.globalGoal;
     if (body.defaultGlobalGoal !== undefined) patch.defaultGlobalGoal = body.defaultGlobalGoal;
     if (body.defaultIntentPackKey !== undefined || body.intentPackKey !== undefined) patch.defaultIntentPackKey = body.defaultIntentPackKey || body.intentPackKey;
+    if (body.defaultDomainModuleKeys !== undefined || body.domainModuleKeys !== undefined || body.intentModuleKeys !== undefined) patch.defaultDomainModuleKeys = body.defaultDomainModuleKeys || body.domainModuleKeys || body.intentModuleKeys;
     if (body.handoffGuidelines !== undefined) patch.handoffGuidelines = body.handoffGuidelines;
     writeMissionControl(patch);
     res.json({ ok: true, missionControl: projectMissionControl(patch.projectPath) });
@@ -3940,7 +4180,8 @@ function buildOverseerDigest(light = false) {
     const mode = p.mode || (r.metrics && r.metrics.deliveryMode) || '-';
     const target = missionTargetSummary(r.missionTarget);
     const pack = r.intentPackSnapshot && (r.intentPackSnapshot.shortLabel || r.intentPackSnapshot.label);
-    return `- [${r.id}] "${truncate(r.topic || '', 80)}" status=${r.status} stage=${r.stage || '-'} mode=${mode}${pack ? ' pack=' + pack : ''} ${gate}${p.councilPlanVersion ? ' planv' + p.councilPlanVersion : ''}${target ? ' | target: ' + truncate(target, 120) : ''}${arts ? ' | 近產出: ' + arts : ''}`;
+    const modules = (r.domainModuleSnapshots || []).map((m) => m.shortLabel || m.label || m.key).join(',');
+    return `- [${r.id}] "${truncate(r.topic || '', 80)}" status=${r.status} stage=${r.stage || '-'} mode=${mode}${pack ? ' pack=' + pack : ''}${modules ? ' modules=' + modules : ''} ${gate}${p.councilPlanVersion ? ' planv' + p.councilPlanVersion : ''}${target ? ' | target: ' + truncate(target, 120) : ''}${arts ? ' | 近產出: ' + arts : ''}`;
   }).join('\n');
   const projects = (knownProjects() || []).map((p) => (typeof p === 'string' ? p : (p.path || p.name || ''))).filter(Boolean).join(', ');
   return { runs, projects, currentRunId: cur && cur.id ? cur.id : null };
@@ -4037,7 +4278,8 @@ function buildNextStepsContext(run) {
   const parts = [];
   parts.push(buildMissionContextBlock(run));
   parts.push(`任務: ${truncate(run.taskBrief || run.background || run.topic || '', 700)}`);
-  parts.push(`Project: ${run.projectPath || '-'} · 模式: ${mode} · Intent Pack: ${run.intentPackSnapshot ? run.intentPackSnapshot.label : run.intentPackKey || '-'} · 狀態: ${run.status || '-'} · Owner: ${run.ownerUser || '-'} · Notify: ${run.notifyUser || '-'}`);
+  const moduleLabels = (run.domainModuleSnapshots || []).map((m) => m.shortLabel || m.label || m.key).join(', ') || '-';
+  parts.push(`Project: ${run.projectPath || '-'} · 模式: ${mode} · Product Scope: ${run.intentPackSnapshot ? run.intentPackSnapshot.label : run.intentPackKey || '-'} · Domain Modules: ${moduleLabels} · 狀態: ${run.status || '-'} · Owner: ${run.ownerUser || '-'} · Notify: ${run.notifyUser || '-'}`);
   if (run.queueScope || run.queuedReason) parts.push(`Queue: ${run.queueScope || '-'} · ${run.queuedReason || ''} · behind=${run.queuedBehindRunId || '-'}`);
   if (run.completionVerdict || run.reviewVerdict || run.verifyVerdict || p.reviewVerdict || p.verifyVerdict) {
     parts.push(`Verdict: completion=${run.completionVerdict || '-'} · review=${run.reviewVerdict || p.reviewVerdict || '-'} · verify=${run.verifyVerdict || p.verifyVerdict || '-'}`);
@@ -4208,6 +4450,18 @@ app.patch('/api/runs/:id/settings', (req, res) => {
       run.intentPackSnapshot = intent.snapshot;
       run.intentPackSource = intent.source;
       if (intent.fallbackWarning) addArtifact(run, { type: 'warning', title: 'Intent Pack fallback', content: intent.fallbackWarning });
+    }
+    if (body.domainModuleKeys !== undefined || body.intentModuleKeys !== undefined) {
+      const modules = resolveDomainModules({
+        keys: body.domainModuleKeys !== undefined ? body.domainModuleKeys : body.intentModuleKeys,
+        projectDefaultKeys: [],
+        topic: run.topic,
+        taskBrief: run.taskBrief,
+        source: 'user',
+      });
+      run.domainModuleKeys = modules.keys;
+      run.domainModuleSnapshots = modules.snapshots;
+      run.domainModuleSource = modules.source;
     }
     if (body.autoBackground && !run.background) {
       run.background = buildAutoBackground(run);
@@ -4382,6 +4636,7 @@ app.post('/api/plans/run', async (req, res) => {
 	      missionTarget: body.missionTarget,
 	      coordinationWarnings: body.coordinationWarnings,
 	      intentPackKey: body.intentPackKey,
+	      domainModuleKeys: body.domainModuleKeys,
 	      seed: false, // drop-zone plans start clean; agents come from the wave/pipeline we spawn
 	    });
 	    if (!body.missionTarget) await ensureMissionTargetDraft(run, { taskBrief, cli: body.cli, model: body.model });
