@@ -46,7 +46,7 @@ const HELP = [
   '`/projects` — 列出可用 project',
   '`/project <編號或 run id 尾段>` — 設定 Telegram 新 mission / council 用邊個 project',
   '`/intentpack [auto|general|mvp|full]` — 設定新 mission / council 用邊套 Intent Pack',
-  '`/domainmodule [auto|none|assessment]` — 設定改卷 / rubric domain module',
+  '`/domainmodule [auto|none|assessment|ui|assessment,ui]` — 設定 domain module',
   '',
   '*開工*',
   '`/council <題目>` — Opus 完善 → 過目 → 揀快速 / 平衡 / 深度 9-grid → 開 AI 聯合國',
@@ -277,7 +277,17 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     const k = String(value || '').trim().toLowerCase().replace(/[-\s]+/g, '_');
     if (!k || k === 'auto' || k === 'default') return null;
     if (k === 'none' || k === 'off') return [];
+    if (/[,\|]/.test(String(value || ''))) {
+      const out = [];
+      String(value || '').split(/[,\|]+/).forEach((item) => {
+        const picked = normalizeDomainModuleChoice(item);
+        if (Array.isArray(picked)) picked.forEach((key) => { if (!out.includes(key)) out.push(key); });
+      });
+      return out;
+    }
     if (['assessment', 'assessment_suite', 'assessment_intelligence', 'grading', 'marking', 'rubric'].includes(k)) return ['assessment_intelligence'];
+    if (['ui', 'ux', 'visual', 'visual_qa', 'ui_qa', 'ui_visual', 'ui_visual_qa', 'screenshot', 'screenshot_loop', 'frontend_visual'].includes(k)) return ['ui_visual_qa'];
+    if (k === 'assessment_ui' || k === 'ui_assessment') return ['assessment_intelligence', 'ui_visual_qa'];
     return undefined;
   }
 
@@ -621,7 +631,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       const payload = await intentPacksPayload(projectPath);
       if (arg) {
         const next = normalizeDomainModuleChoice(arg);
-        if (next === undefined) { await say('用法：`/domainmodule auto|none|assessment`'); return; }
+        if (next === undefined) { await say('用法：`/domainmodule auto|none|assessment|ui|assessment,ui`'); return; }
         selectedDomainModuleKeys = next;
       }
       const line = await domainModuleLine(projectPath);

@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { Server } = require('socket.io');
+const { bashLoginArgs, stripNonTtyShellNoise } = require('./lib/shell-runner');
 
 // Load .env (Cronicle API key, etc.) before any module reads process.env
 require('./lib/env').loadEnv(path.join(__dirname, '.env'));
@@ -168,6 +169,69 @@ const DOMAIN_MODULES = {
         checks: [
           'Knowledge source 是否有 owner、subject/topic、version、active/disabled 狀態。',
           'AI marking 是否記錄引用咗邊份 PDF/Markdown/rubric version。',
+        ],
+      },
+    ],
+  },
+  ui_visual_qa: {
+    key: 'ui_visual_qa',
+    version: 1,
+    label: 'ORCA UI Visual QA Pack',
+    shortLabel: 'UI Visual QA',
+    summary: 'UI / UX / responsive 專用 domain module；用固定 screenshot loop 做改前、改後、fix 後驗證，避免 agent 淨靠文字估畫面。',
+    priorities: [
+      '任何 UI 改動都要先 capture before，再改 code，再 capture after；如果仍有 overflow、overlap、blank、console/page error，要再 fix 再 capture。',
+      'Desktop 同 mobile 都要驗證；至少覆蓋 teacher、panel head、principal、admin 等核心角色頁。',
+      '以實際 screenshot artifact 做判斷：layout hierarchy、spacing、readability、responsive、empty/loading/error state、role navigation 都要睇。',
+      'UI polish 不可以破壞 Supabase/API data flow、role permission、tenant isolation 或 marking flow。',
+      'Final report 必須列出 screenshot paths、changed files、visual issues fixed、remaining visual risks。',
+    ],
+    acceptance: [
+      '改前同改後 screenshot 路徑都要寫入 artifact；如果有 fix loop，要附最後一輪 screenshot。',
+      '至少跑一輪 screenshot loop tool：node ~/services/swarm-server/scripts/orca-ui-screenshot-loop.mjs --project <frontend> --base-url <url> --phase before|after|fix。',
+      '結果 JSON 入面唔可以有 horizontal overflow、blank page、page error；console error 要解釋或修正。',
+      '手機 viewport 不可以有文字/按鈕互相遮蓋；desktop 不可以靠過大 hero/card 逃避 dashboard 可掃讀性。',
+    ],
+    nonGoals: [
+      '唔為了變靚而大改產品 scope。',
+      '唔用 screenshot 代替功能測試；UI pass 之外仍要跑相關 unit/API/e2e smoke。',
+      '唔改 role permission 或資料模型，除非 mission 明確要求。',
+    ],
+    modules: [
+      {
+        key: 'screenshot_loop',
+        label: 'Before / After Screenshot Loop',
+        focus: '改前、改後、fix 後用同一批 route / role / viewport cap 圖，形成可追蹤 artifact。',
+        checks: [
+          'before、after、fix phase 是否存在 results.json 同 screenshot png。',
+          '同一 route / role / viewport 是否用同一設定，避免前後不可比。',
+        ],
+      },
+      {
+        key: 'responsive_contract',
+        label: 'Responsive Contract',
+        focus: 'Desktop / mobile layout、scroll、overflow、nav drawer、safe-area、button hit target。',
+        checks: [
+          'document scrollWidth 是否超出 viewport。',
+          'mobile menu / dashboard nav / primary action 是否可見且不遮內容。',
+        ],
+      },
+      {
+        key: 'visual_hierarchy',
+        label: 'Visual Hierarchy & Density',
+        focus: 'Dashboard 要可掃讀、資訊層次清楚、表格/卡片/filters 密度合適。',
+        checks: [
+          '重要 KPI、下一步 action、狀態、role context 是否第一眼清楚。',
+          '文字大小、間距、顏色、卡片數量是否令畫面雜亂或過度空泛。',
+        ],
+      },
+      {
+        key: 'role_ui_coverage',
+        label: 'Role UI Coverage',
+        focus: '老師、科任主任、校長、admin 的入口、導航、權限提示同 dashboard 都要被截圖驗證。',
+        checks: [
+          '每個角色是否進到正確 home path。',
+          '不應看見不屬於該角色的 primary actions 或敏感資訊。',
         ],
       },
     ],
@@ -1190,6 +1254,7 @@ function normalizeDomainModuleKey(value) {
   if (!key || key === 'none' || key === 'off') return '';
   if (DOMAIN_MODULES[key]) return key;
   if (['assessment', 'assessment_suite', 'assessment_intelligence_suite', 'grading', 'marking', 'rubric', '改卷'].includes(key)) return 'assessment_intelligence';
+  if (['ui', 'ux', 'visual', 'visual_qa', 'ui_qa', 'ui_visual', 'screenshot', 'screenshot_loop', 'frontend_visual', '介面', '畫面', '截圖'].includes(key)) return 'ui_visual_qa';
   return '';
 }
 
@@ -1210,10 +1275,14 @@ function projectDefaultDomainModuleKeys(projectPath) {
 
 function taskAutoDomainModuleKeys({ topic, taskBrief, text } = {}) {
   const haystack = String([topic, taskBrief, text].filter(Boolean).join('\n')).toLowerCase();
+  const keys = [];
   if (/(grading|marking|rubric|assessment|exam|paper|answer|score|student ability|misconception|改卷|批改|評分|試卷|答案|錯題|能力|老師審批|老師覆核|班級|全級)/i.test(haystack)) {
-    return ['assessment_intelligence'];
+    keys.push('assessment_intelligence');
   }
-  return [];
+  if (/(ui|ux|frontend|css|layout|responsive|visual|screenshot|playwright|browser|desktop|mobile|dashboard|card|button|modal|drawer|overflow|overlap|介面|畫面|前端|樣式|手機|桌面|截圖|好睇|排版|按鈕|卡片|儀表板|重疊)/i.test(haystack)) {
+    keys.push('ui_visual_qa');
+  }
+  return keys;
 }
 
 function resolveDomainModules({ keys, projectDefaultKeys, topic, taskBrief, source } = {}) {
@@ -2373,10 +2442,20 @@ function resolveChatModel(run, override) {
 }
 
 function stripChatNoise(s) {
-  return String(s || '')
+  return stripNonTtyShellNoise(String(s || '')
     .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')        // ANSI escape
-    .replace(/^\[swarm-[^\]]*\][^\n]*$/gm, '')      // 自家 log 行
-    .trim();
+    .replace(/^\[swarm-[^\]]*\][^\n]*$/gm, ''));    // 自家 log 行
+}
+
+function isClaudeAuthFailure(text) {
+  return /(?:401|invalid authentication credentials|failed to authenticate)/i.test(String(text || ''));
+}
+
+function claudeAuthFallbackModel() {
+  return {
+    cli: 'codex',
+    model: process.env.SWARM_CLAUDE_AUTH_FALLBACK_MODEL || 'gpt-5.5',
+  };
 }
 
 const CHAT_PROMPT_MAX_CHARS = 90000; // 控 argv $2 長度(Linux MAX_ARG_STRLEN ~128KB)
@@ -2405,7 +2484,7 @@ function buildChatPrompt(run, chatCwd, finalize) {
 
 // 獨立 chat spawner:唔行 spawnAgentNow/session/pipeline,唔掂 run.status/metrics(故 chat 唔會觸發 pipeline auto-advance)。
 // prompt 經 argv $2(同 agent 一致),靠 CHAT_PROMPT_MAX_CHARS 控長度。
-function spawnChatTurn(run, picked, chatCwd, finalize) {
+function spawnChatTurn(run, picked, chatCwd, finalize, fallbackUsed = false) {
   return new Promise((resolve, reject) => {
     const cmd = buildAgentCommand(picked.cli, picked.model);
     const prompt = buildChatPrompt(run, chatCwd, finalize);
@@ -2415,7 +2494,7 @@ function spawnChatTurn(run, picked, chatCwd, finalize) {
     io.emit('chat-thinking', { runId: run.id, on: true, model: picked.model, finalize: !!finalize });
     const started = Date.now();
     let out = '', err = '', killed = false;
-    const child = spawn('bash', ['-ic', cmd.shell, 'swarm-chat', cwd, prompt], {
+    const child = spawn('bash', bashLoginArgs(cmd.shell, 'swarm-chat', cwd, prompt), {
       cwd, env: { ...process.env, TERM: process.env.TERM || 'xterm-256color' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -2428,7 +2507,13 @@ function spawnChatTurn(run, picked, chatCwd, finalize) {
       io.emit('chat-thinking', { runId: run.id, on: false });
       const durationMs = Date.now() - started;
       if (killed) return reject(new Error(`思考超時(${Math.round(CHAT_TIMEOUT_MS / 1000)}s)`));
-      if (code !== 0) return reject(new Error(`${cmd.label} exit ${code}: ${stripChatNoise(err || out).slice(-300)}`));
+      if (code !== 0) {
+        const clean = stripChatNoise(err || out);
+        if (!fallbackUsed && cmd.cli === 'claude' && envFlag('SWARM_CLAUDE_AUTH_FALLBACK', true) && isClaudeAuthFailure(clean)) {
+          return spawnChatTurn(run, claudeAuthFallbackModel(), chatCwd, finalize, true).then(resolve, reject);
+        }
+        return reject(new Error(`${cmd.label} exit ${code}: ${clean.slice(-300)}`));
+      }
       resolve({ text: stripChatNoise(out) || '(冇輸出)', durationMs, cli: picked.cli, model: picked.model });
     });
   });
@@ -2449,13 +2534,13 @@ const COUNCIL_REFINE_PROMPT = [
 ].join('\n');
 
 // One-shot model call: prompt → text（唔耦合 run / chatThread）。
-function spawnOneShot(prompt, picked, label = 'swarm-oneshot', timeoutMs = 90000, opts = {}) {
+function spawnOneShot(prompt, picked, label = 'swarm-oneshot', timeoutMs = 90000, opts = {}, fallbackUsed = false) {
   return new Promise((resolve, reject) => {
     const cmd = buildAgentCommand(picked.cli, picked.model);
     let cwd;
     try { cwd = opts.cwd ? safeProjectPath(opts.cwd) : safeProjectPath(SWARM_WORKSPACE); } catch (e) { return reject(e); }
     let out = '', err = '', killed = false;
-    const child = spawn('bash', ['-ic', cmd.shell, label, cwd, prompt], {
+    const child = spawn('bash', bashLoginArgs(cmd.shell, label, cwd, prompt), {
       cwd, env: { ...process.env, ...(opts.env || {}), TERM: process.env.TERM || 'xterm-256color' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -2466,7 +2551,13 @@ function spawnOneShot(prompt, picked, label = 'swarm-oneshot', timeoutMs = 90000
     child.on('close', (code) => {
       clearTimeout(timer);
       if (killed) return reject(new Error('完善超時'));
-      if (code !== 0) return reject(new Error(`${cmd.label} exit ${code}: ${stripChatNoise(err || out).slice(-200)}`));
+      if (code !== 0) {
+        const clean = stripChatNoise(err || out);
+        if (!fallbackUsed && cmd.cli === 'claude' && envFlag('SWARM_CLAUDE_AUTH_FALLBACK', true) && isClaudeAuthFailure(clean)) {
+          return spawnOneShot(prompt, claudeAuthFallbackModel(), `${label}-codex-fallback`, timeoutMs, opts, true).then(resolve, reject);
+        }
+        return reject(new Error(`${cmd.label} exit ${code}: ${clean.slice(-200)}`));
+      }
       resolve(stripChatNoise(out) || '');
     });
   });
@@ -3502,7 +3593,7 @@ function spawnAgentNow(run, preset, agent, agentCommand, options = {}) {
   }
   const child = spawn(
     'bash',
-    ['-ic', shell, 'swarm-agent', projectPath, prompt],
+    bashLoginArgs(shell, 'swarm-agent', projectPath, prompt),
     {
       cwd: projectPath,
       env: { ...process.env, ...councilEnv, TERM: process.env.TERM || 'xterm-256color' },

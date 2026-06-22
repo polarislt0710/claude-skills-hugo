@@ -3,6 +3,7 @@
 // Agents produce ```file:path\n<content>\n``` blocks; parseFileBlocks() extracts them.
 
 const { spawn } = require('child_process');
+const { bashLoginArgs } = require('./shell-runner');
 
 const CODEX_BASE_ARGS = [
   'exec',
@@ -47,7 +48,7 @@ function runAgent(opts) {
     const { bin, extraArgs } = CLI_REGISTRY[model];
     const cmd = `${bin} ${extraArgs.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`;
 
-    const child = spawn('bash', ['-ic', cmd], {
+    const child = spawn('bash', bashLoginArgs(cmd, 'mission-agent'), {
       cwd: cwd || process.cwd(),
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env },

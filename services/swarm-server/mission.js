@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const { bashLoginArgs } = require('./lib/shell-runner');
 
 const MISSIONS_ROOT = process.env.MISSIONS_ROOT || path.join(process.env.HOME || '/home/hugo-orca', 'missions');
 const MISSION_EXEC_TIMEOUT_MS = Number(process.env.MISSION_EXEC_TIMEOUT_MS || 60 * 60 * 1000); // 60 min per agent
@@ -217,7 +218,7 @@ function spawnAgent({ model, prompt, cwd, onChunk, label }) {
 
     const child = spawn(
       'bash',
-      ['-ic', shellCmd, 'mission-agent', cwd, prompt],
+      bashLoginArgs(shellCmd, 'mission-agent', cwd, prompt),
       {
         cwd,
         env: { ...process.env, ...extraEnv, TERM: process.env.TERM || 'xterm-256color' },

@@ -1,4 +1,5 @@
 const { spawn } = require('child_process');
+const { bashLoginArgs, stripNonTtyShellNoise } = require('./shell-runner');
 
 const CLAUDE_BIN = process.env.AUTOMATION_CLAUDE_BIN || 'claude';
 const CLAUDE_TIMEOUT_MS = Number(process.env.AUTOMATION_CLAUDE_TIMEOUT_MS || 240000);
@@ -10,7 +11,7 @@ function callClaude(prompt, opts = {}) {
     if (opts.model) args.push('--model', opts.model);
 
     const cmd = `${CLAUDE_BIN} ${args.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`;
-    const child = spawn('bash', ['-ic', cmd], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn('bash', bashLoginArgs(cmd, 'automation-claude'), { stdio: ['pipe', 'pipe', 'pipe'] });
 
     let stdout = '';
     let stderr = '';
@@ -33,7 +34,7 @@ function callClaude(prompt, opts = {}) {
     child.on('close', (code) => {
       clearTimeout(timer);
       if (timedOut) return reject(new Error(`claude -p timeout after ${timeoutMs}ms`));
-      if (code !== 0) return reject(new Error(`claude -p exited ${code}: ${stderr.slice(-500) || stdout.slice(-500)}`));
+      if (code !== 0) return reject(new Error(`claude -p exited ${code}: ${stripNonTtyShellNoise(stderr).slice(-500) || stripNonTtyShellNoise(stdout).slice(-500)}`));
       resolve(stdout.trim());
     });
 

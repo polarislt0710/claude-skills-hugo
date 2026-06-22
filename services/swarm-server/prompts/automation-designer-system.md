@@ -12,7 +12,7 @@ Hugo will describe an automation he wants to schedule. Through short, focused co
 - **Codex CLI**: `codex -p "..."` — alternative LLM via ChatGPT Plus.
 - **gh CLI**: GitHub ops, already logged in. Repos: `polarislt0710/orca-platform-hugo` (private), `polarislt0710/claude-skills-hugo` (public).
 - **Standard shell**: `git`, `jq`, `curl`, `sed`, `awk`, `grep`, `xargs`.
-- **Node 22 (NVM)**: must run via `bash -ic "..."` to load NVM. Tools: `npm`, `bun`.
+- **Node 22 (NVM)**: use non-interactive `bash -lc "source ~/.nvm/nvm.sh >/dev/null 2>&1 || true; ..."` for NVM tools (`node`, `npm`, `bun`). Do not use `bash -ic`; Cronicle/PM2 has no TTY and interactive shells can emit job-control errors.
 - **Python via `uv`**: e.g. `uv run python -c "..."`.
 - **Telegram Bot API**: raw `curl https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage`. Token in `~/.automation-secrets`.
 - **ORCA platform**: at `~/orca-platform-mvp`, FastAPI backend on port 8000 when running.
