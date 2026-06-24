@@ -1790,13 +1790,17 @@ function makeAgent(name, layer, role, skill, index, extra = {}) {
   };
 }
 
+const DEFAULT_GLM_MODEL = process.env.SWARM_DEFAULT_GLM_MODEL || 'glm-4.5';
+
 // ─── Model catalog (which CLI + model each sub-agent can run on) ───
 const MODEL_CATALOG = [
   { cli: 'claude', model: 'opus',    label: 'Claude Opus 4.8', short: 'opus',   color: '#c8993f', tier: '旗艦 · 規劃腦' },
   { cli: 'claude', model: 'sonnet',  label: 'Claude Sonnet', short: 'sonnet', color: '#87b7ff', tier: '均衡 · 預設' },
   { cli: 'claude', model: 'haiku',   label: 'Claude Haiku',  short: 'haiku',  color: '#5fb89a', tier: '快 · 輕量' },
   { cli: 'codex',  model: 'gpt-5.5', label: 'Codex gpt-5.5', short: 'codex',  color: '#9aa7b2', tier: 'OpenAI' },
-  { cli: 'glm',    model: 'glm-5.2', label: 'GLM 5.2',       short: 'glm',    color: '#b58cff', tier: '實驗', experimental: true },
+  { cli: 'glm',    model: 'glm-4.5', label: 'GLM 4.5',       short: 'glm',    color: '#b58cff', tier: '穩定 · 預設' },
+  { cli: 'glm',    model: 'glm-4.5-air', label: 'GLM 4.5 Air', short: 'glm-air', color: '#8cc7ff', tier: '快 · 輕量' },
+  { cli: 'glm',    model: 'glm-5.2', label: 'GLM 5.2',       short: 'glm-5.2', color: '#b58cff', tier: '實驗 · 高負載', experimental: true },
 ];
 
 function safeModelFlag(model) {
@@ -2394,7 +2398,7 @@ function buildAgentCommand(cliName, model) {
     return {
       label: 'glm',
       cli: 'glm',
-      model: m || 'glm-5.2',
+      model: m || DEFAULT_GLM_MODEL,
       shell: `cd "$1" && exec "$HOME/bin/glm" -p --permission-mode bypassPermissions${mflag} "$2"`,
     };
   }
@@ -3585,7 +3589,7 @@ function spawnAgentNow(run, preset, agent, agentCommand, options = {}) {
     }
   }
   // ─── GLM thinking（非議會角色都開）───（Hugo 2026-06-17）
-  // economy/budget preset 用 glm-5.2 做 researcher 等角色 → 一樣行 claude 二進制,開 extended thinking。
+  // economy/budget preset 用穩定 GLM 做 researcher 等角色 → 一樣行 claude 二進制,開 extended thinking。
   // glm-4.5-air / glm-mini 係特登平快嘅 tier,唔開（開咗就違背慳 cost 原意）。可由 SWARM_GLM_THINKING 調。
   if (!fake && agentCommand.cli === 'glm' && !isCouncilAgent && !/air|mini/i.test(String(agentCommand.model || ''))) {
     councilEnv.MAX_THINKING_TOKENS = process.env.SWARM_GLM_THINKING || process.env.SWARM_COUNCIL_THINKING || '31999';
@@ -3818,19 +3822,19 @@ function defaultCouncilModelMap(mode, overrides = {}) {
   const base = {
     council_a: { cli: 'claude', model: 'opus' },
     council_b: { cli: 'codex', model: 'gpt-5.5' },
-    council_c: { cli: 'glm', model: 'glm-5.2' },
+    council_c: { cli: 'glm', model: DEFAULT_GLM_MODEL },
     council_opus_free: { cli: 'claude', model: 'opus' },
     council_codex_free: { cli: 'codex', model: 'gpt-5.5' },
-    council_glm_free: { cli: 'glm', model: 'glm-5.2' },
+    council_glm_free: { cli: 'glm', model: DEFAULT_GLM_MODEL },
     council_opus_arch: { cli: 'claude', model: 'opus' },
     council_codex_arch: { cli: 'codex', model: 'gpt-5.5' },
-    council_glm_arch: { cli: 'glm', model: 'glm-5.2' },
+    council_glm_arch: { cli: 'glm', model: DEFAULT_GLM_MODEL },
     council_opus_impl: { cli: 'claude', model: 'opus' },
     council_codex_impl: { cli: 'codex', model: 'gpt-5.5' },
-    council_glm_impl: { cli: 'glm', model: 'glm-5.2' },
+    council_glm_impl: { cli: 'glm', model: DEFAULT_GLM_MODEL },
     council_opus_risk: { cli: 'claude', model: 'opus' },
     council_codex_risk: { cli: 'codex', model: 'gpt-5.5' },
-    council_glm_risk: { cli: 'glm', model: 'glm-5.2' },
+    council_glm_risk: { cli: 'glm', model: DEFAULT_GLM_MODEL },
     moderator: { cli: 'claude', model: 'opus' },
     explainer: { cli: 'claude', model: 'sonnet' },
   };

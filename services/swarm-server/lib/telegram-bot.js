@@ -21,7 +21,8 @@ const MODEL_CHOICES = [
   { cli: 'codex',  model: 'gpt-5.5', label: 'Codex gpt-5.5' },
   { cli: 'claude', model: 'opus',    label: 'Opus 4.8' },
   { cli: 'claude', model: 'sonnet',  label: 'Sonnet' },
-  { cli: 'glm',    model: 'glm-5.2', label: 'GLM 5.2' },
+  { cli: 'glm',    model: 'glm-4.5', label: 'GLM 4.5' },
+  { cli: 'glm',    model: 'glm-5.2', label: 'GLM 5.2（高負載）' },
 ];
 
 const COUNCIL_MODES = {

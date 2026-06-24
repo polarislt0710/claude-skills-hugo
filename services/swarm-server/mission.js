@@ -20,6 +20,7 @@ const { bashLoginArgs } = require('./lib/shell-runner');
 const MISSIONS_ROOT = process.env.MISSIONS_ROOT || path.join(process.env.HOME || '/home/hugo-orca', 'missions');
 const MISSION_EXEC_TIMEOUT_MS = Number(process.env.MISSION_EXEC_TIMEOUT_MS || 60 * 60 * 1000); // 60 min per agent
 const MAX_REVISION_ATTEMPTS = Number(process.env.MISSION_MAX_REVISIONS || 3);
+const DEFAULT_GLM_MODEL = process.env.SWARM_DEFAULT_GLM_MODEL || 'glm-4.5';
 
 function id(prefix = 'mission') {
   return `${prefix}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
@@ -162,7 +163,8 @@ function getBigModelKey() {
 // Resolve a model alias to its actual BigModel name + env config.
 // Supports:
 //   'claude' / 'opus'              → Claude (Anthropic native)
-//   'glm' / 'glm-5.2'              → GLM-5.2 (主力，長程複雜)
+//   'glm' / 'glm-4.5'              → GLM-4.5 (穩定預設)
+//   'glm-5.2'                      → GLM-5.2 (高負載 / 手動選用)
 //   'glm-4.6'                      → GLM-4.6 (中等)
 //   'glm-4.5-air' / 'glm-mini'     → GLM-4.5 Air (簡單、平)
 //   'codex'                        → Codex CLI
@@ -171,10 +173,12 @@ function resolveModel(model) {
   if (m === 'codex') return { cli: 'codex', label: 'Codex', provider: 'codex' };
   if (m === 'claude' || m === 'opus' || m === '') return { cli: 'claude', label: 'Opus', provider: 'anthropic' };
   if (m.startsWith('glm')) {
-    let modelName = 'glm-5.2';
-    let label = 'GLM-5.2';
+    let modelName = DEFAULT_GLM_MODEL;
+    let label = modelName === 'glm-5.2' ? 'GLM-5.2' : 'GLM-4.5';
     if (m === 'glm-4.5-air' || m === 'glm-mini' || m === 'glm-air') { modelName = 'glm-4.5-air'; label = 'GLM-4.5-Air'; }
+    else if (m === 'glm-4.5' || m === 'glm') { modelName = 'glm-4.5'; label = 'GLM-4.5'; }
     else if (m === 'glm-4.6') { modelName = 'glm-4.6'; label = 'GLM-4.6'; }
+    else if (m === 'glm-5.2') { modelName = 'glm-5.2'; label = 'GLM-5.2'; }
     return { cli: 'claude', label, provider: 'bigmodel', modelName };
   }
   return { cli: 'claude', label: 'Opus', provider: 'anthropic' };
@@ -289,18 +293,19 @@ Target project：${mission.targetProject}
   "scope": "2-3 句具體 scope 描述",
   "targetFiles": ["src/path/file1.ts", "src/path/file2.py"],
   "successCheck": "一句講點樣驗證呢 phase 完成（例如：npm test 過、API endpoint 返回 200）",
-  "coderModel": "glm-5.2"
+  "coderModel": "glm-4.5"
 }
 \`\`\`
 
 ### 📌 coderModel 選擇指引
 為每個 phase 揀適合嘅 coder model 嚟慳 token：
 
-- **\`"glm-5.2"\`** — 複雜邏輯、跨多 files、需要長程推理、新功能設計、tricky bugs
+- **\`"glm-4.5"\`** — 穩定預設；大部分 coding / review / refactor phase 都應該先用佢
+- **\`"glm-5.2"\`** — 高負載選項；只喺 GLM-4.5 明顯不足、而且你接受可能排隊 / overload 時先用
 - **\`"glm-4.6"\`** — 中等複雜度、refactor、加 features 但邏輯清晰
 - **\`"glm-4.5-air"\`** — 簡單修改、單一 file 嘅小改動、改 typo / 加 logging / 簡單 boilerplate
 
-預設用 \`glm-5.2\`，但 simple phases **必須** 揀 \`glm-4.5-air\` 嚟慳 cost。
+預設用 \`glm-4.5\`。Simple phases **必須** 揀 \`glm-4.5-air\` 嚟慳 cost；\`glm-5.2\` 只係手動高負載選項。
 
 ## 🛡️ Risks & Mitigations
 2-3 個主要風險 + 應對。
@@ -986,7 +991,7 @@ function registerRoutes(app, io) {
         topic, goal,
         targetProject: targetProject || '/home/hugo-orca/orca-platform-mvp',
         plannerModel: models?.planner || 'claude',
-        coderModel: models?.coder || 'glm-5.2',
+        coderModel: models?.coder || process.env.SWARM_DEFAULT_GLM_MODEL || 'glm-4.5',
         reviewerModel: models?.reviewer || 'claude',
         autoExecute: false,  // imported plans always go through approval
       });

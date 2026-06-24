@@ -340,15 +340,17 @@
         <label style="font-size: 10px;">Planner</label>
         <select id="newPlanner">
           <option value="claude" selected>Opus (Claude)</option>
-          <option value="glm-5.2">GLM-5.2</option>
+          <option value="glm-4.5">GLM-4.5</option>
+          <option value="glm-5.2">GLM-5.2（高負載）</option>
         </select>
       </div>
       <div style="flex: 1;">
         <label style="font-size: 10px;">Coder（預設）</label>
         <select id="newCoder">
-          <option value="glm-5.2" selected>GLM-5.2（主力）</option>
+          <option value="glm-4.5" selected>GLM-4.5（穩定）</option>
           <option value="glm-4.6">GLM-4.6</option>
           <option value="glm-4.5-air">GLM-4.5 Air（細模型，平）</option>
+          <option value="glm-5.2">GLM-5.2（高負載）</option>
           <option value="claude">Opus (Claude)</option>
           <option value="codex">Codex</option>
         </select>
@@ -357,7 +359,8 @@
         <label style="font-size: 10px;">Reviewer</label>
         <select id="newReviewer">
           <option value="claude" selected>Opus (Claude)</option>
-          <option value="glm-5.2">GLM-5.2</option>
+          <option value="glm-4.5">GLM-4.5</option>
+          <option value="glm-5.2">GLM-5.2（高負載）</option>
         </select>
       </div>
     </div>
@@ -443,6 +446,7 @@ function statusEmoji(s) {
 }
 
 const MODEL_CHOICES = [
+  { value: 'glm-4.5', label: 'GLM-4.5' },
   { value: 'glm-5.2', label: 'GLM-5.2' },
   { value: 'glm-4.6', label: 'GLM-4.6' },
   { value: 'glm-4.5-air', label: 'GLM-4.5-Air' },
@@ -453,7 +457,8 @@ const MODEL_CHOICES = [
 function modelShortLabel(m) {
   if (!m) return 'default';
   const ml = String(m).toLowerCase();
-  if (ml === 'glm' || ml === 'glm-5.2') return 'GLM-5.2';
+  if (ml === 'glm' || ml === 'glm-4.5') return 'GLM-4.5';
+  if (ml === 'glm-5.2') return 'GLM-5.2';
   if (ml === 'glm-4.6') return 'GLM-4.6';
   if (ml === 'glm-4.5-air' || ml === 'glm-mini' || ml === 'glm-air') return 'GLM-Air';
   if (ml === 'codex') return 'Codex';
@@ -528,7 +533,7 @@ function renderMission(m, logs) {
       <div class="timeline-h">📦 Phase Timeline ${phases.length ? `· ${phases.length} phases` : ''}</div>
       <div class="phases-track">
         ${phases.map((p, i) => {
-          const effModel = p.coderModel || m.models?.coder || 'glm-5.2';
+          const effModel = p.coderModel || m.models?.coder || 'glm-4.5';
           return `
           <div class="phase-node ${phaseClass(p, m)}" onclick="viewPhaseFile('${m.id}', ${p.id})">
             <div class="num">PHASE ${p.id}</div>
