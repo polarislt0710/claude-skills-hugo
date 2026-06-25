@@ -604,7 +604,7 @@ function createMissionFromPlan(opts = {}) {
     requestedModels: {
       contextScout: (models && models.contextScout) || (models && models.planner) || 'gpt-5.5',
       coding: (models && models.coding) || 'gpt-5.5',
-      codingFallback: (models && models.codingFallback) || process.env.SWARM_DEFAULT_GLM_MODEL || 'glm-4.5',
+      codingFallback: (models && models.codingFallback) || (/^(1|true|yes|on)$/i.test(String(process.env.SWARM_DISABLE_GLM || '')) ? 'gpt-5.5' : (process.env.SWARM_DEFAULT_GLM_MODEL || 'glm-4.5')),
       refill: (models && models.refill) || 'opus',
       review: (models && models.review) || 'opus',
       planner: (models && models.planner) || 'gpt-5.5',

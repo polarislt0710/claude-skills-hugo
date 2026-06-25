@@ -1791,9 +1791,12 @@ function makeAgent(name, layer, role, skill, index, extra = {}) {
 }
 
 const DEFAULT_GLM_MODEL = process.env.SWARM_DEFAULT_GLM_MODEL || 'glm-4.5';
+const SWARM_DISABLE_GLM = /^(1|true|yes|on)$/i.test(String(process.env.SWARM_DISABLE_GLM || ''));
+const CODEX_55 = { cli: 'codex', model: 'gpt-5.5' };
+const OPUS_48 = { cli: 'claude', model: 'opus' };
 
 // ─── Model catalog (which CLI + model each sub-agent can run on) ───
-const MODEL_CATALOG = [
+const MODEL_CATALOG_ALL = [
   { cli: 'claude', model: 'opus',    label: 'Claude Opus 4.8', short: 'opus',   color: '#c8993f', tier: '旗艦 · 規劃腦' },
   { cli: 'claude', model: 'sonnet',  label: 'Claude Sonnet', short: 'sonnet', color: '#87b7ff', tier: '均衡 · 預設' },
   { cli: 'claude', model: 'haiku',   label: 'Claude Haiku',  short: 'haiku',  color: '#5fb89a', tier: '快 · 輕量' },
@@ -1802,6 +1805,7 @@ const MODEL_CATALOG = [
   { cli: 'glm',    model: 'glm-4.5-air', label: 'GLM 4.5 Air', short: 'glm-air', color: '#8cc7ff', tier: '快 · 輕量' },
   { cli: 'glm',    model: 'glm-5.2', label: 'GLM 5.2',       short: 'glm-5.2', color: '#b58cff', tier: '實驗 · 高負載', experimental: true },
 ];
+const MODEL_CATALOG = SWARM_DISABLE_GLM ? MODEL_CATALOG_ALL.filter((m) => m.cli !== 'glm') : MODEL_CATALOG_ALL;
 
 function safeModelFlag(model) {
   const m = String(model || '').trim();
@@ -2374,7 +2378,7 @@ function buildAutoBackground(run) {
 
 function buildAgentCommand(cliName, model) {
   const normalized = normalizeModelChoice({ cli: cliName, model }, { cli: cliName, model });
-  const m = safeModelFlag(normalized.model);
+  let m = safeModelFlag(normalized.model);
   let cli = String(normalized.cli || '').trim().toLowerCase();
   if (!cli) {
     // 冇明確 cli → 由 model 名推斷 provider,避免 claude+gpt-5.5 之類 cli/model 唔夾而炸
@@ -2382,6 +2386,10 @@ function buildAgentCommand(cliName, model) {
     if (/^gpt[-.]|^o[34]\b|codex/i.test(m)) cli = 'codex';
     else if (/^glm/i.test(m)) cli = 'glm';
     else cli = String(DEFAULT_AGENT_CLI || 'claude').trim().toLowerCase();
+  }
+  if (SWARM_DISABLE_GLM && (cli === 'glm' || /^glm/i.test(m))) {
+    cli = 'codex';
+    m = 'gpt-5.5';
   }
   if (cli === 'codex') {
     const mflag = m ? ` -m "${m}"` : '';
@@ -3770,6 +3778,7 @@ function verifyStage() {
 function normalizeCouncilMode(value) {
   const raw = String(value || 'balanced').trim().toLowerCase();
   if (['balanced', 'balance', 'standard-plus', 'medium'].includes(raw)) return 'balanced';
+  if (['deep-6', 'six-review', '6-review', '6review', 'opus-codex-6', 'gpt-opus-6'].includes(raw)) return 'deep-6';
   if (['deep', 'deep-grid', 'grid', '9-grid', 'nine-grid', '9grid'].includes(raw)) return 'deep-grid';
   return 'quick';
 }
@@ -3777,6 +3786,7 @@ function normalizeCouncilMode(value) {
 function councilModeLabel(mode) {
   const m = normalizeCouncilMode(mode);
   if (m === 'balanced') return '平衡 Council（3自由觀點 + 3硬角色）';
+  if (m === 'deep-6') return '深度 6-review Council（Opus + GPT × 3角色）';
   if (m === 'deep-grid') return '深度 9-grid Council（3 model × 3角色）';
   return '快速 Council（3硬角色）';
 }
@@ -3811,6 +3821,24 @@ function councilStagesForMode(mode) {
       explain,
     ];
   }
+  if (m === 'deep-6') {
+    return [
+      {
+        key: 'six_review',
+        title: '6-review 深度評審',
+        kind: 'consensus',
+        deliveryMode: 'thinking',
+        agentKeys: [
+          'council_opus_arch', 'council_codex_arch',
+          'council_opus_impl', 'council_codex_impl',
+          'council_opus_risk', 'council_codex_risk',
+        ],
+        reviewGate: true,
+      },
+      moderate,
+      explain,
+    ];
+  }
   return [
     { key: 'consensus', title: '共識評審 Consensus', kind: 'consensus', deliveryMode: 'thinking', agentKeys: ['council_a', 'council_b', 'council_c'], reviewGate: true },
     moderate,
@@ -3819,22 +3847,26 @@ function councilStagesForMode(mode) {
 }
 
 function defaultCouncilModelMap(mode, overrides = {}) {
+  const glmFree = SWARM_DISABLE_GLM ? CODEX_55 : { cli: 'glm', model: DEFAULT_GLM_MODEL };
+  const glmArch = SWARM_DISABLE_GLM ? OPUS_48 : { cli: 'glm', model: DEFAULT_GLM_MODEL };
+  const glmImpl = SWARM_DISABLE_GLM ? CODEX_55 : { cli: 'glm', model: DEFAULT_GLM_MODEL };
+  const glmRisk = SWARM_DISABLE_GLM ? OPUS_48 : { cli: 'glm', model: DEFAULT_GLM_MODEL };
   const base = {
     council_a: { cli: 'claude', model: 'opus' },
     council_b: { cli: 'codex', model: 'gpt-5.5' },
-    council_c: { cli: 'glm', model: DEFAULT_GLM_MODEL },
+    council_c: glmRisk,
     council_opus_free: { cli: 'claude', model: 'opus' },
     council_codex_free: { cli: 'codex', model: 'gpt-5.5' },
-    council_glm_free: { cli: 'glm', model: DEFAULT_GLM_MODEL },
+    council_glm_free: glmFree,
     council_opus_arch: { cli: 'claude', model: 'opus' },
     council_codex_arch: { cli: 'codex', model: 'gpt-5.5' },
-    council_glm_arch: { cli: 'glm', model: DEFAULT_GLM_MODEL },
+    council_glm_arch: glmArch,
     council_opus_impl: { cli: 'claude', model: 'opus' },
     council_codex_impl: { cli: 'codex', model: 'gpt-5.5' },
-    council_glm_impl: { cli: 'glm', model: DEFAULT_GLM_MODEL },
+    council_glm_impl: glmImpl,
     council_opus_risk: { cli: 'claude', model: 'opus' },
     council_codex_risk: { cli: 'codex', model: 'gpt-5.5' },
-    council_glm_risk: { cli: 'glm', model: DEFAULT_GLM_MODEL },
+    council_glm_risk: glmRisk,
     moderator: { cli: 'claude', model: 'opus' },
     explainer: { cli: 'claude', model: 'sonnet' },
   };
@@ -4022,7 +4054,7 @@ function projectQueueKey(projectPath) {
 function isCodePipelineActive(run) {
   if (!run || run.status === 'queued' || run.status === 'stopped') return false;
   const p = run.pipeline;
-  if (!p || p.mode !== 'code' || p.stopped) return false;
+  if (!p || !['code', 'council'].includes(String(p.mode || '')) || p.stopped) return false;
   if (['done', 'complete', 'needs_attention', 'failed'].includes(run.status)) return false;
   return (p.stages || []).some((s) => ['running', 'pending'].includes(s.status)) || run.status === 'executing';
 }
@@ -4052,7 +4084,7 @@ function maybeQueueRunStart(run, opt) {
   run.status = 'queued';
   run.queueScope = 'project';
   run.queueKey = key;
-  run.queuedReason = `同 project 已有 code mission 執行中:${blocker.topic || blocker.id}`;
+  run.queuedReason = `同 project 已有 mission/council 執行中:${blocker.topic || blocker.id}`;
   run.queuedBehindRunId = blocker.id;
   run.queuedStart = opt;
   if (!runQueuePending.includes(run.id)) runQueuePending.push(run.id);
@@ -4062,7 +4094,7 @@ function maybeQueueRunStart(run, opt) {
   }).indexOf(run.id) + 1;
   addArtifact(run, {
     type: 'note',
-    title: `⏳ 已排隊（同 project code queue #${position || runQueuePending.length}）`,
+    title: `⏳ 已排隊（同 project queue #${position || runQueuePending.length}）`,
     content: `${run.queuedReason}\nProject: ${key}`,
   });
   scheduleSave();
@@ -4158,7 +4190,7 @@ app.get('/api/runs', (req, res) => {
 });
 
 app.get('/api/models', (req, res) => {
-  res.json({ defaultCli: DEFAULT_AGENT_CLI, models: MODEL_CATALOG });
+  res.json({ defaultCli: DEFAULT_AGENT_CLI, glmDisabled: SWARM_DISABLE_GLM, models: MODEL_CATALOG });
 });
 
 app.get('/api/intent-packs', (req, res) => {
@@ -5158,7 +5190,10 @@ app.post('/api/runs/:id/council/start', async (req, res) => {
   if (wantPath) { try { run.projectPath = safeProjectPath(wantPath); } catch (_) {} }
   try {
     await ensureMissionTargetDraft(run, { taskBrief, cli: 'claude', model: 'sonnet' });
-    const pipeline = startPipeline(run, { deliveryMode: 'council', councilMode, perAgentModels, taskBrief });
+    const startOptions = { staged: true, deliveryMode: 'council', councilMode, perAgentModels, taskBrief };
+    const queued = maybeQueueRunStart(run, startOptions);
+    if (queued) return res.json({ ok: true, ...queued, run });
+    const pipeline = startPipeline(run, startOptions);
     io.emit('run-updated', publicRun(run));
     res.json({ ok: true, pipeline });
   } catch (e) { res.status(400).json({ error: e.message }); }

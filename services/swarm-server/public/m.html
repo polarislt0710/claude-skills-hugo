@@ -622,7 +622,7 @@ function openQuickRun(){const proj=localStorage.getItem('m-proj')||(state.projec
 async function doQuickRun(){const task=$('#qrTask').value.trim();if(!task){toast('寫低任務先',true);return;}const target=(($('#qrTarget')||{}).value||'').trim();const proj=localStorage.getItem('m-proj')||(state.projects[0]&&state.projects[0].path)||undefined;const mv=(localStorage.getItem('m-model')||'codex|gpt-5.5').split('|');const tg=localStorage.getItem('swarm-tguser')||undefined;closeSheet();try{const r=await api('/api/plans/run',{method:'POST',body:JSON.stringify({staged:true,taskBrief:task,projectPath:proj,deliveryMode:'code',cli:mv[0],model:mv[1],tgUser:tg,ownerUser:tg||undefined,notifyUser:tg||undefined,...missionPayload(task,target)})});toast(r.queued?('⏳ 已排隊 #'+(r.position||'')):'🔀 開工!');if(r.run){state.focusRunId=r.run.id;state.byId[r.run.id]=r.run;state.tab='mission';}await loadAll();}catch(e){toast(e.message,true);}}
 
 /* ───────── 開新嘢:直接 code / 傾諗法+開 AI 聯合國（Council 議會）（同 Telegram /council 一致）───────── */
-const COUNCIL_MODES={quick:'quick',balanced:'balanced',deep:'deep-grid'};
+const COUNCIL_MODES={quick:'quick',balanced:'balanced',deep6:'deep-6',deep:'deep-grid'};
 function openRunMenu(){openSheet('開新嘢',`
   <button class="big-choice" onclick="openQuickRun()"><b>🔀 直接落 code</b><span>你已經知要做咩 → research → build → review → fix</span></button>
   <button class="big-choice" onclick="openCouncilDraft()"><b>💡 傾諗法 + 開 AI 聯合國</b><span>諗法未完善 → Opus 幫你完善 → 過目 → 交 AI 聯合國評審收斂</span></button>`);}
@@ -652,6 +652,7 @@ function chooseCouncilStrength(taskBrief){if(!state.councilDraft)state.councilDr
   <p style="font-size:12px;color:var(--muted)">所有議會都會保留開拗收斂同 final arbiter。Scope: ${esc(intentPackLabel(state.councilDraft.intentPackKey))}${(state.councilDraft.domainModuleKeys||[]).length?' · Modules: '+esc((state.councilDraft.domainModuleKeys||[]).map(domainModuleLabel).join(', ')):''}</p>
   <button class="big-choice" onclick="startCouncilFromDraft(state.councilDraft.brief,'quick')"><b>⚡ 快速</b><span>3份：A 架構 · B 實作 · C 風險</span></button>
   <button class="big-choice" onclick="startCouncilFromDraft(state.councilDraft.brief,'balanced')"><b>⚖️ 平衡</b><span>6份：3 model 自由觀點 + 3硬角色（推薦）</span></button>
+  <button class="big-choice" onclick="startCouncilFromDraft(state.councilDraft.brief,'deep6')"><b>🔬 深度 6-review</b><span>6份：Opus + GPT-5.5 × 架構 / 實作 / 風險（GLM 不可用時推薦）</span></button>
   <button class="big-choice" onclick="startCouncilFromDraft(state.councilDraft.brief,'deep')"><b>🔬 深度 9-grid</b><span>9份：3 model × 架構 / 實作 / 風險</span></button>`);}
 async function startCouncilFromDraft(taskBrief,strength){taskBrief=(taskBrief||'').trim();if(!taskBrief){toast('冇內容開會',true);return;}
   const tg=localStorage.getItem('swarm-tguser')||undefined;const councilMode=COUNCIL_MODES[strength]||'balanced';closeSheet();

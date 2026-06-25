@@ -11,23 +11,26 @@
 //
 // /mission and /council flow: Opus 先完善 prompt → 過目 preview →
 //   ✅ 用完善版 / ✍️ 再俾意見完善（Opus 按意見再改，可無限重複）/ ↩️ 用我原本 / ❌ 取消
-//   確認後：mission 再揀 build model 落 code；council 揀快速 / 平衡 / 深度 9-grid。
+//   確認後：mission 再揀 build model 落 code；council 揀快速 / 平衡 / 深度 6-review / 9-grid。
 
 const http = require('http');
 const tg = require('./telegram');
 
 // Build-model choices offered when writing code. First = default (Codex).
-const MODEL_CHOICES = [
+const GLM_DISABLED = /^(1|true|yes|on)$/i.test(String(process.env.SWARM_DISABLE_GLM || ''));
+const MODEL_CHOICES_ALL = [
   { cli: 'codex',  model: 'gpt-5.5', label: 'Codex gpt-5.5' },
   { cli: 'claude', model: 'opus',    label: 'Opus 4.8' },
   { cli: 'claude', model: 'sonnet',  label: 'Sonnet' },
   { cli: 'glm',    model: 'glm-4.5', label: 'GLM 4.5' },
   { cli: 'glm',    model: 'glm-5.2', label: 'GLM 5.2（高負載）' },
 ];
+const MODEL_CHOICES = GLM_DISABLED ? MODEL_CHOICES_ALL.filter((m) => m.cli !== 'glm') : MODEL_CHOICES_ALL;
 
 const COUNCIL_MODES = {
   quick: { mode: 'quick', label: '快速', desc: '3份：A 架構 · B 實作 · C 風險' },
   balanced: { mode: 'balanced', label: '平衡', desc: '6份：3 model 自由觀點 + 3硬角色' },
+  deep6: { mode: 'deep-6', label: '深度 6-review', desc: '6份：Opus + GPT-5.5 × 架構 / 實作 / 風險' },
   deep: { mode: 'deep-grid', label: '深度 9-grid', desc: '9份：3 model × 架構 / 實作 / 風險' },
 };
 
@@ -50,7 +53,7 @@ const HELP = [
   '`/domainmodule [auto|none|assessment|ui|assessment,ui]` — 設定 domain module',
   '',
   '*開工*',
-  '`/council <題目>` — Opus 完善 → 過目 → 揀快速 / 平衡 / 深度 9-grid → 開 AI 聯合國',
+  '`/council <題目>` — Opus 完善 → 過目 → 揀快速 / 平衡 / 深度 6-review / 9-grid → 開 AI 聯合國',
   '自然講法亦得：「開聯合國議會」「將呢個 plan 擺去聯合國」「叫 AI 聯合國審一審」。',
   '`/mission <plan>` — Opus 完善 → 過目 → 揀 model 落 code',
   '`/debate [id尾段]` — Council 獨立 review 完後，開始拗入 moderator 收斂',
@@ -351,6 +354,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     return { inline_keyboard: [
       [{ text: `⚡ ${COUNCIL_MODES.quick.label} — ${COUNCIL_MODES.quick.desc}`, callback_data: 'cm:quick' }],
       [{ text: `⚖️ ${COUNCIL_MODES.balanced.label} — ${COUNCIL_MODES.balanced.desc}`, callback_data: 'cm:balanced' }],
+      [{ text: `🔬 ${COUNCIL_MODES.deep6.label} — ${COUNCIL_MODES.deep6.desc}`, callback_data: 'cm:deep6' }],
       [{ text: `🔬 ${COUNCIL_MODES.deep.label} — ${COUNCIL_MODES.deep.desc}`, callback_data: 'cm:deep' }],
     ] };
   }

@@ -2,11 +2,14 @@
 // This intentionally does not install Ruflo hooks/MCP; it borrows useful agent
 // concepts and keeps Hugo's Mission Pipeline as the control plane.
 
+const GLM_DISABLED = /^(1|true|yes|on)$/i.test(String(process.env.SWARM_DISABLE_GLM || ''));
+const DEFAULT_CODING_FALLBACK = GLM_DISABLED ? 'gpt-5.5' : (process.env.SWARM_DEFAULT_GLM_MODEL || 'glm-4.5');
+
 const DEFAULT_ROUTE = {
   contextScout: null,
   planner: 'gpt-5.5',
   coding: 'gpt-5.5',
-  codingFallback: process.env.SWARM_DEFAULT_GLM_MODEL || 'glm-4.5',
+  codingFallback: DEFAULT_CODING_FALLBACK,
   review: 'opus',
   refill: 'opus',
   finalSummary: 'opus',
@@ -351,7 +354,7 @@ function modelForRole(role, route) {
   if (role.group === 'review') return route.models.review;
   if (role.key === 'security-auditor') return route.models.review;
   if (role.group === 'risk') return route.models.refill || 'sonnet';
-  if (role.group === 'budget' || role.group === 'monitoring') return process.env.SWARM_DEFAULT_GLM_MODEL || 'glm-4.5';
+  if (role.group === 'budget' || role.group === 'monitoring') return DEFAULT_CODING_FALLBACK;
   if (role.group === 'quality') return route.models.refill || route.models.review;
   if (role.group === 'delivery') return route.models.finalSummary || route.models.refill || 'opus';
   return route.models.coding;
@@ -393,7 +396,7 @@ function buildIntelligence(planText, options = {}) {
 function normalizeModel(model) {
   if (!model) return model;
   const value = String(model).toLowerCase();
-  if (value === 'glm') return process.env.SWARM_DEFAULT_GLM_MODEL || 'glm-4.5';
+  if (value === 'glm' || (GLM_DISABLED && value.startsWith('glm'))) return DEFAULT_CODING_FALLBACK;
   if (value === 'claude') return 'opus';
   return value;
 }

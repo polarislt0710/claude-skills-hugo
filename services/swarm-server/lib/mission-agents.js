@@ -39,15 +39,17 @@ const CLI_REGISTRY = {
 };
 
 const DEFAULT_TIMEOUT_MS = Number(process.env.MISSION_AGENT_TIMEOUT_MS || 30 * 60 * 1000); // 30 min
+const GLM_DISABLED = /^(1|true|yes|on)$/i.test(String(process.env.SWARM_DISABLE_GLM || ''));
 
 function runAgent(opts) {
   const { model, prompt, cwd, onLine, onErr, timeoutMs } = opts;
-  if (!CLI_REGISTRY[model]) {
-    return Promise.reject(new Error(`unknown model: ${model} (valid: ${Object.keys(CLI_REGISTRY).join(', ')})`));
+  const effectiveModel = GLM_DISABLED && /^glm/i.test(String(model || '')) ? 'gpt-5.5' : model;
+  if (!CLI_REGISTRY[effectiveModel]) {
+    return Promise.reject(new Error(`unknown model: ${effectiveModel} (valid: ${Object.keys(CLI_REGISTRY).join(', ')})`));
   }
 
   return new Promise((resolve, reject) => {
-    const { bin, extraArgs } = CLI_REGISTRY[model];
+    const { bin, extraArgs } = CLI_REGISTRY[effectiveModel];
     const cmd = `${bin} ${extraArgs.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`;
 
     const child = spawn('bash', bashLoginArgs(cmd, 'mission-agent'), {
