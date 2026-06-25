@@ -454,6 +454,7 @@ function notifyPushResult(run, r) {
 // (OAuth Max,零增量成本)。全部邏輯 gate by p.mode==='council',唔影響既有 code/thinking pipeline。
 const SWARM_COUNCIL_MAX_ROUNDS = Number(process.env.SWARM_COUNCIL_MAX_ROUNDS || 5);      // 上限（實證+研究：value 集中頭 3-4 round,5+ 遞減/兜圈,故 8→5；MIN=3 保深度）
 const SWARM_COUNCIL_MIN_ROUNDS = Math.max(1, Number(process.env.SWARM_COUNCIL_MIN_ROUNDS || 3)); // 收斂下限：未夠 N round 唔准收工,逼再鑽深
+const SWARM_AUTO_COUNCIL_MIN_ROUNDS = Math.max(1, Number(process.env.SWARM_AUTO_COUNCIL_MIN_ROUNDS || SWARM_COUNCIL_MIN_ROUNDS)); // overnight 可自動過 gate，但預設唔降低深度
 const SWARM_COUNCIL_DROP_AFTER = Math.max(1, Number(process.env.SWARM_COUNCIL_DROP_AFTER || 3)); // 一個 model 連續 N round fail → 踢走唔再 spawn(degrade 到在席者)
 const SWARM_COUNCIL_TIME_BUDGET_MS = Number(process.env.SWARM_COUNCIL_TIME_BUDGET_MS || 0); // 0 = off
 const COUNCIL_DIR = (runId) => path.join(DATA_DIR, 'council', String(runId));
@@ -2941,7 +2942,8 @@ function advanceCouncil(run, p, stage, session) {
     content: `未解爭議: ${mod.openDisputes}\n${mod.disputes || '(none)'}${mod.planMd ? '' : '\n⚠ moderator 未輸出 plan-final block,沿用上一版。'}`,
   });
 
-  const reachedMin = p.councilRound >= SWARM_COUNCIL_MIN_ROUNDS;
+  const minRounds = shouldAutoCouncilGate(run, p) ? SWARM_AUTO_COUNCIL_MIN_ROUNDS : SWARM_COUNCIL_MIN_ROUNDS;
+  const reachedMin = p.councilRound >= minRounds;
   const trulyConverged = mod.converged && mod.openDisputes === 0;
   const converged = trulyConverged && reachedMin;          // 未夠 MIN round 唔准收工,逼佢再鑽深
   const maxedOut = p.councilRound >= SWARM_COUNCIL_MAX_ROUNDS;
@@ -2983,7 +2985,7 @@ function advanceCouncil(run, p, stage, session) {
   run.taskBrief = truncate(
     `## Goal\n${run.background || run.topic || ''}\n\n## 要評審嘅當前 Plan (v${plan.v})\n${plan.md}\n\n` +
     (deepening
-      ? `## 深度紀律（Round ${p.councilRound}/${SWARM_COUNCIL_MAX_ROUNDS}，議會規定最少 ${SWARM_COUNCIL_MIN_ROUNDS} round）\n` +
+      ? `## 深度紀律（Round ${p.councilRound}/${SWARM_COUNCIL_MAX_ROUNDS}，議會規定最少 ${minRounds} round）\n` +
         `Plan 表面上已收斂,但未到深度下限唔准收工。呢一 round **唔好複述同意**,要主動鑽深:\n` +
         `- 逐個 phase / 改動,用 Read+grep 揾返 project 入面**未覆蓋嘅 edge case、失敗模式、隱性依賴、向後兼容風險**。\n` +
         `- 至少提出 1 個「如果照而家 plan 做,邊度會出事」嘅具體情境 + 點改。\n` +
@@ -3082,8 +3084,38 @@ function pauseForHumanGate(run, p, why) {
   run.status = 'active';
   io.emit('run-updated', publicRun(run));
   io.emit('council-paused', { runId: run.id, planVersion: p.councilPlanVersion, openDisputes: p.councilOpenDisputes });
-  notifyCouncilGate(run, p, reason);
   scheduleSave();
+  if (shouldAutoCouncilGate(run, p)) {
+    addArtifact(run, { type: 'note', title: '🤖 Overnight review 自動通過報告閘', content: '此 run 由 codex-overnight-setup 建立，只自動生成最終報告，不會自動落 code / execute。' });
+    setImmediate(() => continueCouncilApproval(run, p, { auto: true }));
+  } else {
+    notifyCouncilGate(run, p, reason);
+  }
+}
+
+function shouldAutoCouncilGate(run, p) {
+  if (!run || !p) return false;
+  if (/^(1|true|yes|on)$/i.test(String(process.env.SWARM_AUTO_COUNCIL_GATES || ''))) return true;
+  return run.createdFrom === 'codex-overnight-setup' || run.autoCouncilGates === true;
+}
+
+function continueCouncilApproval(run, p, options = {}) {
+  if (!p || !p.councilPaused) return { ok: false, error: '冇 council 御准閘可批准' };
+  const idx = p.stages.findIndex((s) => s.kind === 'explainer');
+  if (idx < 0) return { ok: false, error: '冇 explainer stage' };
+  const plan = readLatestPlan(run);
+  run.taskBrief = truncate(`## 已批准嘅終稿 Plan (v${plan.v})\n\n${plan.md}`, MAX_CONTEXT_CHARS);
+  p.councilPaused = false;
+  p.stopped = false;
+  p.stages[idx].status = 'pending';
+  p.stages[idx].sessionId = null;
+  p.current = idx - 1;
+  run.status = 'executing';
+  addArtifact(run, { type: 'note', title: options.auto ? `🤖 自動批准 plan v${plan.v} → 生成人話講解` : `✅ 已批准 plan v${plan.v} → 生成人話講解`, content: '' });
+  scheduleSave();
+  io.emit('run-updated', publicRun(run));
+  advancePipeline(run);
+  return { ok: true, approvedVersion: plan.v };
 }
 
 // Review 閘:第一輪 Council review(每個自己掃 project + plan)完,停低俾用戶睇齊,
@@ -3104,8 +3136,38 @@ function pauseForReviewGate(run, p, reviews) {
   run.status = 'active';
   io.emit('run-updated', publicRun(run));
   io.emit('council-review-paused', { runId: run.id, reviewCount: reviews.length });
-  notifyCouncilReviewGate(run, reviews);
   scheduleSave();
+  if (shouldAutoCouncilGate(run, p)) {
+    addArtifact(run, { type: 'note', title: '🤖 Overnight review 自動開始拗', content: '6-review 已完成，系統會自動進入 moderator 收斂，避免排隊 mission 停住。' });
+    setImmediate(() => continueCouncilDebate(run, p, { auto: true }));
+  } else {
+    notifyCouncilReviewGate(run, reviews);
+  }
+}
+
+function continueCouncilDebate(run, p, options = {}) {
+  if (!p || !p.councilReviewPaused) return { ok: false, error: '冇 review 閘可開拗' };
+  p.councilReviewPaused = false;
+  p.councilDebateStarted = true;
+  p.stopped = false;
+  run.status = 'executing';
+  const angles = (p.pendingResearchAngles || []).filter(Boolean);
+  scheduleSave();
+  io.emit('run-updated', publicRun(run));
+  if (angles.length) {
+    runCouncilResearch(run, p, angles, p.pendingResearchQuery || run.topic || '').catch((e) => {
+      console.warn('[council] research threw:', e.message);
+      try { addArtifact(run, { type: 'note', title: '⚠ research 例外', content: e.message }); advancePipeline(run); } catch (_) {}
+    });
+  } else {
+    addArtifact(run, {
+      type: 'note',
+      title: options.auto ? '🤖 自動開始辯論 → moderator 收斂' : '🥊 開始辯論 → moderator 收斂',
+      content: 'Council review 完，冇提出要 research，直接開拗。',
+    });
+    advancePipeline(run);
+  }
+  return { ok: true, research: angles.length > 0 };
 }
 
 function maybeAdvancePipeline(run, session) {
@@ -4865,22 +4927,9 @@ app.post('/api/runs/:id/council/approve', (req, res) => {
   const run = findRunOr404(req.params.id, res);
   if (!run) return;
   const p = run.pipeline;
-  if (!p || !p.councilPaused) return res.status(400).json({ error: '冇 council 御准閘可批准' });
-  const idx = p.stages.findIndex((s) => s.kind === 'explainer');
-  if (idx < 0) return res.status(400).json({ error: '冇 explainer stage' });
-  const plan = readLatestPlan(run);
-  run.taskBrief = truncate(`## 已批准嘅終稿 Plan (v${plan.v})\n\n${plan.md}`, MAX_CONTEXT_CHARS);
-  p.councilPaused = false;
-  p.stopped = false;
-  p.stages[idx].status = 'pending';
-  p.stages[idx].sessionId = null;
-  p.current = idx - 1;
-  run.status = 'executing';
-  addArtifact(run, { type: 'note', title: `✅ 已批准 plan v${plan.v} → 生成人話講解`, content: '' });
-  scheduleSave();
-  io.emit('run-updated', publicRun(run));
-  advancePipeline(run);
-  res.json({ ok: true, approvedVersion: plan.v });
+  const result = continueCouncilApproval(run, p, { auto: false });
+  if (!result.ok) return res.status(400).json({ error: result.error });
+  res.json(result);
 });
 
 // 再改 → 加用戶指示(最高優先)、重跑一 round consensus(councilRound++,封頂 MAX)。
@@ -4919,25 +4968,9 @@ app.post('/api/runs/:id/council/debate', (req, res) => {
   const run = findRunOr404(req.params.id, res);
   if (!run) return;
   const p = run.pipeline;
-  if (!p || !p.councilReviewPaused) return res.status(400).json({ error: '冇 review 閘可開拗' });
-  p.councilReviewPaused = false;
-  p.councilDebateStarted = true;
-  p.stopped = false;
-  run.status = 'executing';
-  const angles = (p.pendingResearchAngles || []).filter(Boolean);
-  scheduleSave();
-  io.emit('run-updated', publicRun(run));
-  res.json({ ok: true, research: angles.length > 0 });
-  // 有角度 → 背景集中 call Perplexity 一次,攞到資料先入仲裁;冇 → 直接開拗。
-  if (angles.length) {
-    runCouncilResearch(run, p, angles, p.pendingResearchQuery || run.topic || '').catch((e) => {
-      console.warn('[council] research threw:', e.message);
-      try { addArtifact(run, { type: 'note', title: '⚠ research 例外', content: e.message }); advancePipeline(run); } catch (_) {}
-    });
-  } else {
-    addArtifact(run, { type: 'note', title: '🥊 開始辯論 → moderator 收斂', content: 'Council review 完，冇提出要 research，直接開拗。' });
-    advancePipeline(run);
-  }
+  const result = continueCouncilDebate(run, p, { auto: false });
+  if (!result.ok) return res.status(400).json({ error: result.error });
+  res.json(result);
 });
 
 // 落實:批准後將議會終稿 plan 交 code pipeline(build→review→fix)真正喺 project 實作。
