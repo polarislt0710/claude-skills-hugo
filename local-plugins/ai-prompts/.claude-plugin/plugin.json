@@ -1,5 +1,6 @@
 {
   "name": "ai-prompts",
+  "version": "1.0.1",
   "description": "AI generation prompt builders - image, single-shot video, multi-shot video",
   "skills": [
     "./skills/image",

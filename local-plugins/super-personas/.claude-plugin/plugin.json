@@ -1,5 +1,6 @@
 {
   "name": "super-personas",
+  "version": "1.0.1",
   "description": "Cognitive persona framework - 6 specialized engineering mindsets",
   "skills": [
     "./skills/architect",

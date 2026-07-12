@@ -1,0 +1,15 @@
+{
+  "name": "workflow-tools",
+  "version": "1.0.0",
+  "description": "Dev workflow & meta toolkit - PAUL loop, project incubation, structured ideation, recency research, CLI automation, stack scaffolding, CLAUDE.md config, ecosystem directory",
+  "skills": [
+    "./skills/paul-loop",
+    "./skills/seed",
+    "./skills/brainstormers",
+    "./skills/everything-code",
+    "./skills/cli-anything",
+    "./skills/research-last30days",
+    "./skills/awesome-code-skills",
+    "./skills/gstack"
+  ]
+}

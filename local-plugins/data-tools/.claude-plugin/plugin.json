@@ -1,0 +1,8 @@
+{
+  "name": "data-tools",
+  "version": "1.0.0",
+  "description": "Data analysis tools - DuckDB in-process SQL analytics on CSV/Parquet/JSON",
+  "skills": [
+    "./skills/duckdb-data"
+  ]
+}

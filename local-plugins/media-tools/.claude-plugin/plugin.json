@@ -1,0 +1,9 @@
+{
+  "name": "media-tools",
+  "version": "1.0.0",
+  "description": "Programmatic media generation - Cantonese TTS (cantonese.ai) and Remotion code-driven video",
+  "skills": [
+    "./skills/cantonese-ai",
+    "./skills/remotion"
+  ]
+}

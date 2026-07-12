@@ -1,10 +1,13 @@
 {
   "name": "design",
-  "description": "20 professional design rules across typography, color, layout, components - WCAG-compliant",
+  "version": "1.1.0",
+  "description": "Professional design system - typography, color, layout, components (WCAG-compliant) + web motion design + aesthetic reference library",
   "skills": [
     "./skills/typography",
     "./skills/color",
     "./skills/layout",
-    "./skills/components"
+    "./skills/components",
+    "./skills/web-motion-design",
+    "./skills/taste"
   ]
 }

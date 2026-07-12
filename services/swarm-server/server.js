@@ -499,10 +499,10 @@ const SKILL_REGISTRY = {
   'color':       { plugin: 'design', skill: 'color' },
   'layout':      { plugin: 'design', skill: 'layout' },
   'components':  { plugin: 'design', skill: 'components' },
-  // standalone skills
-  'brainstormers':  { standalone: 'brainstormers' },
-  'taste-skill':    { standalone: 'taste-skill' },
-  'execution-discipline': { standalone: 'execution-discipline' },
+  // migrated to hugo-personal plugins (2026-07 skills consolidation)
+  'brainstormers':  { plugin: 'workflow-tools', skill: 'brainstormers' },
+  'taste-skill':    { plugin: 'design', skill: 'taste' },
+  'execution-discipline': { plugin: 'swarm-tools', skill: 'execution-discipline' },
 };
 
 function resolveSkillPath(entry) {

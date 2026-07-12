@@ -1,5 +1,6 @@
 {
   "name": "marketing",
+  "version": "1.0.1",
   "description": "Marketing strategy & execution skills - copywriting, content, growth, conversion, SEO",
   "skills": [
     "./skills/copywriting",
