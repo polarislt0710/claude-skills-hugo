@@ -395,6 +395,16 @@ function renderMission(){
     <div class="ctitle" style="font-size:13.5px">${esc((targetText(r)||r.taskBrief||r.topic||'').slice(0,140))}</div>
     <div class="cdesc" style="-webkit-line-clamp:3">${esc((r.globalGoal||'').slice(0,220))}</div>
     <div class="cmeta"><span class="chip">scope ${esc((r.intentPackSnapshot&&(r.intentPackSnapshot.shortLabel||r.intentPackSnapshot.label))||r.intentPackLabel||r.intentPackKey||'General')}</span>${(r.domainModuleSnapshots||[]).length?`<span class="chip">modules ${esc((r.domainModuleSnapshots||[]).map(m=>m.shortLabel||m.label).join(', '))}</span>`:''}<span class="chip">handoffs ${(r.handoffs||[]).length||r.handoffCount||0}</span><span class="chip">target ${esc((r.missionTarget&&r.missionTarget.source)||'auto')}</span><span class="chip">MC v${esc(r.missionControlVersion||0)}</span></div></div>`;
+  const crs=r.changeReports||[];
+  if(crs.length){
+    const last=crs[crs.length-1];
+    const files=(last.filesChanged||[]).slice(0,8).map(f=>`${f.status||'M'} ${f.path}${(f.adds!=null||f.dels!=null)?` +${f.adds||0}/−${f.dels||0}`:''}`);
+    const more=((last.filesChanged||[]).length-files.length)+(last.filesOmitted||0);
+    html+=`<div class="card" onclick="toggleChanges()"><span class="cat-chip" style="color:#3fb26f;background:rgba(63,178,111,.14)">📝 改咗乜</span>
+    <div class="cdesc" style="font-family:ui-monospace,monospace;font-size:11.5px;white-space:pre-wrap;-webkit-line-clamp:unset">${esc(files.join('\n')+(more>0?`\n…仲有 ${more} 個 file`:''))}</div>
+    <div class="sumrow"><span>${crs.length} 個 stage 有改動</span><span>+${last.totalAdds||0}/−${last.totalDels||0} ${state.openChanges?'▲':'▼ 撳開全部'}</span></div>
+    ${state.openChanges?`<div class="logbox" style="max-height:220px;font-size:11px;white-space:pre-wrap;margin-top:7px">${esc(crs.map(c=>`── ${c.stageTitle||c.stageKey||'stage'}${c.followupSeq?` · 跟進#${c.followupSeq}`:''} ──\n${c.diffStat||'(no stat)'}`).join('\n\n'))}</div>`:''}</div>`;
+  }
   if(state.missionSub==='agents'){
     html+=renderAgentsList(r);
   }else{
@@ -430,6 +440,7 @@ function miniCard(a){const mm=modelMeta(a.cli,a.model);
     <div class="prog" style="width:100%;margin-top:2px"><span style="width:${progressOf(a)}%"></span></div></div>`;}
 function bindMinis(){document.querySelectorAll('canvas[data-agent]').forEach(c=>{const f=findAgentById(c.dataset.agent);if(f)drawMini(c,f.a);});kickAnim();}
 function toggleStage(k){state.openStage=state.openStage===k?null:k;scheduleRender();}
+function toggleChanges(){state.openChanges=!state.openChanges;scheduleRender();}
 function selectAgent(id){state.selAgentId=id;state.tab='activity';state.activityView='agent';scheduleRender();}
 
 /* ───────── Tab 3: Activity ───────── */

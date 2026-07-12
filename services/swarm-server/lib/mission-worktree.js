@@ -150,6 +150,103 @@ function commitDirty({ repo, message }) {
   return commitWorktree({ dir: repo, message: message || 'swarm: snapshot mission output' });
 }
 
+// Capture what changed in a repo since baselineSha: the committed range
+// (baseline..HEAD, covers agent commits + merged worktree branches), plus
+// uncommitted working-tree changes, plus untracked files. Read-only, never
+// throws — git failures land in `error` while keeping whatever succeeded.
+// Returns { baselineSha, headSha, filesChanged:[{path,status,adds,dels}],
+//           filesOmitted, diffStat, totalAdds, totalDels, patch, patchTruncated, error }.
+function captureChanges({ repo, baselineSha, maxPatchBytes = 65536, maxFiles = 200 }) {
+  const base = baselineSha || null;
+  const head = headSha(repo);
+  if (!head) {
+    return { baselineSha: base, headSha: null, filesChanged: [], filesOmitted: 0, diffStat: '', totalAdds: 0, totalDels: 0, patch: '', patchTruncated: false, error: 'not a git repo (rev-parse HEAD failed)' };
+  }
+
+  const files = new Map(); // path → {path, status, adds, dels}; committed entries win over uncommitted
+  const statBlocks = [];
+  const patchBlocks = [];
+  let error = null;
+
+  const addFile = (path, status, adds, dels, weak) => {
+    if (!path) return;
+    if (files.has(path) && weak) return;
+    files.set(path, { path, status, adds, dels });
+  };
+
+  const collect = (rangeArgs, label) => {
+    const weak = label !== 'committed';
+    const ns = gitSafe(repo, ['diff', '--name-status', ...rangeArgs]);
+    const num = gitSafe(repo, ['diff', '--numstat', ...rangeArgs]);
+    const stat = gitSafe(repo, ['diff', '--stat', ...rangeArgs]);
+    const pat = gitSafe(repo, ['diff', ...rangeArgs]);
+    if (!ns.ok && !num.ok) { error = error || `${label}: ${ns.err || num.err}`; return; }
+    const statusOf = new Map();
+    if (ns.ok) ns.out.split('\n').filter(Boolean).forEach((line) => {
+      const parts = line.split('\t');
+      if (parts.length < 2) return;
+      statusOf.set(parts[parts.length - 1], parts[0].charAt(0));
+    });
+    const seen = new Set();
+    if (num.ok) num.out.split('\n').filter(Boolean).forEach((line) => {
+      const m = line.split('\t');
+      if (m.length < 3) return;
+      const adds = m[0] === '-' ? null : (parseInt(m[0], 10) || 0);
+      const dels = m[1] === '-' ? null : (parseInt(m[1], 10) || 0);
+      const p = m.slice(2).join('\t');
+      seen.add(p);
+      addFile(p, statusOf.get(p) || 'M', adds, dels, weak);
+    });
+    // name-status entries numstat missed (e.g. mode-only changes)
+    statusOf.forEach((st, p) => { if (!seen.has(p)) addFile(p, st, null, null, weak); });
+    if (stat.ok && stat.out) statBlocks.push(weak ? `(uncommitted)\n${stat.out}` : stat.out);
+    if (pat.ok && pat.out) patchBlocks.push(weak ? `--- (uncommitted working tree) ---\n${pat.out}` : pat.out);
+  };
+
+  if (base && base !== head) collect([`${base}..HEAD`], 'committed');
+  collect(['HEAD'], 'uncommitted');
+
+  const st = gitSafe(repo, ['status', '--porcelain']);
+  if (st.ok) st.out.split('\n').filter(Boolean).forEach((line) => {
+    if (!line.startsWith('??')) return;
+    let p = line.slice(3);
+    if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
+    addFile(p, '??', null, null, true);
+  });
+
+  let totalAdds = 0;
+  let totalDels = 0;
+  files.forEach((f) => { totalAdds += f.adds || 0; totalDels += f.dels || 0; });
+
+  let patch = patchBlocks.join('\n');
+  let patchTruncated = false;
+  const patchBytes = Buffer.byteLength(patch, 'utf8');
+  if (patchBytes > maxPatchBytes) {
+    patch = Buffer.from(patch, 'utf8').subarray(0, maxPatchBytes).toString('utf8')
+      + `\n...[patch truncated, ${patchBytes - maxPatchBytes} more bytes — 完整 diff 用 git 睇]`;
+    patchTruncated = true;
+  }
+
+  let diffStat = statBlocks.join('\n');
+  if (diffStat.length > 4000) diffStat = `${diffStat.slice(0, 4000)}\n...[stat truncated]`;
+
+  const all = Array.from(files.values());
+  const filesChanged = all.slice(0, maxFiles);
+
+  return {
+    baselineSha: base,
+    headSha: head,
+    filesChanged,
+    filesOmitted: Math.max(0, all.length - filesChanged.length),
+    diffStat,
+    totalAdds,
+    totalDels,
+    patch,
+    patchTruncated,
+    error,
+  };
+}
+
 // Merge a sub-phase branch back into the main repo's current branch.
 // Clean → { ok:true }. Conflict/failure → abort + { ok:false, conflict:true }.
 function mergeWorktree({ repo, branch, message }) {
@@ -199,4 +296,5 @@ module.exports = {
   isClean,
   commitDirty,
   pushBranch,
+  captureChanges,
 };

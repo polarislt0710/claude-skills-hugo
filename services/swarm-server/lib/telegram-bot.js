@@ -883,6 +883,38 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     }
     if (dataStr.startsWith('mm:')) { const p = dataStr.split(':'); await doMission(p[1], p[2]); return; }
 
+    // 改咗乜（全清單）:cr:<runTail> → server 記錄嘅 change reports,plain 分段送
+    if (dataStr.startsWith('cr:')) {
+      const tail = dataStr.split(':')[1];
+      const run = await findRunByTail(tail);
+      if (!run) { await say('搵唔到對應嘅 run。'); return; }
+      const r = await api('GET', `/api/runs/${run.id}/changes?patch=0`);
+      const reports = (r.json && r.json.reports) || [];
+      if (!reports.length) { await say('呢個 run 冇 change report（唔係 git repo 或者冇改到 file）。'); return; }
+      const t = (r.json && r.json.totals) || {};
+      const blocks = [`📝 改咗乜 · ${run.topic || run.id}\n合共 ${t.reports || reports.length} 個 stage,${t.files || '?'} 個 file（+${t.adds || 0}/−${t.dels || 0}）`];
+      for (const rep of reports) {
+        const files = (rep.filesChanged || [])
+          .map((f) => `  ${f.status || 'M'} ${f.path}${(f.adds != null || f.dels != null) ? ` +${f.adds || 0}/−${f.dels || 0}` : ''}`);
+        if (rep.filesOmitted) files.push(`  …仲有 ${rep.filesOmitted} 個未列`);
+        blocks.push([
+          `── ${rep.stageTitle || rep.stageKey || 'stage'}${rep.followupSeq ? ` · 跟進#${rep.followupSeq}` : ''} ──`,
+          `${(rep.filesChanged || []).length} file · +${rep.totalAdds || 0}/−${rep.totalDels || 0}${rep.error ? ` · ⚠${rep.error}` : ''}`,
+          ...files,
+        ].join('\n'));
+      }
+      blocks.push('完整 diff 開 Swarm Dashboard 個 run 睇「改咗乜」panel。');
+      // 分段 ≤3500 字 plain 送（Telegram 上限 4096）
+      let chunk = '';
+      for (const b of blocks) {
+        if (chunk && (chunk.length + b.length + 2) > 3500) { await say(chunk, { plain: true }); chunk = ''; }
+        chunk = chunk ? `${chunk}\n\n${b}` : b;
+        while (chunk.length > 3500) { await say(chunk.slice(0, 3500), { plain: true }); chunk = chunk.slice(3500); }
+      }
+      if (chunk) await say(chunk, { plain: true });
+      return;
+    }
+
     // 任務一:Push gate 確認（pg:<action>:<runTail>[:idx]）
     if (dataStr.startsWith('pg:')) {
       const parts = dataStr.split(':'); // pg : action : tail [: idx]

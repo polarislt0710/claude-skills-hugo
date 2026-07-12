@@ -256,6 +256,14 @@ const SWARM_REVIEW_GATE = envFlag('SWARM_REVIEW_GATE', true);
 const SWARM_REVIEW_GATE_MAX = Number(process.env.SWARM_REVIEW_GATE_MAX || 2);
 const SWARM_REVIEW_GATE_STRICT = envFlag('SWARM_REVIEW_GATE_STRICT', true);
 const SWARM_GATE_TIME_BUDGET_MS = Number(process.env.SWARM_GATE_TIME_BUDGET_MS || 0);
+// Change reports: server-side git capture of what each code wave actually changed
+// (baseline..HEAD + working tree + untracked) — agent self-reporting 唔靠得住。
+// Caps keep the persisted store sane.
+const SWARM_CHANGEREPORT_PATCH_MAX = Number(process.env.SWARM_CHANGEREPORT_PATCH_MAX || 65536);
+const SWARM_CHANGEREPORT_KEEP = Number(process.env.SWARM_CHANGEREPORT_KEEP || 20);
+const SWARM_CHANGEREPORT_PATCH_BUDGET = Number(process.env.SWARM_CHANGEREPORT_PATCH_BUDGET || 196608);
+// Warm followup MAY resume the previous build agent's CLI session (claude only).
+const SWARM_FOLLOWUP_RESUME = envFlag('SWARM_FOLLOWUP_RESUME', false);
 
 // ─── Telegram 通知（銜接舊 bot;lib/telegram 喺 TG_BOT_TOKEN/TG_CHAT_ID 未設時 graceful no-op）───
 // 只喺關鍵節點 ping：review 閘、御准閘（等你批）、完成（議會收斂 / plan 落實）、agent 失敗。
@@ -302,17 +310,38 @@ function notifyCouncilReviewGate(run, reviews) {
 }
 function notifyRunComplete(run, tag) {
   if (!run || !run.id) return;
-  const key = `${run.id}:${tag}`;
+  // pipelineSeq 入 key：followup 喺同一 run 起第二條 pipeline,完成要再通知（唔係 dedup 食咗）。
+  const key = `${run.id}:${tag}:${run.pipelineSeq || 0}`;
   if (tgNotifiedKeys.has(key)) return;
   tgNotifiedKeys.add(key);
   const title = tag === 'pipeline' ? '✅ *Plan 落實完成*' : '✅ *議會收斂完成*';
-  const note = tag === 'pipeline'
-    ? 'build → review → fix 跑完,去睇改咗咩 + 驗證結果'
-    : '人話講解 + plan 終稿已出,可以開始落實';
-  const markup = tag === 'synthesis'
-    ? { inline_keyboard: [[{ text: '▶ 落實 plan', callback_data: `cg:execute:${runTail(run)}` }]] }
+  const tail = runTail(run);
+  let markup = tag === 'synthesis'
+    ? { inline_keyboard: [[{ text: '▶ 落實 plan', callback_data: `cg:execute:${tail}` }]] }
     : null;
-  tgNotify(`${title}\n\n🏛 ${tgEsc(run.topic)}\n${note}\n\n→ 開 [Swarm Dashboard](${SWARM_DASH_URL})`, markup, run && run.tgChatId);
+  const lines = [title, '', `🏛 ${tgEsc(run.topic)}`];
+  if (tag === 'pipeline') {
+    lines.push(`Run: \`${tail}\``);
+    lines.push(`build → review → fix 跑完 · verify ${run.verifyVerdict || '—'}`);
+    const latest = (run.changeReports || [])[(run.changeReports || []).length - 1];
+    if (latest) {
+      lines.push('', `📝 改咗 ${latest.filesChanged.length} 個 file（+${latest.totalAdds}/−${latest.totalDels}）:`);
+      summarizeChangeLines(latest, 8).forEach((l) => lines.push(`\`${l.replace(/`/g, "'")}\``));
+      markup = { inline_keyboard: [[
+        { text: '🔍 改咗乜(全)', callback_data: `cr:${tail}` },
+        { text: '🔁 跟進', callback_data: `fu:${tail}` },
+      ]] };
+    } else {
+      lines.push('（今次冇 change report — 可能唔係 git repo 或者冇改到 file）');
+      markup = { inline_keyboard: [[{ text: '🔁 跟進', callback_data: `fu:${tail}` }]] };
+    }
+  } else {
+    lines.push('人話講解 + plan 終稿已出,可以開始落實');
+  }
+  lines.push('', `→ 開 [Swarm Dashboard](${SWARM_DASH_URL})`);
+  let text = lines.join('\n');
+  if (text.length > 3500) text = `${text.slice(0, 3480)}\n…(cut)`;
+  tgNotify(text, markup, run && run.tgChatId);
   if (tag === 'pipeline') autoReviewOnComplete(run);
   // 預熱「下一步」收斂層（背景,best-effort）—— 用戶完成後一 tap 即出,唔使等 LLM。SWARM_NEXTSTEPS=0 可關。
   if (process.env.SWARM_NEXTSTEPS !== '0') { try { generateNextSteps(run); } catch (_) {} }
@@ -324,10 +353,12 @@ function autoReviewOnComplete(run) {
   if (!run || !run.tgChatId) return; // 只自動覆核 Telegram 開嘅 run
   const arts = (run.artifacts || []).slice(-8)
     .map((a) => `### ${a.title || a.type}\n${truncate(String(a.content || ''), 1200)}`).join('\n\n');
+  const changesTxt = summarizeChangeReportsText(run, 2500);
   const prompt = [
     `你係用戶嘅 Swarm 總管。一個喺 project ${run.projectPath || ''} 跑嘅 mission「${run.topic}」啱啱 build→review→fix→verify 完成。`,
-    '下面係佢嘅產出 / log。用繁體中文 / 廣東話俾**簡短** feedback（最多 6-8 句）：',
-    '做咗咩、質素好唔好、有冇🔴紅旗（verify FAIL/BLOCKED、reviewer 未解 FIX_NEEDED、未跑真 e2e、改錯範圍）、建議下一步。唔好覆述全部 log。',
+    '下面係 server 記錄嘅實際 git 改動 + 佢嘅產出 / log。用繁體中文 / 廣東話俾**簡短** feedback（最多 6-8 句）：',
+    '做咗咩、質素好唔好、有冇🔴紅旗（verify FAIL/BLOCKED、reviewer 未解 FIX_NEEDED、未跑真 e2e、改錯範圍 — 對住下面 git 改動判斷）、建議下一步。唔好覆述全部 log。',
+    '', '=== 今次 git 改動（server 記錄,唔係 agent 自報）===', changesTxt || '(冇 change report — 唔係 git repo 或者冇改到 file)',
     '', '=== 產出 ===', arts || '(冇 artifact)',
   ].join('\n');
   spawnOneShot(prompt, { cli: 'claude', model: 'opus' }, 'swarm-autoreview', 420000)
@@ -1745,6 +1776,10 @@ function normalizeRun(run) {
   run.completionVerdict = run.completionVerdict || null;
   run.reviewVerdict = run.reviewVerdict || null;
   run.verifyVerdict = run.verifyVerdict || null;
+  run.changeReports = Array.isArray(run.changeReports) ? run.changeReports : [];
+  run.followups = Array.isArray(run.followups) ? run.followups : [];
+  run.followupBaseBrief = run.followupBaseBrief || null;
+  run.pipelineSeq = Number(run.pipelineSeq || 0);
   run.queueScope = run.queueScope || null;
   run.queueKey = run.queueKey || null;
   run.queuedReason = run.queuedReason || null;
@@ -2056,6 +2091,10 @@ function createRun({ topic, personas, chatContext, sessionId, projectPath, sourc
     completionVerdict: null,
     reviewVerdict: null,
     verifyVerdict: null,
+    changeReports: [],
+    followups: [],
+    followupBaseBrief: null,
+    pipelineSeq: 0,
     queueScope: null,
     queueKey: null,
     queuedReason: null,
@@ -2203,6 +2242,10 @@ function freshIdleState() {
     completionVerdict: null,
     reviewVerdict: null,
     verifyVerdict: null,
+    changeReports: [],
+    followups: [],
+    followupBaseBrief: null,
+    pipelineSeq: 0,
     queueScope: null,
     queueKey: null,
     queuedReason: null,
@@ -2536,7 +2579,9 @@ function spawnChatTurn(run, picked, chatCwd, finalize, fallbackUsed = false) {
 const MISSION_REFINE_PROMPT = [
   '你係資深 tech lead,幫手完善開發任務嘅 brief。',
   '將用戶粗略嘅需求,整理成一份清晰、可以直接落手做嘅 implementation brief,包含：',
-  '【背景與目標】、【範圍（明確要做 ＋ 明確唔做乜）】、【建議步驟】、【驗收標準】。',
+  '【背景與目標】、【範圍（明確要做 ＋ 明確唔做乜）】、【建議步驟】、【驗收清單】。',
+  '【驗收清單】必須係可執行清單,每項一行:「☐ <驗收點> → 執行:`<真實 command 或 URL>` → 期望:<具體 output / 現象>」。',
+  '指令要喺 project 入面真行得(curl / npm test / node script / 開邊個 URL 睇乜),唔准寫「應該正常運作」呢類冇得驗證嘅句子。',
   '保留用戶原意,補返佢可能漏咗嘅技術細節同 edge case;唔好擅自加佢冇要求嘅 feature 或者過度膨脹。',
 ].join('\n');
 const COUNCIL_REFINE_PROMPT = [
@@ -2626,6 +2671,85 @@ function mergeSessionWorktrees(run, session) {
   }
 }
 
+// ─── Change reports:「改咗乜」由 server 自己 capture（唔靠 agent 自報）───
+// After a code wave finishes (worktrees already merged back), diff the repo
+// against the wave's baseline and persist a structured record on the run.
+// Best-effort — never throws, never blocks the pipeline.
+function captureSessionChanges(run, session) {
+  try {
+    if (!session || !session.gitRepo || !session.gitBaseline) return;
+    const report = worktreeMgr.captureChanges({
+      repo: session.gitRepo,
+      baselineSha: session.gitBaseline,
+      maxPatchBytes: SWARM_CHANGEREPORT_PATCH_MAX,
+    });
+    if (!report) return;
+    if (!report.filesChanged.length) {
+      if (report.error) console.warn('[change-report]', session.pipelineStageKey || session.id, report.error);
+      return; // 冇改到嘢 → 唔嘈
+    }
+    run.changeReports = Array.isArray(run.changeReports) ? run.changeReports : [];
+    const entry = {
+      id: id('chg'),
+      stageKey: session.pipelineStageKey || null,
+      stageTitle: session.title || '',
+      sessionId: session.id,
+      followupSeq: (run.followups || []).length,
+      ts: new Date().toISOString(),
+      ...report,
+    };
+    run.changeReports.push(entry);
+    // Caps: at most N reports; strip patches (keep stats) once the per-run patch budget blows.
+    while (run.changeReports.length > SWARM_CHANGEREPORT_KEEP) run.changeReports.shift();
+    let patchBudget = 0;
+    for (let i = run.changeReports.length - 1; i >= 0; i -= 1) {
+      const r = run.changeReports[i];
+      patchBudget += Buffer.byteLength(r.patch || '', 'utf8');
+      if (patchBudget > SWARM_CHANGEREPORT_PATCH_BUDGET && r.patch) { r.patch = ''; r.patchTruncated = true; }
+    }
+    addArtifact(run, {
+      type: 'change-report',
+      title: `📝 改咗乜 · ${entry.stageTitle || entry.stageKey || 'code wave'}`,
+      content: [
+        `${entry.filesChanged.length} 個 file（+${entry.totalAdds}/−${entry.totalDels}）${entry.filesOmitted ? `，另有 ${entry.filesOmitted} 個未列` : ''}`,
+        summarizeChangeLines(entry, 12).join('\n'),
+        entry.error ? `⚠ capture 部分失敗: ${entry.error}` : '',
+        '',
+        entry.diffStat,
+      ].filter(Boolean).join('\n'),
+    });
+    io.emit('change-report', { runId: run.id, report: { ...entry, patch: undefined } });
+    scheduleSave();
+  } catch (e) {
+    console.warn('[change-report]', e && e.message);
+  }
+}
+
+// Per-file lines「M path +adds/−dels」— TG / artifact / prompt 通用。
+function summarizeChangeLines(report, maxFiles = 8) {
+  const files = (report && report.filesChanged) || [];
+  const lines = files.slice(0, maxFiles).map((f) => {
+    const counts = (f.adds != null || f.dels != null) ? ` +${f.adds || 0}/−${f.dels || 0}` : '';
+    return `${f.status || 'M'} ${f.path}${counts}`;
+  });
+  const more = (files.length - lines.length) + ((report && report.filesOmitted) || 0);
+  if (more > 0) lines.push(`…仲有 ${more} 個 file`);
+  return lines;
+}
+
+// Compact cross-report text for LLM prompts（autoReview / next-steps / fixer / verifier）。
+function summarizeChangeReportsText(run, budget = 2000) {
+  const reports = (run && run.changeReports) || [];
+  if (!reports.length) return '';
+  const parts = reports.map((r) => [
+    `[${r.stageTitle || r.stageKey || 'stage'}${r.followupSeq ? ` · 跟進#${r.followupSeq}` : ''}] ${(r.filesChanged || []).length} 個 file（+${r.totalAdds}/−${r.totalDels}）${r.error ? ` ⚠${r.error}` : ''}`,
+    ...summarizeChangeLines(r, 10),
+  ].join('\n'));
+  let text = parts.join('\n');
+  if (text.length > budget) text = `${text.slice(0, budget)}\n...[改動摘要 truncated]`;
+  return text;
+}
+
 function updateSessionStatus(run, sessionId) {
   if (!sessionId) return;
   const session = (run.sessions || []).find((item) => item.id === sessionId);
@@ -2641,6 +2765,7 @@ function updateSessionStatus(run, sessionId) {
     if (SWARM_WORKTREE && Array.isArray(session.worktrees) && session.worktrees.length) {
       mergeSessionWorktrees(run, session);
     }
+    captureSessionChanges(run, session);
   }
   io.emit('session-updated', { runId: run.id, session });
   if (justFinished) maybeAdvancePipeline(run, session);
@@ -3412,6 +3537,35 @@ function buildHandoffContext(run, agent) {
   ].join('\n\n');
 }
 
+// Verifier 專用 context：server 記錄嘅實際改動 + 驗收清單鐵則。改動先有得驗,
+// 冇驗收 cover 嘅改動 = 未驗 — 呢個 block 令 verifier 對住真 diff 做嘢。
+function buildVerifierContext(run) {
+  const changesTxt = summarizeChangeReportsText(run, 3000);
+  if (!changesTxt) return '';
+  return [
+    '',
+    '## Verifier 專用:今次實際改動 + 驗收清單',
+    '以下係 server 記錄嘅今次 mission git 改動(唔係 agent 自報)。你嘅驗收必須覆蓋呢啲檔案嘅行為:',
+    changesTxt,
+    '',
+    '驗收清單喺 task brief 嘅【驗收清單】/【驗收標準】section。鐵則:',
+    '- 逐條搵返對應指令**真係執行**,貼原始 output 做證據;唔准靠讀 code 推斷「應該得」。',
+    '- 有改動嘅 file 冇任何驗收 cover 到 → 報告寫明「未覆蓋:<file>」,並將裁決降做 VERIFY: FAIL 或 BLOCKED。',
+  ].join('\n');
+}
+
+// Fixer / followup agent context：之前 stage 實際改咗乜,對準範圍、避免重做或 revert。
+function buildChangeReportBlock(run) {
+  const changesTxt = summarizeChangeReportsText(run, 2000);
+  if (!changesTxt) return '';
+  return [
+    '',
+    '## 之前改咗乜(Change Reports,server git 記錄)',
+    '以下係之前 stage / 輪次嘅實際改動摘要,幫你對準範圍;唔好重做已完成嘅部分,唔好 revert 其他 agent 嘅改動:',
+    changesTxt,
+  ].join('\n');
+}
+
 function buildExecutionPrompt(run, preset, agent, options = {}) {
   const contexts = run.contextHistory
     .slice(-3)
@@ -3515,6 +3669,8 @@ function buildExecutionPrompt(run, preset, agent, options = {}) {
       '`VERDICT: FAIL` = 有必須修嘅問題',
       'WARN / FAIL 時請具體列出要修嘅項目,俾 Fix agent 跟進。',
     ].join('\n')] : []),
+    ...(preset.key === 'verifier' ? [buildVerifierContext(run)] : []),
+    ...(preset.key === 'fixer' || String(preset.key || '').startsWith('followup') ? [buildChangeReportBlock(run)] : []),
     ...(preset.key === 'planner' ? [PLANNER_DECOMPOSE_PROMPT] : []),
     ...(isCouncilReviewer && run.pipeline && !run.pipeline.councilDebateStarted
       ? [COUNCIL_RESEARCH_ANGLES_PROMPT] : []),
@@ -3756,9 +3912,19 @@ function runWave(run, opts) {
   // shared repo, byte-for-byte unchanged.
   const isCodeWave = !['thinking', 'research', 'text'].includes(String(mode));
   const useWorktree = SWARM_WORKTREE && process.env.SWARM_FAKE_AGENT !== '1' && isCodeWave && presets.length > 1;
+  // Change-report baseline: remember where HEAD was when this code wave started,
+  // so captureSessionChanges can diff exactly what the wave changed (commits +
+  // working tree). Non-repo / bad path → no baseline → capture no-ops.
+  if (isCodeWave && process.env.SWARM_FAKE_AGENT !== '1') {
+    try {
+      const repo = safeProjectPath(run.projectPath || DEFAULT_PROJECT_ROOT);
+      const sha = worktreeMgr.headSha(repo);
+      if (sha) { session.gitRepo = repo; session.gitBaseline = sha; }
+    } catch (_) { /* not capturable */ }
+  }
   let waveBase = null;
   if (useWorktree) {
-    waveBase = worktreeMgr.headSha(safeProjectPath(run.projectPath || DEFAULT_PROJECT_ROOT));
+    waveBase = session.gitBaseline || worktreeMgr.headSha(safeProjectPath(run.projectPath || DEFAULT_PROJECT_ROOT));
     session.worktrees = [];
   }
   const agents = presets.map((p) => {
@@ -4235,6 +4401,8 @@ app.get('/api/runs', (req, res) => {
     agentCount: run.agents.length,
     runningAgents: run.agents.filter((agent) => agent.status === 'running').length,
     artifactCount: run.artifacts.length,
+    changeReportCount: (run.changeReports || []).length,
+    followupCount: (run.followups || []).length,
     contextCount: run.contextHistory.length,
     sessionCount: (run.sessions || []).length,
     sessions: (run.sessions || []).map((session) => ({
@@ -4476,6 +4644,8 @@ function buildNextStepsContext(run) {
   if (run.memoryPackStatus) {
     parts.push(`Memory Pack: included=${(run.memoryPackStatus.included || []).join(', ') || '-'} · missing=${(run.memoryPackStatus.missing || []).join(', ') || '-'}`);
   }
+  const changesTxt = summarizeChangeReportsText(run, 1200);
+  if (changesTxt) parts.push(`今次實際改動（server git 記錄）:\n${changesTxt}`);
   const stages = p.stages || [];
   if (stages.length) parts.push(`階段:\n${stages.map((s) => `- ${s.title} = ${s.status}`).join('\n')}`);
   if (run.synthesis) parts.push(`人話講解（收斂決策）:\n${truncate(run.synthesis, 1600)}`);
@@ -4919,6 +5089,21 @@ app.post('/api/runs/:id/resume', (req, res) => {
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
+});
+
+// Change reports:成個 run 嘅「改咗乜」結構化記錄。?patch=0 慳流量（TG bot 用）。
+app.get('/api/runs/:id/changes', (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  const includePatch = req.query.patch !== '0';
+  const reports = (run.changeReports || []).map((r) => (includePatch ? r : { ...r, patch: undefined }));
+  const totals = reports.reduce((acc, r) => ({
+    reports: acc.reports + 1,
+    files: acc.files + ((r.filesChanged || []).length + (r.filesOmitted || 0)),
+    adds: acc.adds + (r.totalAdds || 0),
+    dels: acc.dels + (r.totalDels || 0),
+  }), { reports: 0, files: 0, adds: 0, dels: 0 });
+  res.json({ ok: true, totals, reports });
 });
 
 // ─── Swarm Council 御准閘 endpoints ───
