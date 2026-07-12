@@ -5225,11 +5225,15 @@ function startFollowupAction(run, body = {}) {
       scope: '用戶睇完上一輪結果之後嘅跟進指示。只做指示範圍內嘅嘢,唔好重做已完成嘅部分,唔好 revert 之前 agent 嘅改動。',
       deliveryMode: 'code',
     };
-    // D5(flag-gated):揾返上一輪 build/fix/followup agent 嘅 CLI session → followup --resume。
-    // 優先揀「寫 code」嘅 donor（reviewer/verifier 個對話係評審 context,唔係實作 context）。
+    // D5(flag-gated):揾返上一輪 agent 嘅 CLI session → followup --resume。
+    // 鐵則:claude session 跟 cwd 存 — worktree wave 嘅 agent（parallel build）個 session 喺
+    // /tmp/swarm-wt/* 底,喺 project dir resume 唔返(No conversation found → agent 即死)。
+    // 所以 donor 只可以係「單 agent、直接喺 project dir 行」嘅 stage(fixer/verifier/followup)。
     let resumeSessionId = null;
     if (SWARM_FOLLOWUP_RESUME && (body.cli || p.cli || 'claude') === 'claude') {
-      const done = [...(run.agents || [])].reverse().filter((a) => a.cliSessionId && a.cli === 'claude' && String(a.status) === 'completed');
+      const wtSessions = new Set((run.sessions || []).filter((s) => Array.isArray(s.worktrees) && s.worktrees.length).map((s) => s.id));
+      const done = [...(run.agents || [])].reverse().filter((a) => a.cliSessionId && a.cli === 'claude'
+        && String(a.status) === 'completed' && !wtSessions.has(a.sessionId));
       const donor = done.find((a) => !/review|覆核|verif|驗證/i.test(`${a.name} ${a.role}`)) || done[0];
       if (donor) resumeSessionId = donor.cliSessionId;
     }
