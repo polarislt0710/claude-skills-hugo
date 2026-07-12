@@ -5185,10 +5185,12 @@ app.post('/api/runs/:id/followup', (req, res) => {
       scope: '用戶睇完上一輪結果之後嘅跟進指示。只做指示範圍內嘅嘢,唔好重做已完成嘅部分,唔好 revert 之前 agent 嘅改動。',
       deliveryMode: 'code',
     };
-    // D5(flag-gated):揾返上一輪同 cli 嘅 build/fix/followup agent 嘅 CLI session → followup --resume。
+    // D5(flag-gated):揾返上一輪 build/fix/followup agent 嘅 CLI session → followup --resume。
+    // 優先揀「寫 code」嘅 donor（reviewer/verifier 個對話係評審 context,唔係實作 context）。
     let resumeSessionId = null;
     if (SWARM_FOLLOWUP_RESUME && (body.cli || p.cli || 'claude') === 'claude') {
-      const donor = [...(run.agents || [])].reverse().find((a) => a.cliSessionId && a.cli === 'claude' && String(a.status) === 'completed');
+      const done = [...(run.agents || [])].reverse().filter((a) => a.cliSessionId && a.cli === 'claude' && String(a.status) === 'completed');
+      const donor = done.find((a) => !/review|覆核|verif|驗證/i.test(`${a.name} ${a.role}`)) || done[0];
       if (donor) resumeSessionId = donor.cliSessionId;
     }
     const stages = [
