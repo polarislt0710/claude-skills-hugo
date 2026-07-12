@@ -54,12 +54,17 @@ You are running on **Hugo's Hostinger VPS**:
 
 Marketplace source: `https://github.com/polarislt0710/claude-skills-hugo` (PUBLIC)
 
-- `super-personas` — 6 cognitive engineering personas
-- `design` — 20 design rules (typography / color / layout / components)
-- `mattpocock-skills` — 12 engineering skills (TDD / grill / diagnose / to-prd / etc.)
-- `swarm-tools` — multi-persona jam with WebSocket dashboard at port 3010
+- `super-personas` 1.0.1 — 6 cognitive engineering personas
+- `design` 1.1.0 — 20 design rules + web-motion-design + taste
+- `swarm-tools` 1.1.0 — multi-persona jam (5-phase, emit-event.sh) + execution-discipline
+- `ai-prompts` 1.0.1 — image / single-shot-video / multi-shot-video prompt builders
+- `marketing` 1.0.1 — copywriting / content-templates / growth / conversion / seo
+- `workflow-tools` 1.0.0 — paul-loop / seed / brainstormers / everything-code / cli-anything / research-last30days / awesome-code-skills / gstack
+- `media-tools` 1.0.0 — cantonese-ai (with scripts/) / remotion
+- `data-tools` 1.0.0 — duckdb-data
+- `mattpocock-skills` — cached old install; ⚠️ upstream repo `smll-ai/mattpocock-skills` now requires auth, updates fail
 
-Standalone user-level skills in `~/.claude/skills/`: 17 entries (paul-loop, persistent-mem, session-continuity, gstack, vibe-kanban, web-motion-design, taste-skill, duckdb-data, sql-queries, analyze, explore-data, validate-data, build-dashboard, brainstormers, research-last30days, consolidate-memory, everything-code).
+Standalone user-level skills in `~/.claude/skills/`: **none** — emptied in the 2026-07-12 skills consolidation; everything swarm-server injects now resolves from the plugin cache (`SKILL_REGISTRY` in server.js, `loaded 13 / 13 skills`). Keep exactly ONE version dir per plugin under `~/.claude/plugins/cache/hugo-personal/<plugin>/` — the loader picks `dirs[0]`.
 
 ---
 

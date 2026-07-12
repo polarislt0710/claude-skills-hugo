@@ -1,46 +1,119 @@
-# Hugo's Mac — Infrastructure & VPS Context
+# Claude Code VPS Setting — Control Plane
 
-> User-level CLAUDE.md, auto-loaded by **every Claude Code session on this Mac**.
-> Source of truth for Hugo's full ORCA + VPS setup.
-
----
-
-## 🌐 TL;DR
-
-You are running on **Hugo's Mac** (`hugo`, macOS, zsh default shell).
-Hugo owns a Hostinger VPS in Malaysia accessible via SSH alias `orca`.
-Most engineering work targets the VPS or his ORCA project.
-Reply in **繁體中文 / 廣東話**, technical when needed, decisive.
+> Project-level CLAUDE.md, auto-loaded when **a Claude Code session opens this folder** (`~/Documents/Workspace/Claude Code VPS setting/`).
+>
+> Purpose: **THIS folder is the conversation / staging area for VPS infrastructure work.** Source code & plugins live elsewhere — see paths below.
+>
+> Reply in **繁體中文 / 廣東話**, technical when needed, decisive.
 
 ---
 
-## 🖥️ VPS quick access
+## 🗂️ Where everything actually lives
+
+This folder is the **conversation / staging dir**，2026-07-12 已整理成八個分類（睇 root 嘅 `INDEX.md`：`01-product-orcagrade` 產品文件 / `02-reports-reviews` / `03-swarm-tooling` / `04-screenshots` / `05-code-snapshots` / `06-vps-infra` / `07-backups` / `08-rebuild-v2`）。Source code & plugins 嘅正身喺：
+
+| What | Where |
+|---|---|
+| Plugin marketplace source-of-truth (Mac) | `~/.claude/local-marketplace/` |
+| Plugin marketplace source-of-truth (GitHub, public) | https://github.com/polarislt0710/claude-skills-hugo |
+| User-level Mac CLAUDE.md (also auto-loaded) | `~/.claude/CLAUDE.md` (hidden dotfile) |
+| User-level VPS CLAUDE.md | `ssh orca` then `~/.claude/CLAUDE.md` |
+| ORCA project | `~/orca-platform-mvp/` (on VPS only) |
+| swarm-server backend (Mac source) | `~/.claude/local-marketplace/services/swarm-server/` |
+| swarm-server (deployed VPS copy) | `/home/hugo-orca/services/swarm-server/` |
+| Tampermonkey userscripts source | `~/.claude/local-marketplace/userscripts/` |
+
+**To view hidden dotfile dirs in Finder**: press `Cmd+Shift+.` (toggles `.dotfile` visibility).
+
+---
+
+## 🌐 VPS quick access
 
 | Field | Value |
 |---|---|
 | Public IP | `187.127.115.235` |
-| SSH alias | `ssh orca` (already configured in `~/.ssh/config`) |
+| SSH alias | `ssh orca` (configured in `~/.ssh/config`) |
 | User | `hugo-orca` (sudo NOPASSWD) |
 | Hostname | `srv1644941` (Ubuntu 24.04 LTS) |
 | Region | Hostinger Kuala Lumpur, KVM 2 / 8 GB / 100 GB NVMe |
 | Auto-renew | **disabled** (30-day trial, expires 2026-06-05) |
 
-You can run shell commands on VPS via `ssh orca '<cmd>'`. Interactive bash needed for NVM-loaded tools (`bash -ic "<cmd>"`).
+Run shell commands on VPS via `ssh orca '<cmd>'`. Interactive bash needed for NVM-loaded tools (`bash -ic "<cmd>"`).
 
 ---
 
 ## 🚀 VPS services running
 
-| Service | Port | Process manager | Public URL |
-|---|---|---|---|
-| **CloudCLI** (browser UI for Claude/Codex) | 3001 | PM2 | http://187.127.115.235:3001 |
-| **Swarm Dashboard** (multi-persona jam) | 3010 | PM2 | http://187.127.115.235:3010 |
-| **Cronicle** (cron with web UI) | 3012 | systemd | http://187.127.115.235:3012 |
-| **ORCA backend** (FastAPI, when running) | 8000 | nohup uvicorn | local only |
+| Service | Port | Process manager | URL | Source code |
+|---|---|---|---|---|
+| **CloudCLI** (browser UI for Claude/Codex) | 3001 | PM2 | http://187.127.115.235:3001 | npm `@cloudcli-ai/cloudcli@0.40.1` |
+| **Swarm Dashboard** (Agent Swarm V3) | 3010 | PM2 | http://187.127.115.235:3010 | `~/.claude/local-marketplace/services/swarm-server/` |
+| **MiroFish** (群體智能引擎) | 3010/mirofish/ | PM2 (backend: 5001 localhost) | http://187.127.115.235:3010/mirofish/ | `~/services/mirofish-web/` |
+| **Cronicle** (cron + web UI) | 3012 | systemd | http://187.127.115.235:3012 | `/opt/cronicle/` |
+| **ORCA backend** (FastAPI, when running) | 8000 | nohup uvicorn | local only | `~/orca-platform-mvp/apps/mvp-web/backend/` |
+| **ORCA frontend** (Next.js MVP) | 8003 | PM2 direct Next.js binary | https://mvp.187-127-115-235.sslip.io | `~/orca-platform-mvp/apps/mvp-web/frontend/` |
 
-PM2 daemon itself runs under systemd unit `pm2-hugo-orca.service` (auto-resurrect on reboot).
+PM2 daemon itself runs under systemd unit `pm2-hugo-orca.service` (auto-resurrect on reboot). UFW firewall: ports 22 / 80 / 443 / 3001 / 3010 / 3012 / 8000 / 8003 open. Fail2Ban active.
 
-UFW firewall: ports 22 / 3001 / 3010 / 3012 open (anywhere). Fail2Ban active.
+### ORCA MVP frontend deployment guard
+
+Production MVP frontend **must not** be launched with `npm run start`, `next start`, `nohup npm run start`, or `pm2 start npm -- run start`; these can leave duplicate Next.js child processes and occupy port `8003`.
+
+Approved deploy/restart flow:
+
+```bash
+ssh orca 'bash -ic "cd ~/orca-platform-mvp && scripts/restart-mvp-frontend.sh"'
+```
+
+Success checks: PM2 app `orca-mvp-frontend` online, exactly one listener on `127.0.0.1:8003`, and `https://mvp.187-127-115-235.sslip.io/` returns 200.
+
+### MiroFish 詳情
+
+- **描述**：「簡潔通用的群體智能引擎，預測萬物」（AGPL-3.0）
+- **架構**：Vue 3 前端 (Vite) + Flask 後端 (uv + Python)
+- **前端 serve**：build 輸出放在 `~/services/swarm-server/public/mirofish/`，由 swarm-server 靜態 serve
+- **後端 API**：PM2 管理 (`mirofish-backend`)，bind `localhost:5001`，swarm-server 透過 `/mirofish-api` proxy 轉發
+- **入口**：CloudCLI header 有 MiroFish 按鈕（teal 色，開新 tab）、Swarm Dashboard topbar 亦有
+- **多語言**：`locales/` 有 `en.json`、`zh.json`
+
+### Agent Swarm V3 skill 注入系統
+
+Execution agent 同 thinking agent 會自動注入對應嘅 skill 內容到 prompt：
+
+| Agent | 注入嘅 Skills |
+|---|---|
+| 全部 agent | execution-discipline（無條件行先注入） |
+| Frontend Agent | typography, color, layout, components, taste-skill, performance-engineer |
+| Backend Agent | architect, debugger, performance-engineer |
+| Test Agent | debugger, reviewer-persona |
+| Reviewer Agent | reviewer-persona, security-auditor, refactor-engineer |
+| Research Agent | brainstormers |
+| Strategy Agent | brainstormers, architect |
+| Synthesis Agent | brainstormers |
+
+Skills 喺 swarm-server 啟動時**全部由 `~/.claude/plugins/cache/hugo-personal/` 讀取**並 cache（**13 / 13 loaded**；2026-07 起再冇 standalone 依賴，`~/.claude/skills/` 兩部機都係空）。Registry 喺 `server.js` 嘅 `SKILL_REGISTRY`：`brainstormers`→workflow-tools、`taste-skill`→design:taste、`execution-discipline`→swarm-tools。Cache dir 用動態 resolve（`dirs[0]`）— **每個 plugin 只可以有一個 version dir**，`claude plugin update` 之後記得 prune 舊 hash dir。驗證：`pm2 logs swarm-server | grep skill-inject` 要見 `loaded 13 / 13 skills` 零 ⚠。
+
+### CloudCLI 自訂 UI 層
+
+CloudCLI 係第三方 npm 套件，透過外掛 CSS/JS 檔案客制化：
+- `dist/cloudcli-hugo-themes.css` — 三個 theme（Light / Cozy / Dark）嘅完整視覺覆蓋
+- `dist/cloudcli-hugo-themes.js` — theme switcher、Swarm 側面板、MiroFish 按鈕
+- Theme switcher 固定喺右下角，Swarm/MiroFish 按鈕注入 header
+- **注意**：`npm update` CloudCLI 後需要重新部署呢兩個檔案
+
+### CloudCLI Mission feature（cwd redirect）
+
+避免 Claude 寫到亂晒 ORCA repo root；揀緊 mission 時，所有 Write/Edit 自動 redirect 到 `~/orca-platform-mvp/missions/<plan-slug>/`。
+
+- **Source-of-truth**：`~/.claude/local-marketplace/services/cloudcli-patches/`
+  - `server/mission-cwd.service.js` — `resolveMissionCwd(options)` helper（slug → cwd override + mkdir）
+  - `server/missions.routes.js` — `GET /api/missions` (list `MISSION-*.md`), `POST /api/missions/:slug/ensure`, `GET /api/missions/:slug/files`
+  - `dist/cloudcli-hugo-mission.{js,css}` — 右上角 Mission selector overlay + WebSocket monkey-patch（注入 `options.missionSlug`）
+  - `scripts/apply-patches.sh` — idempotent apply script，npm update 後 re-run
+- **Patch 目標**：`dist-server/server/index.js`（mount route）+ `dist-server/server/modules/websocket/services/chat-websocket.service.js`（攔截 4 個 provider call）+ `dist/index.html`（加 script/link）
+- **Plan name 來源**：自動掃 `~/orca-platform-mvp/MISSION-*.md`；slug = filename strip `MISSION-` prefix 同 `.md`，小階；title = 第一行 `# MISSION — XXX` 嘅 `XXX`
+- **Env override**：`MISSION_BASE_PROJECT` env var 可改 base path（default `~/orca-platform-mvp`）
+- **Re-apply 流程**（npm update CloudCLI 後）：`ssh orca 'bash -ic "~/.claude/local-marketplace/services/cloudcli-patches/scripts/apply-patches.sh && pm2 restart cloudcli"'`
 
 ---
 
@@ -50,9 +123,9 @@ UFW firewall: ports 22 / 3001 / 3010 / 3012 open (anywhere). Fail2Ban active.
 |---|---|---|
 | Claude Code | OAuth via `claude auth login --claudeai` | ✅ Max subscription, Opus 4.7 |
 | Codex CLI | OAuth via `--device-auth` | ✅ ChatGPT Plus, gpt-5.5 |
-| GLM | shell wrapper function | 🟡 placeholder (awaiting BigModel API key) |
+| GLM | shell wrapper function `glm()` in `~/.bashrc` | 🟡 placeholder (BigModel API key TBD) |
 | Telegram MCP | uvx wrapper + `~/.telegram_secrets` | ✅ chigwell/telegram-mcp via Telethon session string |
-| GitHub (orca-platform-hugo) | Deploy key `~/.ssh/id_ed25519_github` (write) | ✅ |
+| GitHub (`polarislt0710/orca-platform-hugo`) | Deploy key `~/.ssh/id_ed25519_github` | ✅ write access |
 
 **⚠️ NEVER print plaintext** tokens / passwords / API keys in chat.
 Sensitive files (`~/.telegram_secrets`, `~/.env.local`, `~/.claude/.credentials.json`) all `chmod 600`.
@@ -65,40 +138,35 @@ Sensitive files (`~/.telegram_secrets`, `~/.env.local`, `~/.claude/.credentials.
 - **VPS path**: `/home/hugo-orca/orca-platform-mvp`
 - **Active branch**: `feature/mvp-sprint`
 - **Convention files**: `CLAUDE.md`, `PROJECT-MEMORY.md`, `SESSION-LOG.md`, `DECISIONS.md`, `BUILD-PLAN.md`
-- **Workflow**: hard-enforces PAUL-loop (Plan → Apply → Unify) per project CLAUDE.md § 3
+- **Workflow**: hard-enforces **PAUL-loop** (Plan → Apply → Unify) per project CLAUDE.md § 3
 - **Resume trigger**: user types `Resume project. Read CLAUDE.md first.`
-
-When working on ORCA, **both** this user-level CLAUDE.md and ORCA's project CLAUDE.md apply (project-level conventions like PAUL-loop take precedence for code work).
 
 ---
 
-## 🧩 Custom plugin marketplace
+## 🧩 Plugins installed (Mac + VPS)
 
-- **Source-of-truth GitHub**: https://github.com/polarislt0710/claude-skills-hugo (PUBLIC)
-- **Mac local source**: `~/.claude/local-marketplace/`
-  - `local-plugins/` — 5 plugins (super-personas, design, ai-prompts, marketing, swarm-tools)
-  - `services/swarm-server/` — Node.js + Socket.io backend deployed to VPS at `/home/hugo-orca/services/swarm-server/`
-  - `userscripts/` — Tampermonkey scripts (`cloudcli-vibe-switcher.user.js`)
-- **VPS local source**: `~/.claude/local-marketplace/` (sparse-cloned subset)
+Marketplace: `hugo-personal` → `https://github.com/polarislt0710/claude-skills-hugo`
 
-### Plugins installed (both Mac + VPS)
-- `super-personas` — 6 engineering personas (architect / debugger / reviewer / security-auditor / performance-engineer / refactor-engineer)
-- `design` — 20 design rules (typography / color / layout / components)
-- `mattpocock-skills` — 12 engineering skills (TDD / grill / diagnose / etc.)
-- `swarm-tools` — multi-persona jam with WebSocket dashboard
+| Plugin | Version | Sub-skills | Mac | VPS |
+|---|---|---|---|---|
+| `super-personas` | 1.0.1 | architect / debugger / reviewer / security-auditor / performance-engineer / refactor-engineer | ✅ | ✅ |
+| `design` | 1.1.0 | typography / color / layout / components / **web-motion-design** / **taste** | ✅ | ✅ |
+| `swarm-tools` | 1.1.0 | multi-persona-jam（5-phase，scripts/emit-event.sh + references/）/ **execution-discipline** | ✅ | ✅ |
+| `ai-prompts` | 1.0.1 | image / single-shot-video / multi-shot-video | ✅ | ✅ |
+| `marketing` | 1.0.1 | copywriting / content-templates / growth-strategies / conversion / seo | ✅ | ✅ |
+| `workflow-tools` | 1.0.0 | paul-loop / seed / brainstormers / everything-code / cli-anything / research-last30days / awesome-code-skills / gstack | ✅ | ✅ |
+| `media-tools` | 1.0.0 | cantonese-ai（連 scripts/）/ remotion（remotion-video + best-practices 合併） | ✅ | ✅ |
+| `data-tools` | 1.0.0 | duckdb-data | ✅ | ✅ |
+| `mattpocock-skills` | — | tdd / grill-me / diagnose / triage / zoom-out / caveman / write-a-skill 等 | ❌ | ✅（cache 舊版；⚠️ upstream repo `smll-ai/mattpocock-skills` 已要 auth，update 唔到） |
 
-### Mac-only plugins
-- `ai-prompts` — image / single-shot video / multi-shot video prompt builders
-- `marketing` — copywriting / content / growth / conversion / SEO
-
-### Standalone skills synced Mac → VPS (in `~/.claude/skills/`)
-17 anthropic-skills + data:* skills: `paul-loop`, `persistent-mem`, `session-continuity`, `consolidate-memory`, `everything-code`, `brainstormers`, `research-last30days`, `gstack`, `vibe-kanban`, `web-motion-design`, `taste-skill`, `duckdb-data`, `sql-queries`, `analyze`, `explore-data`, `validate-data`, `build-dashboard`.
+### Standalone skills (`~/.claude/skills/`)
+**無 — 2026-07-12 skills consolidation 已全部遷入 marketplace plugins**（brainstormers/taste/execution-discipline 等 12 個入咗上面嘅 plugin；persistent-mem/session-continuity/code-review/security-review/superpowers/openspace-agents/video-db/vibe-kanban 等因同 built-in 重複已淘汰）。兩部機嘅 `~/.claude/skills/` 都係空。
 
 ---
 
 ## 🔄 Sync workflows
 
-### Edit a plugin skill (e.g. tweak a SKILL.md)
+### Edit a plugin skill (e.g. tweak SKILL.md)
 
 ```bash
 nano ~/.claude/local-marketplace/local-plugins/<plugin>/skills/<skill>/SKILL.md
@@ -108,21 +176,44 @@ claude plugin marketplace update hugo-personal && claude plugin install <plugin>
 ssh orca 'bash -ic "claude plugin marketplace update hugo-personal && claude plugin install <plugin>"'
 ```
 
-### Edit swarm-server backend (server.js / public/index.html)
+### Edit swarm-server backend / dashboard
 
 ```bash
-# After editing on Mac:
+# Edit on Mac:
+nano ~/.claude/local-marketplace/services/swarm-server/server.js
+# OR
+nano ~/.claude/local-marketplace/services/swarm-server/public/index.html
+
+# Push + deploy:
 cd ~/.claude/local-marketplace
 git add -A && git commit -m "..." && git push
-scp services/swarm-server/server.js orca:~/services/swarm-server/server.js          # if server.js changed
-scp services/swarm-server/public/index.html orca:~/services/swarm-server/public/index.html  # if dashboard changed
-ssh orca 'bash -ic "pm2 restart swarm-server"'  # only needed if server.js changed
+scp services/swarm-server/server.js orca:~/services/swarm-server/server.js
+scp services/swarm-server/public/index.html orca:~/services/swarm-server/public/index.html
+ssh orca 'bash -ic "pm2 restart swarm-server"'   # only if server.js changed
 ```
 
-### Sync standalone skills Mac → VPS
+### Sync skills Mac → VPS（2026-07 起用 plugin 機制）
 
 ```bash
-sync-skills-vps   # zsh alias defined in ~/.zshrc
+# Mac（改完 skill 先 commit+push，兩部機先攞到）
+claude plugin marketplace update hugo-personal && claude plugin update <plugin>@hugo-personal
+# VPS（claude 唔喺 non-interactive PATH，要用全 path）
+ssh orca '~/.nvm/versions/node/v22.22.2/bin/claude plugin marketplace update hugo-personal && ~/.nvm/versions/node/v22.22.2/bin/claude plugin update <plugin>@hugo-personal'
+# update 後 prune 舊 cache dir（swarm-server dirs[0] 要求每 plugin 一個 dir）
+ssh orca 'ls ~/.claude/plugins/cache/hugo-personal/<plugin>/'
+```
+
+（舊 `sync-skills-vps` alias 已退役 — 佢 rsync 嘅 store materialization 路徑已隨 skills consolidation 刪除）
+
+### Update CLAUDE.md (this file)
+
+```bash
+nano "/Users/hugo/Documents/Workspace/Claude Code VPS setting/CLAUDE.md"
+# Optionally also propagate user-level:
+cp "/Users/hugo/Documents/Workspace/Claude Code VPS setting/CLAUDE.md" ~/.claude/CLAUDE.md
+# And canonical to GitHub:
+cp "/Users/hugo/Documents/Workspace/Claude Code VPS setting/CLAUDE.md" ~/.claude/local-marketplace/docs/INFRASTRUCTURE-MAC.md
+cd ~/.claude/local-marketplace && git add docs/ && git commit -m "docs: update infra" && git push
 ```
 
 ---
@@ -131,8 +222,8 @@ sync-skills-vps   # zsh alias defined in ~/.zshrc
 
 ### 🛑 ALWAYS ASK FIRST
 - Anything costing money (API credit, plan upgrade, paid GitHub)
-- Reboot VPS
-- Disable security settings (UFW disable, fail2ban stop, etc.)
+- Reboot VPS (`sudo reboot`)
+- Disable security settings (UFW disable, fail2ban stop, SSH password re-enable)
 - Modify hPanel subscription
 - Clone an unfamiliar repo before getting GitHub URL from Hugo
 - Open a new UFW port
@@ -141,7 +232,7 @@ sync-skills-vps   # zsh alias defined in ~/.zshrc
 - SSH read-only commands on VPS
 - Modify VPS config files (`~/.bashrc`, `~/.claude/`, `~/.ssh/config`)
 - `npm install / uninstall`
-- Hostinger MCP read queries (`VPS_*`, `domains_*` GET-style)
+- Hostinger MCP read queries (`VPS_get*`, `domains_get*`)
 - File edits on VPS via SSH (when Hugo asked for them)
 - Plugin install / update / uninstall
 
@@ -149,16 +240,16 @@ sync-skills-vps   # zsh alias defined in ~/.zshrc
 - Reply in **繁體中文 / 廣東話** unless Hugo switches to English
 - Concise, scannable (tables, code blocks, bullets)
 - Don't ask permission for trivial things; do ask before destructive irreversible actions
-- Standard "Report Back" template at end of multi-step tasks
+- Use standard "Report Back" template at end of multi-step tasks
 
 ---
 
-## 🛠️ MCP servers Hugo has connected
+## 🛠️ MCP servers connected
 
-### Local MCPs (registered via `claude mcp add`)
-- `telegram` (chigwell/telegram-mcp via wrapper script)
+### Local on VPS (registered via `claude mcp add`)
+- `telegram` — chigwell/telegram-mcp via wrapper script
 
-### Cloud MCPs (auto-synced from claude.ai when authed)
+### Cloud MCPs (auto-synced from claude.ai)
 - Canva, Heygen, Google Calendar, Gmail, Google Drive (needs reauth)
 
 ### Mac-side specialty MCPs
@@ -172,25 +263,52 @@ sync-skills-vps   # zsh alias defined in ~/.zshrc
 ## 🎬 Common one-liners
 
 ```bash
-# VPS health check
+# === VPS health checks ===
 ssh orca 'bash -ic "pm2 list" && sudo ufw status && df -h'
 
-# Tail swarm-server logs (debug WebSocket)
+# === Tail swarm-server logs ===
 ssh orca 'bash -ic "pm2 logs swarm-server --lines 30 --nostream"'
 
-# Reset Swarm Dashboard
+# === Reset swarm dashboard state ===
 curl -X POST http://187.127.115.235:3010/api/reset
 
-# Trigger swarm via Claude Code on VPS (needs new session, must be in cwd of a project)
+# === Trigger swarm via Claude Code on VPS ===
 ssh orca 'cd ~/orca-platform-mvp && claude -p --dangerously-skip-permissions "用校長/老師/科主任/學生/研發者 jam <topic>"'
 
-# Hostinger MCP — list VPS
-# (use Hostinger MCP tool, e.g. mcp__hostinger__VPS_getVirtualMachinesV1)
+# === Manual fire dashboard event for testing ===
+curl -X POST http://187.127.115.235:3010/events/swarm-start \
+  -H "Content-Type: application/json" \
+  -d '{"topic":"test","personas":["A","B","C"]}'
+
+# === ORCA backend (start manually) ===
+ssh orca 'cd ~/orca-platform-mvp/apps/mvp-web/backend && nohup bash -ic "uv run uvicorn app.main:app --host 0.0.0.0 --port 8000" > /tmp/backend.log 2>&1 &'
 ```
+
+---
+
+## 📜 Recent work history (May 2026)
+
+What's been built so far:
+
+1. **VPS hardening** — SSH key only, UFW 22, fail2ban, sudo NOPASSWD, hostname, timezone HK
+2. **Toolchain** — Node 22 (NVM), bun, Rust, uv, git, tmux, htop, jq
+3. **Claude Code (Max) auth** — `claude auth login --claudeai`, paste-back OAuth flow
+4. **Codex CLI (ChatGPT Plus) auth** — `--device-auth` flow
+5. **GLM 5.1 placeholder** — `glm()` shell function in `~/.bashrc`, awaiting BigModel API key
+6. **ORCA repo cloned** — `~/orca-platform-mvp/` on `feature/mvp-sprint` branch via deploy key
+7. **Cronicle installed** — `/opt/cronicle/`, systemd, port 3012, admin password Hugo set
+8. **CloudCLI installed** — npm pkg `@cloudcli-ai/cloudcli@0.40.1`, PM2-managed, port 3001
+9. **Telegram MCP** — chigwell/telegram-mcp via uvx wrapper, Telethon session string in `~/.telegram_secrets`
+10. **Plugin marketplace** — `hugo-personal` GitHub repo with 6 plugins (super-personas / design / ai-prompts / marketing / swarm-tools / mattpocock-skills)
+11. **17 standalone skills synced** — anthropic-skills + data:* via rsync
+12. **Swarm Dashboard V3** — Node + Express + Socket.io, 6-layer pipeline (研究→協作→博弈→決策→交付→覆核), domain detection (education/product/general), execution agents spawn real CLI processes, 3 themes (Light/Cozy/Dark)
+13. **CloudCLI custom UI** — `cloudcli-hugo-themes.js/.css` 直接覆蓋 dist（取代舊 Tampermonkey 方案），含 theme switcher + Swarm 側面板 + MiroFish 按鈕
+14. **MiroFish 部署** — Vue 3 + Flask 群體智能引擎，前端 serve 經 swarm-server `/mirofish/`，後端 PM2 managed at port 5001 (localhost only)
+15. **Agent Swarm skill 注入** — 12 個 skill 從 plugin cache + standalone skills 自動載入，按 agent 角色注入 prompt（frontend→design, backend→architect+debugger, reviewer→security-auditor, thinking→brainstormers）
+16. **Skills consolidation（2026-07-12）** — 全面 audit 55+ skills：Desktop store 31 個 user skills 清理到剩 4 個高價值（humanizer / meta-ads-decision / panorama-carousel / geo-game-prompt-builder），12 個遷入 marketplace 新 plugin（workflow-tools / media-tools / data-tools）+ design/swarm-tools 擴充，13 個同 plugin/built-in 重複嘅淘汰；multi-persona-jam 重構（413→119 行，emit-event.sh + references/，SWARM_DASHBOARD_URL env）；swarm-server SKILL_REGISTRY 全 plugin 化（13/13）；兩部機 `~/.claude/skills/` 清空；`sync-skills-vps` alias 退役；backup 喺 `~/Documents/Workspace/Claude Skills Update/store-backup-20260712/`
 
 ---
 
 ## 🐾 Last updated
 
-Generated 2026-05-08 from current chat session.
-**If knowledge here drifts from reality, update via**: edit this file + commit canonical to GitHub `docs/infrastructure.md`.
+2026-07-12 (skills consolidation). If knowledge here drifts from reality, **edit this file** and propagate to user-level + GitHub canonical (see `Update CLAUDE.md` section above).
