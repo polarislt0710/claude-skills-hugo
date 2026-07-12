@@ -3821,6 +3821,22 @@ function spawnAgentNow(run, preset, agent, agentCommand, options = {}) {
     councilEnv.MAX_THINKING_TOKENS = process.env.SWARM_GLM_THINKING || process.env.SWARM_COUNCIL_THINKING || '31999';
     appendAgentLog(run, agent, `[swarm-server] GLM(${agentCommand.model}) non-council MAX_THINKING_TOKENS=${councilEnv.MAX_THINKING_TOKENS}\n`);
   }
+  // ─── Followup session resume（SWARM_FOLLOWUP_RESUME=1 先開;claude 二進制先識 --session-id/--resume）───
+  // 每個 code agent 派一個已知 session id → 下次 followup 可以 --resume 返佢個對話（context-rebuild
+  // brief 照送,resume 只係錦上添花,唔係正確性路徑）。
+  if (SWARM_FOLLOWUP_RESUME && !fake && agentCommand.cli === 'claude'
+      && !['thinking', 'research', 'text'].includes(String(options.deliveryMode || 'code'))) {
+    if (options.resumeSessionId) {
+      shell = shell.replace('claude -p', `claude -p --resume "${options.resumeSessionId}"`);
+      agent.cliSessionId = options.resumeSessionId;
+      appendAgentLog(run, agent, `[swarm-server] Followup --resume ${options.resumeSessionId}\n`);
+    } else {
+      const sid = require('crypto').randomUUID();
+      shell = shell.replace('claude -p', `claude -p --session-id "${sid}"`);
+      agent.cliSessionId = sid;
+      appendAgentLog(run, agent, `[swarm-server] CLI session-id ${sid}\n`);
+    }
+  }
   const child = spawn(
     'bash',
     bashLoginArgs(shell, 'swarm-agent', projectPath, prompt),
@@ -3936,6 +3952,7 @@ function runWave(run, opts) {
       cli: picked.cli,
       taskBrief: p.subScope || opts.taskBrief,
       gate: !!opts.gate,
+      resumeSessionId: opts.resumeSessionId || null,
     };
     if (useWorktree) {
       const dir = path.join(require('os').tmpdir(), 'swarm-wt', String(run.id), p.key);
@@ -4230,6 +4247,7 @@ function advancePipeline(run) {
     taskBrief: run.taskBrief,
     stageKey: stage.key,
     gate: SWARM_REVIEW_GATE && !!stage.gate,
+    resumeSessionId: stage.resumeSessionId || null,
   });
   stage.sessionId = session.id;
   io.emit('run-updated', publicRun(run));
@@ -5167,8 +5185,14 @@ app.post('/api/runs/:id/followup', (req, res) => {
       scope: '用戶睇完上一輪結果之後嘅跟進指示。只做指示範圍內嘅嘢,唔好重做已完成嘅部分,唔好 revert 之前 agent 嘅改動。',
       deliveryMode: 'code',
     };
+    // D5(flag-gated):揾返上一輪同 cli 嘅 build/fix/followup agent 嘅 CLI session → followup --resume。
+    let resumeSessionId = null;
+    if (SWARM_FOLLOWUP_RESUME && (body.cli || p.cli || 'claude') === 'claude') {
+      const donor = [...(run.agents || [])].reverse().find((a) => a.cliSessionId && a.cli === 'claude' && String(a.status) === 'completed');
+      if (donor) resumeSessionId = donor.cliSessionId;
+    }
     const stages = [
-      { key: `followup-${seq}`, title: `跟進 Followup #${seq}`, kind: 'code', deliveryMode: 'code', dynamicAgents: [followupAgent] },
+      { key: `followup-${seq}`, title: `跟進 Followup #${seq}`, kind: 'code', deliveryMode: 'code', dynamicAgents: [followupAgent], resumeSessionId },
       ...(body.review ? [
         { key: 'review', title: '覆核 Review', kind: 'review', deliveryMode: 'code', agentKeys: ['reviewer'], gate: true },
         { key: 'fix', title: '修正 Fix', kind: 'code', deliveryMode: 'code', agentKeys: ['fixer'], isFix: true },
