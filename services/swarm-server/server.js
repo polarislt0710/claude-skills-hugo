@@ -1066,6 +1066,29 @@ app.get('/mirofish/*', (req, res) => {
 // Automation Designer (Cronicle-backed) — chat UI + scheduler
 app.use('/automation', require('./routes/automation'));
 
+// ─── Workbench（溝通工作台）router：threads / 上載 / report 編輯 / Copilot ───
+// deps 全部用 thunk 包住 — server.js 啲 helper 係 function declaration（hoisted），
+// 但 store 係 let（1080 先賦值），必須 getter。
+const workbench = require('./routes/workbench')({
+  io,
+  DATA_DIR,
+  getStore: () => store,
+  scheduleSave: (...a) => scheduleSave(...a),
+  truncate: (...a) => truncate(...a),
+  id: (...a) => id(...a),
+  findRunOr404: (...a) => findRunOr404(...a),
+  addArtifact: (...a) => addArtifact(...a),
+  publicRun: (...a) => publicRun(...a),
+  writeCouncilPlan: (...a) => writeCouncilPlan(...a),
+  readLatestPlan: (...a) => readLatestPlan(...a),
+  generateNextSteps: (...a) => generateNextSteps(...a),
+  startFollowupAction: (...a) => startFollowupAction(...a),
+  tgNotify: (...a) => tgNotify(...a),
+  tgEsc: (...a) => tgEsc(...a),
+  MAX_LOG_CHARS,
+});
+app.use('/api/workbench', workbench.router);
+
 // Mission Controller v2 — handoff plan → coding → refill → review pipeline
 if (MISSION_ORCHESTRATOR_ENABLED) {
   app.use('/mission', require('./routes/mission')(io));
@@ -1780,6 +1803,10 @@ function normalizeRun(run) {
   run.followups = Array.isArray(run.followups) ? run.followups : [];
   run.followupBaseBrief = run.followupBaseBrief || null;
   run.pipelineSeq = Number(run.pipelineSeq || 0);
+  run.workbenchFiles = Array.isArray(run.workbenchFiles) ? run.workbenchFiles : [];
+  run.followupProposal = run.followupProposal || null;
+  run.copilot = run.copilot || null;
+  run.autopilot = run.autopilot || null;
   run.queueScope = run.queueScope || null;
   run.queueKey = run.queueKey || null;
   run.queuedReason = run.queuedReason || null;
@@ -2095,6 +2122,10 @@ function createRun({ topic, personas, chatContext, sessionId, projectPath, sourc
     followups: [],
     followupBaseBrief: null,
     pipelineSeq: 0,
+    workbenchFiles: [],
+    followupProposal: null,
+    copilot: null,
+    autopilot: null,
     queueScope: null,
     queueKey: null,
     queuedReason: null,
@@ -3319,6 +3350,8 @@ function maybeAdvancePipeline(run, session) {
         content: 'Verifier 未能證明全部驗收通過。Pipeline 暫停，請睇「下一步」或重跑 / 修正。',
       });
       if (process.env.SWARM_NEXTSTEPS !== '0') { try { generateNextSteps(run); } catch (_) {} }
+      // Copilot / autopilot：verify 唔過先至最需要提跟進（gaps-first）— 呢條 early path 都要 hook。
+      try { workbench.onPipelineComplete(run, false); } catch (_) {}
       io.emit('run-updated', publicRun(run));
       scheduleSave();
       pumpRunQueue(run.projectPath);
@@ -3331,6 +3364,7 @@ function maybeAdvancePipeline(run, session) {
     run.status = 'needs_attention';
     run.completionVerdict = `STAGE_FAILED:${stage.key || stage.title}`;
     run.completedAt = new Date().toISOString();
+    try { workbench.onPipelineComplete(run, false); } catch (_) {}
     io.emit('run-updated', publicRun(run));
     scheduleSave();
     pumpRunQueue(run.projectPath);
@@ -3795,7 +3829,8 @@ function spawnAgentNow(run, preset, agent, agentCommand, options = {}) {
   const prompt = buildExecutionPrompt(run, preset, agent, options);
   appendAgentLog(run, agent, `[swarm-server] Agent CLI: ${agentCommand.label}${agentCommand.model ? ` · ${agentCommand.model}` : ''}\n`);
   let shell = fake
-    ? 'cd "$1"; for s in plan code test wrap; do echo "[fake] $s :: ${2:0:48}"; sleep 1; done; echo "[fake] done"'
+    // fake 都 echo VERIFY: PASS — 令本地 fake pipeline 行到 happy completion path（notify/copilot hook 都測到）。
+    ? 'cd "$1"; for s in plan code test wrap; do echo "[fake] $s :: ${2:0:48}"; sleep 1; done; echo "VERIFY: PASS"; echo "[fake] done"'
     : agentCommand.shell;
   // ─── Council 開盡 reasoning（只影響議會,唔掂 mission/coding agent）───
   // Codex: default medium → high effort;Claude/Opus + GLM: 開 extended thinking。
@@ -4227,6 +4262,8 @@ function advancePipeline(run) {
     if (verifyOk) notifyRunComplete(run, 'pipeline');
     else if (process.env.SWARM_NEXTSTEPS !== '0') { try { generateNextSteps(run); } catch (_) {} }
     if (verifyOk && shouldOfferPush(run)) enterPushGate(run);   // 任務一:code pipeline 完 → 待確認 push（已 merge 去 local,等人確認先 push 上 GitHub）
+    // Workbench Copilot / autopilot:run 完提跟進提案（或全自動開跟進）。內部自己 catch,永不炸 pipeline。
+    try { workbench.onPipelineComplete(run, verifyOk); } catch (_) {}
     io.emit('run-updated', publicRun(run));
     scheduleSave();
     pumpRunQueue(run.projectPath);
@@ -4422,6 +4459,10 @@ app.get('/api/runs', (req, res) => {
     artifactCount: run.artifacts.length,
     changeReportCount: (run.changeReports || []).length,
     followupCount: (run.followups || []).length,
+    followupProposal: run.followupProposal && run.followupProposal.status === 'pending'
+      ? { title: run.followupProposal.title, roundsLeft: run.followupProposal.roundsLeft } : null,
+    autopilot: run.autopilot && run.autopilot.enabled
+      ? { enabled: true, roundsUsed: run.autopilot.roundsUsed || 0, maxRounds: run.autopilot.maxRounds || 3 } : null,
     contextCount: run.contextHistory.length,
     sessionCount: (run.sessions || []).length,
     sessions: (run.sessions || []).map((session) => ({
@@ -5144,20 +5185,19 @@ function buildFollowupBrief(run, instruction) {
   ].join('\n'), MAX_CONTEXT_CHARS);
 }
 
-app.post('/api/runs/:id/followup', (req, res) => {
-  const run = findRunOr404(req.params.id, res);
-  if (!run) return;
-  if (!lockRun(run.id)) return res.status(409).json({ error: '呢個 run 啱啱有動作處理緊,等一兩秒先再試' });
-  const body = req.body || {};
+// 抽做 shared action：HTTP route 之外，Workbench Copilot / autopilot 都經呢度開跟進 —
+// 所有 guard（lock / mode / active / pushing / gate supersede）一律生效。回 { status, payload }。
+function startFollowupAction(run, body = {}) {
+  if (!lockRun(run.id)) return { status: 409, payload: { error: '呢個 run 啱啱有動作處理緊,等一兩秒先再試' } };
   const instruction = String(body.instruction || '').trim().slice(0, 4000);
-  if (!instruction) return res.status(400).json({ error: '要俾跟進指示 (instruction)' });
+  if (!instruction) return { status: 400, payload: { error: '要俾跟進指示 (instruction)' } };
   const p = run.pipeline;
   if (!p || String(p.mode) !== 'code') {
-    return res.status(400).json({ error: '呢個 run 未落實過 code(council run 要先「落實」先可以跟進)' });
+    return { status: 400, payload: { error: '呢個 run 未落實過 code(council run 要先「落實」先可以跟進)' } };
   }
-  if (isCodePipelineActive(run)) return res.status(409).json({ error: 'run 仲行緊 — 等佢完先跟進' });
+  if (isCodePipelineActive(run)) return { status: 409, payload: { error: 'run 仲行緊 — 等佢完先跟進' } };
   if (run.pendingPush && run.pendingPush.status === 'pushing') {
-    return res.status(409).json({ error: 'push 進行緊,完咗先再跟進' });
+    return { status: 409, payload: { error: 'push 進行緊,完咗先再跟進' } };
   }
   try {
     // 未 push 嘅 gate 由跟進蓋過:跟進完成會重新入 gate,一次過 push。
@@ -5213,11 +5253,18 @@ app.post('/api/runs/:id/followup', (req, res) => {
     };
     addArtifact(run, { type: 'note', title: `🔁 跟進 #${seq} 開波`, content: instruction });
     const queued = maybeQueueRunStart(run, startOptions);
-    if (queued) return res.json({ ok: true, followupSeq: seq, ...queued });
+    if (queued) return { status: 200, payload: { ok: true, followupSeq: seq, ...queued } };
     startRunFromOptions(run, startOptions);
     io.emit('run-updated', publicRun(run));
-    res.json({ ok: true, followupSeq: seq });
-  } catch (e) { res.status(400).json({ error: e.message }); }
+    return { status: 200, payload: { ok: true, followupSeq: seq } };
+  } catch (e) { return { status: 400, payload: { error: e.message } }; }
+}
+
+app.post('/api/runs/:id/followup', (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  const r = startFollowupAction(run, req.body || {});
+  res.status(r.status).json(r.payload);
 });
 
 // ─── Swarm Council 御准閘 endpoints ───

@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="zh-HK" data-theme="ink">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Swarm Workbench</title>
+<style>
+:root{ --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace; --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang HK","Microsoft JhengHei",sans-serif; --r:14px; }
+html[data-theme="ink"]{ --bg:#0a0f17; --panel:rgba(20,28,40,.62); --panel-2:rgba(28,38,54,.8); --panel-solid:#121a26;
+  --line:rgba(228,200,140,.16); --line-2:rgba(228,200,140,.32); --text:#ede3cf; --muted:#9aa0ad; --faint:#69707e;
+  --gold:#e6b769; --blue:#7fb0ff; --cyan:#5fd6e0; --green:#6fd6a2; --red:#ff7a72; --amber:#f2b65a; --violet:#bd96ff; --gray:#94a0ad; --run:#5fd6e0;
+  --bubble:rgba(16,24,36,.96); }
+html[data-theme="forest"]{ --bg:#ece2cd; --panel:rgba(255,250,238,.88); --panel-2:rgba(255,252,245,.95); --panel-solid:#fbf7ec;
+  --line:rgba(120,96,60,.24); --line-2:rgba(120,96,60,.42); --text:#3c3320; --muted:#7c715a; --faint:#a0937c;
+  --gold:#b8852f; --blue:#4f7cc4; --cyan:#2f9a96; --green:#5a9a52; --red:#c4564a; --amber:#cf982f; --violet:#8a6fc0; --gray:#8d8470; --run:#2f9a96;
+  --bubble:rgba(255,252,244,.97); }
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font-family:var(--sans);color:var(--text);background:var(--bg);font-size:13.5px;-webkit-font-smoothing:antialiased;overflow:hidden}
+html[data-theme="ink"] body{background:radial-gradient(900px 520px at 78% -10%,rgba(230,183,105,.13),transparent 60%),linear-gradient(180deg,#0a0f17,#070b12) fixed}
+html[data-theme="forest"] body{background:linear-gradient(180deg,#cfe6e0,#e7ddc0 55%,#d8c99f) fixed}
+button{font-family:var(--sans);cursor:pointer}
+#wb{height:100dvh;display:flex;flex-direction:column}
+#topbar{flex:none;height:50px;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--line);background:var(--panel);backdrop-filter:blur(14px)}
+#topbar b{font-size:15px;letter-spacing:.4px}
+#topbar small{font-size:9.5px;letter-spacing:1.8px;color:var(--faint);text-transform:uppercase}
+#topbar .sp{flex:1}
+.tbtn{height:32px;padding:0 11px;border-radius:9px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font-size:12px}
+.conn{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green)}
+.conn.off{background:var(--red);box-shadow:0 0 8px var(--red)}
+#cols{flex:1;display:grid;grid-template-columns:270px 1fr 430px;min-height:0}
+/* rail */
+#rail{border-right:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+.rsec{display:flex;flex-direction:column;min-height:0}
+.rsec.threads{flex:0 0 auto;max-height:38%}
+.rsec.runs{flex:1;min-height:0}
+.rhead{flex:none;display:flex;align-items:center;gap:8px;padding:10px 12px 6px;font-size:11px;letter-spacing:1.2px;color:var(--faint);text-transform:uppercase}
+.rhead .sp{flex:1}
+.rhead button{width:24px;height:24px;border-radius:7px;border:1px solid var(--line);background:var(--panel-2);color:var(--text)}
+.rlist{flex:1;overflow-y:auto;padding:0 8px 10px;min-height:0}
+.rit{padding:9px 10px;border:1px solid transparent;border-radius:11px;cursor:pointer;margin-bottom:4px}
+.rit:hover{background:var(--panel-2)}
+.rit.on{border-color:var(--line-2);background:var(--panel-2)}
+.rit .t{font-weight:700;font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rit .s{display:flex;gap:6px;align-items:center;margin-top:3px;font-size:10.5px;color:var(--muted);flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:4px;padding:1px 7px;border-radius:20px;border:1px solid var(--line);font-size:10px;color:var(--muted);background:var(--panel)}
+.chip.run{color:var(--run);border-color:color-mix(in srgb,var(--run) 45%,transparent)}
+.chip.complete,.chip.done{color:var(--green);border-color:color-mix(in srgb,var(--green) 45%,transparent)}
+.chip.failed,.chip.needs_attention{color:var(--red);border-color:color-mix(in srgb,var(--red) 45%,transparent)}
+.chip.queued{color:var(--amber)}
+.chip.gold{color:var(--gold);border-color:color-mix(in srgb,var(--gold) 45%,transparent)}
+.rsearch{margin:0 12px 6px;display:flex}
+.rsearch input{flex:1;background:var(--panel-2);border:1px solid var(--line);border-radius:9px;color:var(--text);padding:6px 9px;font-size:12px;outline:none}
+/* chat */
+#chatPane{display:flex;flex-direction:column;min-width:0;min-height:0}
+#chatHead{flex:none;display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+#chatTitle{font-weight:800;font-size:13.5px;background:none;border:none;color:var(--text);outline:none;min-width:80px;max-width:320px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.seg button{padding:5px 11px;background:transparent;border:none;color:var(--muted);font-size:11.5px}
+.seg button.on{background:var(--panel-2);color:var(--text);font-weight:700}
+.mchip{display:inline-flex;align-items:center;padding:3px 9px;border-radius:20px;border:1px solid var(--line);font-size:10.5px;color:var(--muted);cursor:pointer;background:var(--panel)}
+.mchip.on{color:var(--gold);border-color:color-mix(in srgb,var(--gold) 55%,transparent);font-weight:700}
+#msgs{flex:1;overflow-y:auto;padding:16px 18px;min-height:0}
+.msg{max-width:78%;margin-bottom:12px}
+.msg .bub{padding:10px 13px;border-radius:14px;background:var(--bubble);border:1px solid var(--line);line-height:1.55;font-size:13px;word-break:break-word}
+.msg.user{margin-left:auto}
+.msg.user .bub{border-color:color-mix(in srgb,var(--gold) 45%,transparent);background:color-mix(in srgb,var(--gold) 9%,var(--bubble))}
+.msg .meta{font-size:10px;color:var(--faint);margin:3px 4px}
+.msg pre{background:rgba(0,0,0,.25);padding:8px;border-radius:8px;overflow-x:auto;font-family:var(--mono);font-size:11.5px}
+.msg code{font-family:var(--mono);font-size:12px}
+.actrow{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.abtn{padding:6px 12px;border-radius:10px;border:1px solid var(--line-2);background:var(--panel-2);color:var(--text);font-size:12px}
+.abtn.go{border-color:color-mix(in srgb,var(--gold) 60%,transparent);color:var(--gold);font-weight:700}
+.abtn.green{border-color:color-mix(in srgb,var(--green) 55%,transparent);color:var(--green);font-weight:700}
+.abtn.red{border-color:color-mix(in srgb,var(--red) 55%,transparent);color:var(--red)}
+.thinking{color:var(--faint);font-size:12px;padding:6px 2px}
+#composer{flex:none;border-top:1px solid var(--line);background:var(--panel);padding:10px 14px calc(12px + env(safe-area-inset-bottom,0px))}
+#fchips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px}
+.fchip{display:inline-flex;align-items:center;gap:6px;padding:4px 9px;border-radius:9px;border:1px solid var(--line-2);background:var(--panel-2);font-size:11px}
+.fchip .x{cursor:pointer;color:var(--red)}
+#crow{display:flex;gap:8px;align-items:flex-end}
+#cinput{flex:1;background:var(--panel-2);border:1px solid var(--line);border-radius:12px;color:var(--text);padding:10px 12px;font-size:13px;outline:none;resize:none;max-height:160px;font-family:var(--sans);line-height:1.5}
+#cinput:focus{border-color:var(--line-2)}
+.cbtn{width:38px;height:38px;border-radius:11px;border:1px solid var(--line);background:var(--panel-2);color:var(--text);font-size:15px;flex:none}
+.cbtn.send{border-color:color-mix(in srgb,var(--gold) 60%,transparent);color:var(--gold);font-weight:800}
+#dropHint{display:none;position:absolute;inset:0;background:color-mix(in srgb,var(--gold) 14%,transparent);border:2px dashed var(--gold);border-radius:0;z-index:60;place-items:center;font-size:16px;color:var(--gold);font-weight:800;pointer-events:none}
+/* ctx */
+#ctx{border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+#ctxTabs{flex:none;display:flex;gap:4px;padding:8px 10px;border-bottom:1px solid var(--line);overflow-x:auto}
+#ctxTabs button{padding:5px 10px;border-radius:9px;border:1px solid transparent;background:transparent;color:var(--muted);font-size:11.5px;white-space:nowrap}
+#ctxTabs button.on{border-color:var(--line-2);background:var(--panel-2);color:var(--text);font-weight:700}
+#ctxBody{flex:1;overflow-y:auto;padding:12px;min-height:0}
+.card{background:var(--panel-2);border:1px solid var(--line);border-radius:var(--r);padding:11px;margin-bottom:9px}
+.card .ct{font-weight:800;font-size:12.5px;margin-bottom:4px}
+.card .cd{font-size:12px;color:var(--muted);line-height:1.5}
+.hint{font-size:10.5px;letter-spacing:1px;color:var(--faint);text-transform:uppercase;margin:12px 2px 6px}
+.stgrow{display:flex;align-items:center;gap:8px;padding:6px 2px;font-size:12px}
+.sdot{width:8px;height:8px;border-radius:50%;flex:none}
+.logbox{background:rgba(0,0,0,.18);border:1px solid var(--line);border-radius:10px;padding:9px;font-size:11.5px;line-height:1.55;overflow-x:auto;white-space:pre-wrap;font-family:var(--mono)}
+html[data-theme="forest"] .logbox{background:rgba(120,96,60,.08)}
+textarea.ed{width:100%;min-height:200px;background:var(--panel-solid);border:1px solid var(--line-2);border-radius:10px;color:var(--text);padding:10px;font-size:12.5px;font-family:var(--mono);outline:none;resize:vertical;line-height:1.5}
+.rowbtns{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.diff{font-family:var(--mono);font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all}
+.diff .add{color:var(--green)}
+.diff .del{color:var(--red)}
+.diff .hunk{color:var(--cyan)}
+.diff .fhead{color:var(--gold);font-weight:700}
+.thumb{width:74px;height:74px;object-fit:cover;border-radius:9px;border:1px solid var(--line)}
+/* sheet / scrim / toast */
+#scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:.18s;z-index:70}
+#scrim.show{opacity:1;pointer-events:auto}
+#sheet{position:fixed;left:50%;top:50%;transform:translate(-50%,-46%) scale(.98);opacity:0;pointer-events:none;width:min(560px,94vw);max-height:82vh;overflow-y:auto;background:var(--panel-solid);border:1px solid var(--line-2);border-radius:18px;padding:16px;z-index:80;transition:.18s}
+#sheet.show{opacity:1;pointer-events:auto;transform:translate(-50%,-50%) scale(1)}
+#sheet h3{margin:0 0 10px;font-size:15px}
+#sheet textarea{width:100%;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;color:var(--text);padding:9px;font-size:12.5px;outline:none;resize:vertical;font-family:var(--sans)}
+.toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(70px);background:var(--panel-solid);border:1px solid var(--line-2);color:var(--text);padding:9px 16px;border-radius:12px;font-size:12.5px;z-index:99;transition:.22s;max-width:80vw}
+.toast.show{transform:translateX(-50%) translateY(0)}
+.toast.err{border-color:var(--red);color:var(--red)}
+.mchips{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
+.empty{color:var(--faint);font-size:12px;text-align:center;padding:26px 8px}
+/* responsive */
+#railBtn,#ctxBtn{display:none}
+@media (max-width:980px){
+  #cols{grid-template-columns:1fr}
+  #rail{position:fixed;left:0;top:50px;bottom:0;width:min(310px,86vw);z-index:75;transform:translateX(-102%);transition:.2s;border-right:1px solid var(--line-2)}
+  #rail.open{transform:none}
+  #ctx{position:fixed;right:0;top:50px;bottom:0;width:min(430px,94vw);z-index:75;transform:translateX(102%);transition:.2s;border-left:1px solid var(--line-2)}
+  #ctx.open{transform:none}
+  #railBtn,#ctxBtn{display:inline-flex}
+}
+</style>
+</head>
+<body>
+<div id="wb">
+  <header id="topbar">
+    <button class="tbtn" id="railBtn">☰</button>
+    <div><b>🐝 Swarm Workbench</b><br><small>chat · missions · reports</small></div>
+    <div class="sp"></div>
+    <span class="conn" id="conn"></span>
+    <button class="tbtn" id="themeBtn">🌓</button>
+    <button class="tbtn" onclick="location.href='/?desktop=1'">Desktop</button>
+    <button class="tbtn" onclick="location.href='/m.html'">📱</button>
+    <button class="tbtn" id="ctxBtn">🗂</button>
+  </header>
+  <div id="cols">
+    <aside id="rail">
+      <div class="rsec threads">
+        <div class="rhead">💬 對話 <span class="sp"></span><button id="newThreadBtn" title="開新對話">＋</button></div>
+        <div class="rlist" id="threadList"></div>
+      </div>
+      <div class="rsec runs">
+        <div class="rhead">🚀 Runs</div>
+        <div class="rsearch"><input id="runSearch" placeholder="搜尋 topic / project / 狀態…"></div>
+        <div class="rlist" id="runList"></div>
+      </div>
+    </aside>
+    <main id="chatPane">
+      <div id="chatHead">
+        <input id="chatTitle" value="新對話" maxlength="60">
+        <div class="seg" id="scopeSeg">
+          <button data-scope="global" class="on">🧠 總管</button>
+          <button data-scope="run">🚀 Run對話</button>
+        </div>
+        <span class="sp" style="flex:1"></span>
+        <div class="seg" id="modeSeg">
+          <button data-mode="auto" class="on">auto</button>
+          <button data-mode="fast">快</button>
+          <button data-mode="deep">深</button>
+        </div>
+      </div>
+      <div id="msgs"></div>
+      <div id="composer">
+        <div id="fchips"></div>
+        <div id="crow">
+          <button class="cbtn" id="attachBtn" title="上載檔案（Excel / 圖 / PDF…）">📎</button>
+          <button class="cbtn" id="urlBtn" title="抓取網頁做 context">🔗</button>
+          <textarea id="cinput" rows="1" placeholder="同總管傾、開 mission、跟進上一輪…（Enter 送出 / Shift+Enter 換行；可以直接 drop 檔案 / paste 截圖）"></textarea>
+          <button class="cbtn send" id="sendBtn">➤</button>
+        </div>
+      </div>
+      <input type="file" id="fileInput" multiple hidden>
+    </main>
+    <aside id="ctx">
+      <div id="ctxTabs">
+        <button data-tab="run" class="on">Run詳情</button>
+        <button data-tab="report">報告</button>
+        <button data-tab="diff">改咗乜</button>
+        <button data-tab="next">下一步</button>
+        <button data-tab="files">檔案</button>
+      </div>
+      <div id="ctxBody"><div class="empty">左邊揀一個 run</div></div>
+    </aside>
+  </div>
+</div>
+<div id="dropHint">📥 放低檔案就上載</div>
+<div id="scrim"></div>
+<div id="sheet"></div>
+<div id="toast" class="toast"></div>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+/* ───────── helpers（port 自 m.html）───────── */
+const $=(s,r=document)=>r.querySelector(s);
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+const STATUS_LABEL={pending:'待命',running:'工作中',completed:'已完成',failed:'失敗',interrupted:'中斷',complete:'完成',done:'完成',needs_attention:'要處理',queued:'排隊',executing:'執行中',active:'待命',stopped:'停咗',skipped:'略過'};
+function mdLite(src){let t=esc(src||'');t=t.replace(/```([\s\S]*?)```/g,(m,c)=>'<pre><code>'+c.replace(/^\n/,'')+'</code></pre>');t=t.replace(/`([^`]+)`/g,'<code>$1</code>');t=t.replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');t=t.replace(/^### (.+)$/gm,'<b>$1</b>').replace(/^## (.+)$/gm,'<b>$1</b>').replace(/^# (.+)$/gm,'<b>$1</b>');t=t.replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g,'<a href="$2" target="_blank" style="color:var(--blue)">$1</a>');return t.replace(/\n/g,'<br>');}
+async function api(path,opts={}){const r=await fetch(path,{headers:{'Content-Type':'application/json'},...opts});const ct=r.headers.get('content-type')||'';const data=ct.includes('json')?await r.json():await r.text();if(!r.ok)throw new Error((data&&data.error)||('HTTP '+r.status));return data;}
+function toast(msg,err){const t=$('#toast');t.textContent=msg;t.className='toast show'+(err?' err':'');clearTimeout(t._t);t._t=setTimeout(()=>t.className='toast',3200);}
+function fmtAgo(ts){if(!ts)return '';const s=Math.floor((Date.now()-new Date(ts))/1000);if(s<60)return s+'s';if(s<3600)return Math.floor(s/60)+'m';if(s<86400)return Math.floor(s/3600)+'h';return Math.floor(s/86400)+'d';}
+function kb(n){return n>1048576?(n/1048576).toFixed(1)+'MB':Math.max(1,Math.round(n/1024))+'KB';}
+function openSheet(title,html){$('#sheet').innerHTML='<h3>'+esc(title)+'</h3>'+html;$('#sheet').classList.add('show');$('#scrim').classList.add('show');}
+function closeSheet(){$('#sheet').classList.remove('show');$('#scrim').classList.remove('show');}
+$('#scrim').onclick=()=>{closeSheet();$('#rail').classList.remove('open');$('#ctx').classList.remove('open');};
+
+/* ───────── state ───────── */
+const socket=io();
+const state={
+  threads:[], curThreadId:null, thread:null,
+  runs:[], byId:{}, focusRunId:null,
+  scope:'global', mode:'auto',
+  models:[], projects:[],
+  tab:'run', pendingFiles:[], busy:false, search:'',
+  editArtifactId:null, editPlan:false, reportFilter:'all',
+  theme:localStorage.getItem('wb-theme')||'ink',
+};
+document.documentElement.setAttribute('data-theme',state.theme);
+$('#themeBtn').onclick=()=>{state.theme=state.theme==='ink'?'forest':'ink';localStorage.setItem('wb-theme',state.theme);document.documentElement.setAttribute('data-theme',state.theme);};
+$('#railBtn').onclick=()=>{$('#rail').classList.toggle('open');$('#scrim').classList.toggle('show',$('#rail').classList.contains('open'));};
+$('#ctxBtn').onclick=()=>{$('#ctx').classList.toggle('open');$('#scrim').classList.toggle('show',$('#ctx').classList.contains('open'));};
+
+function focusedRun(){return state.focusRunId?state.byId[state.focusRunId]:null;}
+function ingestRun(run){if(!run||!run.id)return;state.byId[run.id]=run;const i=state.runs.findIndex(r=>r.id===run.id);const slim={id:run.id,topic:run.topic,status:run.status,projectPath:run.projectPath,verifyVerdict:run.verifyVerdict,updatedAt:run.updatedAt,followupProposal:run.followupProposal&&run.followupProposal.status==='pending'?{title:run.followupProposal.title}:null,autopilot:run.autopilot&&run.autopilot.enabled?{roundsUsed:run.autopilot.roundsUsed||0,maxRounds:run.autopilot.maxRounds||3}:null};if(i>=0)state.runs[i]={...state.runs[i],...slim};else state.runs.unshift(slim);renderRail();if(state.focusRunId===run.id)renderCtx();}
+
+/* ───────── boot ───────── */
+async function boot(){
+  try{const m=await api('/api/models');state.models=m.models||[];}catch(e){}
+  try{const p=await api('/api/projects');state.projects=p.projects||[];}catch(e){}
+  await loadThreads();
+  await loadRuns();
+  if(state.threads.length)await selectThread(state.threads[0].id);else await newThread();
+  if(state.runs.length){state.focusRunId=state.runs[0].id;await loadRun(state.focusRunId);}
+  renderAll();
+}
+async function loadThreads(){try{const r=await api('/api/workbench/threads');state.threads=r.threads||[];}catch(e){toast(e.message,true);}}
+async function loadRuns(){try{const r=await api('/api/runs');state.runs=(r.runs||[]);}catch(e){}}
+async function loadRun(id){try{state.byId[id]=await api('/api/runs/'+id);}catch(e){}}
+function renderAll(){renderRail();renderChat();renderCtx();}
+
+/* ───────── rail ───────── */
+function renderRail(){
+  const tl=$('#threadList');
+  tl.innerHTML=state.threads.map(t=>`<div class="rit ${t.id===state.curThreadId?'on':''}" data-th="${t.id}">
+    <div class="t">${esc(t.title||'對話')}</div>
+    <div class="s"><span>${t.msgCount||0} msg</span><span>${fmtAgo(t.updatedAt)}</span><span class="x" data-delth="${t.id}" style="cursor:pointer;color:var(--faint)">🗑</span></div></div>`).join('')||'<div class="empty">撳 ＋ 開新對話</div>';
+  tl.querySelectorAll('[data-th]').forEach(n=>n.onclick=(e)=>{if(e.target.dataset.delth)return;selectThread(n.dataset.th);});
+  tl.querySelectorAll('[data-delth]').forEach(n=>n.onclick=async()=>{if(!confirm('刪除呢個對話?（檔案會留低）'))return;try{await api('/api/workbench/threads/'+n.dataset.delth,{method:'DELETE'});await loadThreads();if(state.curThreadId===n.dataset.delth){state.curThreadId=null;state.thread=null;if(state.threads.length)await selectThread(state.threads[0].id);else await newThread();}renderAll();}catch(e){toast(e.message,true);}});
+  const q=state.search.trim().toLowerCase();
+  const list=state.runs.filter(r=>!q||`${r.topic} ${r.projectPath} ${r.status}`.toLowerCase().includes(q));
+  $('#runList').innerHTML=list.map(r=>{
+    const st=r.runningAgents?'running':(r.status||'');
+    return `<div class="rit ${r.id===state.focusRunId?'on':''}" data-run="${r.id}">
+    <div class="t">${esc(r.topic||r.id)}</div>
+    <div class="s"><span class="chip ${esc(st)}">${r.runningAgents?('▶'+r.runningAgents):esc(STATUS_LABEL[r.status]||r.status||'')}</span>
+    ${r.verifyVerdict?`<span class="chip ${r.verifyVerdict==='PASS'?'complete':'failed'}">v:${esc(r.verifyVerdict)}</span>`:''}
+    ${r.followupProposal?'<span class="chip gold">🤝 提案</span>':''}
+    ${r.autopilot?`<span class="chip gold">🤖 ${r.autopilot.roundsUsed}/${r.autopilot.maxRounds}</span>`:''}
+    <span>${esc(String(r.projectPath||'').split('/').pop())}</span></div></div>`;}).join('')||'<div class="empty">冇 run</div>';
+  $('#runList').querySelectorAll('[data-run]').forEach(n=>n.onclick=()=>focusRun(n.dataset.run));
+}
+$('#runSearch').oninput=(e)=>{state.search=e.target.value;renderRail();};
+$('#newThreadBtn').onclick=()=>newThread();
+async function newThread(){try{const r=await api('/api/workbench/threads',{method:'POST',body:JSON.stringify({title:'新對話'})});state.threads.unshift({...r.thread,msgCount:0,fileCount:0});await selectThread(r.thread.id);}catch(e){toast(e.message,true);}}
+async function selectThread(id){try{const r=await api('/api/workbench/threads/'+id);state.curThreadId=id;state.thread=r.thread;state.scope='global';syncScopeSeg();$('#chatTitle').value=r.thread.title||'對話';renderRail();renderChat();}catch(e){toast(e.message,true);}}
+async function focusRun(id){state.focusRunId=id;await loadRun(id);if(state.scope==='run')renderChat();renderRail();renderCtx();if(innerWidth<=980){$('#ctx').classList.add('open');$('#scrim').classList.add('show');}}
+$('#chatTitle').onchange=async(e)=>{if(!state.curThreadId)return;try{await api('/api/workbench/threads/'+state.curThreadId,{method:'PATCH',body:JSON.stringify({title:e.target.value})});const t=state.threads.find(x=>x.id===state.curThreadId);if(t)t.title=e.target.value;renderRail();}catch(err){toast(err.message,true);}};
+
+/* ───────── scope / mode ───────── */
+function syncScopeSeg(){$('#scopeSeg').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.scope===state.scope));}
+$('#scopeSeg').querySelectorAll('button').forEach(b=>b.onclick=()=>{state.scope=b.dataset.scope;if(state.scope==='run'&&!state.focusRunId&&state.runs.length){state.focusRunId=state.runs[0].id;loadRun(state.focusRunId).then(renderCtx);}syncScopeSeg();renderChat();});
+$('#modeSeg').querySelectorAll('button').forEach(b=>b.onclick=()=>{state.mode=b.dataset.mode;$('#modeSeg').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));});
+
+/* ───────── chat render ───────── */
+function actionChipHTML(a,i){if(!a||!a.type||a.type==='none')return '';const lbl={approve:'✅ 批准',debate:'🥊 開拗',execute:'▶ 落實',revise:'✍️ 再改',mission:'🔧 開 mission / 跟進',council:'🗳 開議會',stop:'⏹ 停'}[a.type]||('▶ '+a.type);return `<div class="actrow"><button class="abtn go" data-act="${i}">${lbl}</button></div>`;}
+function renderChat(){
+  const box=$('#msgs');
+  if(state.scope==='global'){
+    const msgs=(state.thread&&state.thread.messages)||[];
+    box.innerHTML=msgs.map((m,i)=>`<div class="msg ${m.role}"><div class="bub">${mdLite(m.content)}${m.role==='assistant'?actionChipHTML(m.action,i):''}</div><div class="meta">${m.role==='user'?'你':'總管'}${m.model?' · '+esc(m.model):''} · ${fmtAgo(m.ts)}${(m.files||[]).length?' · 📎'+m.files.length:''}</div></div>`).join('')||'<div class="empty">同總管傾嘢：問 run 狀況、開 mission、跟進上一輪、丟個 Excel 俾佢分析…</div>';
+    if(state.busy)box.innerHTML+='<div class="thinking">🧠 總管諗緊…</div>';
+    box.querySelectorAll('[data-act]').forEach(n=>{const m=msgs[Number(n.dataset.act)];if(m&&m.action)n.onclick=()=>runOverseerAction(m.action.type,m.action.arg||'');});
+  }else{
+    const r=focusedRun();
+    const th=(r&&r.chatThread)||[];
+    box.innerHTML=(r?`<div class="thinking">🚀 Run對話 · ${esc(r.topic||'')} — 呢個幕僚可以 Read project 檔案,傾完可「定稿→開議會」</div>`:'')+
+      th.map(m=>`<div class="msg ${m.role==='user'?'user':'assistant'}"><div class="bub">${mdLite(m.content)}</div><div class="meta">${m.role==='user'?'你':'幕僚'}${m.model?' · '+esc(m.model):''}</div></div>`).join('')||'<div class="empty">揀咗 run 就可以同佢個幕僚傾</div>';
+    if(r&&r.chatBusy)box.innerHTML+='<div class="thinking">🧠 幕僚諗緊…</div>';
+  }
+  box.scrollTop=box.scrollHeight;
+}
+
+/* ───────── send ───────── */
+const cinput=$('#cinput');
+cinput.addEventListener('input',()=>{cinput.style.height='auto';cinput.style.height=Math.min(160,cinput.scrollHeight)+'px';});
+cinput.addEventListener('keydown',(e)=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();}});
+$('#sendBtn').onclick=()=>sendMsg();
+function fileLines(){return state.pendingFiles.map(f=>`[附件 ${f.name} (${kb(f.size)})，絕對路徑：${f.path} —— 請用 Read tool / bash 打開嚟分析]`).join('\n');}
+async function sendMsg(){
+  let text=cinput.value.trim();
+  const files=state.pendingFiles.slice();
+  if(!text&&!files.length)return;
+  const full=[text,fileLines()].filter(Boolean).join('\n\n');
+  cinput.value='';cinput.style.height='auto';state.pendingFiles=[];renderFchips();
+  if(state.scope==='run'){
+    const r=focusedRun();if(!r){toast('未揀 run',true);return;}
+    try{await api('/api/runs/'+r.id+'/chat',{method:'POST',body:JSON.stringify({message:full})});r.chatThread=r.chatThread||[];r.chatThread.push({role:'user',content:full});r.chatBusy=true;renderChat();}
+    catch(e){toast(e.message,true);cinput.value=text;}
+    return;
+  }
+  if(!state.thread){await newThread();}
+  const t=state.thread;
+  t.messages=t.messages||[];
+  const userMsg={role:'user',content:full,files:files.map(f=>f.name),ts:new Date().toISOString()};
+  t.messages.push(userMsg);state.busy=true;renderChat();
+  persistMsg(userMsg);
+  try{
+    const hist=t.messages.slice(-7,-1).map(m=>({role:m.role,content:String(m.content||'').slice(0,2000)}));
+    const r=await api('/api/overseer',{method:'POST',body:JSON.stringify({message:full,mode:state.mode==='auto'?undefined:state.mode,history:hist})});
+    const am={role:'assistant',content:r.reply||'(冇回覆)',model:r.model,action:r.action||undefined,ts:new Date().toISOString()};
+    t.messages.push(am);persistMsg(am);
+  }catch(e){t.messages.push({role:'assistant',content:'⚠️ '+e.message,ts:new Date().toISOString()});}
+  state.busy=false;renderChat();
+  const ts=state.threads.find(x=>x.id===t.id);if(ts){ts.msgCount=t.messages.length;ts.updatedAt=new Date().toISOString();}
+  renderRail();
+}
+function persistMsg(m){if(!state.thread)return;api('/api/workbench/threads/'+state.thread.id+'/messages',{method:'POST',body:JSON.stringify(m)}).catch(()=>{});}
+
+/* ───────── overseer ACTION（confirm-gate 執行）───────── */
+async function runOverseerAction(type,arg){
+  const r=focusedRun();
+  try{
+    if(type==='stop'){if(!confirm('停止當前 run?'))return;const cur=r||state.byId[state.runs[0]&&state.runs[0].id];if(!cur)return;await api('/api/runs/'+cur.id+'/stop',{method:'POST',body:'{}'});toast('⏹ 已停');return;}
+    if(type==='approve'){if(!r){toast('未揀 run',true);return;}if(!confirm('批准御准閘?'))return;await api('/api/runs/'+r.id+'/council/approve',{method:'POST',body:'{}'});toast('✅ 已批准');return;}
+    if(type==='debate'){if(!r)return;await api('/api/runs/'+r.id+'/council/debate',{method:'POST',body:'{}'});toast('🥊 開拗');return;}
+    if(type==='revise'){if(!r)return;const note=prompt('想點改?（俾議會嘅指示）',arg||'');if(note===null)return;await api('/api/runs/'+r.id+'/council/revise',{method:'POST',body:JSON.stringify({note})});toast('✍️ 議會再收斂');return;}
+    if(type==='execute'){if(!r){toast('未揀 run',true);return;}sheetExecute(r);return;}
+    if(type==='mission'){
+      if(r&&isDone(r)&&r.pipeline&&r.pipeline.mode==='code'&&confirm('用「🔁 跟進」模式喺呢個 run 繼續（帶埋之前改動）?\n\n'+(arg||'')+'\n\n取消 = 開全新 mission')){sheetFollowup(r,arg||'');return;}
+      sheetMission(arg||'');return;
+    }
+    if(type==='council'){sheetCouncil(arg||'');return;}
+  }catch(e){toast(e.message,true);}
+}
+function isDone(r){if(!r)return false;const p=r.pipeline||{};const st=p.stages||[];const noRun=!st.some(s=>['running','pending'].includes(s.status));return ['complete','done','needs_attention','stopped'].includes(r.status)||((p.current||0)>=st.length&&noRun&&st.length>0);}
+function modelChipsHTML(idPrefix,defCli,defModel){return `<div class="mchips" id="${idPrefix}Chips">${state.models.map(m=>`<span class="mchip ${m.cli===defCli&&m.model===defModel?'on':''}" data-cli="${m.cli}" data-model="${m.model}">${esc(m.short||m.label)}</span>`).join('')}</div>`;}
+function bindChips(idPrefix,def){let pick=def;setTimeout(()=>{document.querySelectorAll('#'+idPrefix+'Chips .mchip').forEach(c=>c.onclick=()=>{document.querySelectorAll('#'+idPrefix+'Chips .mchip').forEach(x=>x.classList.remove('on'));c.classList.add('on');pick={cli:c.dataset.cli,model:c.dataset.model};});},0);return ()=>pick;}
+function sheetMission(brief){
+  const proj=(focusedRun()&&focusedRun().projectPath)||(state.projects[0]&&(state.projects[0].path||state.projects[0]))||'';
+  const mv=(localStorage.getItem('wb-model')||'claude|sonnet').split('|');
+  openSheet('🔧 開新 mission',`<p style="font-size:12px;color:var(--muted)">喺 <b>${esc(String(proj).split('/').pop()||'project')}</b> 開新 mission（research→build→review→fix→verify）。</p>
+    <textarea id="shBrief" style="min-height:130px">${esc(brief)}</textarea>
+    <label style="font-size:11px;color:var(--faint);display:block;margin-top:8px">寫 code model</label>${modelChipsHTML('sh',mv[0],mv[1])}
+    <div class="rowbtns"><button class="abtn" onclick="closeSheet()">取消</button><button class="abtn go" id="shGo">🔀 開工</button></div>`);
+  const getPick=bindChips('sh',{cli:mv[0],model:mv[1]});
+  setTimeout(()=>{$('#shGo').onclick=async()=>{const b=$('#shBrief').value.trim();if(!b){toast('要有 brief',true);return;}const p=getPick();localStorage.setItem('wb-model',p.cli+'|'+p.model);closeSheet();try{const rr=await api('/api/plans/run',{method:'POST',body:JSON.stringify({staged:true,deliveryMode:'code',taskBrief:b,topic:b.split('\n')[0].slice(0,70),projectPath:proj||undefined,cli:p.cli,model:p.model})});toast(rr.queued?('⏳ 排隊 #'+(rr.position||'')):'🔀 mission 開工');await loadRuns();if(rr.run){state.focusRunId=rr.run.id;await loadRun(rr.run.id);}renderAll();}catch(e){toast(e.message,true);}};},0);
+}
+function sheetFollowup(r,prefill){
+  const p=r.pipeline||{};const mv=[p.cli||'claude',p.model||'sonnet'];
+  openSheet('🔁 跟進呢個 mission',`<p style="font-size:12px;color:var(--muted)">同一個 run/project 繼續 — 帶埋原 brief + 之前改咗乜 + 驗證結果；完成再 verify + 入 push gate。</p>
+    <textarea id="shFu" style="min-height:110px" placeholder="想跟進乜?">${esc(prefill)}</textarea>
+    <label style="font-size:11px;color:var(--faint);display:block;margin-top:8px">寫 code model</label>${modelChipsHTML('sh',mv[0],mv[1])}
+    <div class="rowbtns"><button class="abtn" onclick="closeSheet()">取消</button><button class="abtn go" id="shGo">🔁 開工</button></div>`);
+  const getPick=bindChips('sh',{cli:mv[0],model:mv[1]});
+  setTimeout(()=>{$('#shGo').onclick=async()=>{const note=$('#shFu').value.trim();if(!note){toast('要打跟進指示',true);return;}const pk=getPick();closeSheet();try{const out=await api('/api/runs/'+r.id+'/followup',{method:'POST',body:JSON.stringify({instruction:note,cli:pk.cli,model:pk.model})});toast(out.queued?'⏳ 跟進排隊':'🔁 跟進 #'+(out.followupSeq||'')+' 開波');}catch(e){toast(e.message,true);}};},0);
+}
+function sheetCouncil(topic){
+  openSheet('🗳 開 AI 議會',`<textarea id="shC" style="min-height:110px" placeholder="議題 / 要審乜">${esc(topic)}</textarea>
+    <div class="mchips" id="cmodeChips"><span class="mchip on" data-cm="balanced">平衡</span><span class="mchip" data-cm="quick">快速</span><span class="mchip" data-cm="deep-6">深度6</span><span class="mchip" data-cm="deep-grid">9-grid</span></div>
+    <div class="rowbtns"><button class="abtn" onclick="closeSheet()">取消</button><button class="abtn go" id="shGo">🗳 開會</button></div>`);
+  let cm='balanced';setTimeout(()=>{document.querySelectorAll('#cmodeChips .mchip').forEach(c=>c.onclick=()=>{document.querySelectorAll('#cmodeChips .mchip').forEach(x=>x.classList.remove('on'));c.classList.add('on');cm=c.dataset.cm;});
+    $('#shGo').onclick=async()=>{const t=$('#shC').value.trim();if(!t){toast('要有議題',true);return;}closeSheet();const proj=(focusedRun()&&focusedRun().projectPath)||undefined;try{const cr=await api('/api/runs',{method:'POST',body:JSON.stringify({topic:t.slice(0,70),taskBrief:t,projectPath:proj})});await api('/api/runs/'+cr.run.id+'/council/start',{method:'POST',body:JSON.stringify({councilMode:cm})});toast('🗳 議會開波');await loadRuns();state.focusRunId=cr.run.id;await loadRun(cr.run.id);renderAll();}catch(e){toast(e.message,true);}};},0);
+}
+function sheetExecute(r){
+  const mv=(localStorage.getItem('wb-model')||'codex|gpt-5.5').split('|');
+  openSheet('▶ 落實議會 plan',`<p style="font-size:12px;color:var(--muted)">將議會終稿交 code pipeline（build→review→fix→verify）。</p>
+    <label style="font-size:11px;color:var(--faint)">寫 code model</label>${modelChipsHTML('sh',mv[0],mv[1])}
+    <div class="rowbtns"><button class="abtn" onclick="closeSheet()">取消</button><button class="abtn go" id="shGo">▶ 落實</button></div>`);
+  const getPick=bindChips('sh',{cli:mv[0],model:mv[1]});
+  setTimeout(()=>{$('#shGo').onclick=async()=>{const p=getPick();closeSheet();try{const build={cli:p.cli,model:p.model};const out=await api('/api/runs/'+r.id+'/council/execute',{method:'POST',body:JSON.stringify({model:build.model,perAgentModels:{frontend:build,backend:build,database:build,test:build,fixer:build,reviewer:{cli:'claude',model:'opus'},verifier:{cli:'claude',model:'sonnet'}}})});toast(out.queued?'⏳ 已排隊':'▶ 落實開波');}catch(e){toast(e.message,true);}};},0);
+}
+
+/* ───────── 檔案：attach / drop / paste / url ───────── */
+function renderFchips(){$('#fchips').innerHTML=state.pendingFiles.map((f,i)=>`<span class="fchip">📄 ${esc(f.name)} <small style="color:var(--faint)">${kb(f.size)}</small> <span class="x" data-fx="${i}">✕</span></span>`).join('');$('#fchips').querySelectorAll('[data-fx]').forEach(n=>n.onclick=()=>{state.pendingFiles.splice(Number(n.dataset.fx),1);renderFchips();});}
+async function uploadFile(file){
+  const scopeRun=state.scope==='run'&&focusedRun();
+  const q=scopeRun?('runId='+encodeURIComponent(focusedRun().id)):('threadId='+encodeURIComponent(state.curThreadId||''));
+  if(!scopeRun&&!state.curThreadId){await newThread();}
+  const q2=scopeRun?q:('threadId='+encodeURIComponent(state.curThreadId));
+  toast('⬆️ 上載緊 '+file.name+'…');
+  const r=await fetch('/api/workbench/upload?'+q2+'&name='+encodeURIComponent(file.name),{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file});
+  const d=await r.json();
+  if(!r.ok)throw new Error(d.error||('HTTP '+r.status));
+  state.pendingFiles.push(d.file);renderFchips();toast('📎 '+d.file.name+' 上載好');
+}
+$('#attachBtn').onclick=()=>$('#fileInput').click();
+$('#fileInput').onchange=async(e)=>{for(const f of e.target.files){try{await uploadFile(f);}catch(err){toast(err.message,true);}}e.target.value='';};
+document.addEventListener('dragover',(e)=>{e.preventDefault();$('#dropHint').style.display='grid';});
+document.addEventListener('dragleave',(e)=>{if(!e.relatedTarget)$('#dropHint').style.display='none';});
+document.addEventListener('drop',async(e)=>{e.preventDefault();$('#dropHint').style.display='none';for(const f of (e.dataTransfer&&e.dataTransfer.files)||[]){try{await uploadFile(f);}catch(err){toast(err.message,true);}}});
+document.addEventListener('paste',async(e)=>{const items=(e.clipboardData&&e.clipboardData.files)||[];for(const f of items){try{await uploadFile(new File([f],f.name&&f.name!=='image.png'?f.name:('paste-'+Date.now()+'.png'),{type:f.type}));}catch(err){toast(err.message,true);}}});
+$('#urlBtn').onclick=async()=>{
+  const url=prompt('抓取邊個網頁做 context?(http/https)');if(!url)return;
+  const scopeRun=state.scope==='run'&&focusedRun();
+  const body=scopeRun?{url,runId:focusedRun().id}:{url,threadId:state.curThreadId};
+  try{toast('🔗 抓緊…');const r=await api('/api/workbench/fetch-url',{method:'POST',body:JSON.stringify(body)});state.pendingFiles.push(r.file);renderFchips();toast('🔗 抓咗 '+r.chars+' 字');}catch(e){toast(e.message,true);}
+};
+
+/* ───────── 右欄 ctx ───────── */
+$('#ctxTabs').querySelectorAll('button').forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;$('#ctxTabs').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));renderCtx();});
+function renderCtx(){
+  const r=focusedRun();const box=$('#ctxBody');
+  if(!r){box.innerHTML='<div class="empty">左邊揀一個 run</div>';return;}
+  if(state.tab==='run')return renderTabRun(r,box);
+  if(state.tab==='report')return renderTabReport(r,box);
+  if(state.tab==='diff')return renderTabDiff(r,box);
+  if(state.tab==='next')return renderTabNext(r,box);
+  if(state.tab==='files')return renderTabFiles(r,box);
+}
+function sdotColor(s){return s==='complete'?'var(--green)':s==='running'?'var(--run)':(s==='failed'||s==='interrupted')?'var(--red)':'var(--faint)';}
+function renderTabRun(r,box){
+  const p=r.pipeline||{};const pp=r.pendingPush;
+  const ap=r.autopilot;const cp=r.copilot||{};
+  box.innerHTML=`
+  <div class="card"><div class="ct">${esc(r.topic||r.id)}</div>
+    <div class="cd">狀態 <span class="chip ${esc(r.status)}">${esc(STATUS_LABEL[r.status]||r.status)}</span> · mode ${esc(p.mode||'-')}${p.councilPlanVersion?' · plan v'+p.councilPlanVersion:''}<br>
+    Project: ${esc(r.projectPath||'-')}<br>verify: ${esc(r.verifyVerdict||'—')} · completion: ${esc(r.completionVerdict||'—')} · 跟進 ${(r.followups||[]).length} 次</div></div>
+  ${pp&&['awaiting','pushing','failed'].includes(pp.status)?`<div class="card" style="border-color:color-mix(in srgb,var(--gold) 55%,transparent)"><div class="ct">⬆️ 待確認 Push</div><div class="cd">${esc(String(pp.project||'').split('/').pop())} → <b>${esc(pp.branch||'')}</b> · ${esc(pp.status)}</div>
+    <div class="rowbtns"><button class="abtn green" id="pushGo" ${pp.status==='pushing'?'disabled':''}>${pp.status==='failed'?'🔁 再試':'⬆️ Confirm Push'}</button><button class="abtn" id="pushNo">✋ 唔 push</button></div></div>`:''}
+  ${(r.followupProposal&&r.followupProposal.status==='pending')?proposalCardHTML(r):''}
+  <div class="hint">Pipeline</div>
+  ${(p.stages||[]).map(s=>`<div class="stgrow"><span class="sdot" style="background:${sdotColor(s.status)}"></span>${esc(s.title)}<span class="sp" style="flex:1"></span><span class="chip ${esc(s.status)}">${esc(STATUS_LABEL[s.status]||s.status)}</span></div>`).join('')||'<div class="empty">冇 pipeline</div>'}
+  <div class="hint">Copilot / Autopilot</div>
+  <div class="card"><div class="cd">🤝 對話式跟進提案：剩 <b>${cp.roundsLeft!=null?cp.roundsLeft:3}</b> 輪
+    <button class="abtn" id="cpRounds" style="padding:2px 8px;font-size:11px">較輪數</button><br>
+    🤖 全自動 autopilot：${ap&&ap.enabled?`開（${ap.roundsUsed||0}/${ap.maxRounds}）`:(ap&&ap.stopReason?'停咗（'+esc(ap.stopReason)+'）':'關')}
+    <button class="abtn ${ap&&ap.enabled?'red':'go'}" id="apBtn" style="padding:2px 8px;font-size:11px">${ap&&ap.enabled?'關':'開'}</button></div></div>
+  <div class="hint">任務 Brief（可改）</div>
+  <textarea class="ed" id="briefEd" style="min-height:120px">${esc(r.taskBrief||'')}</textarea>
+  <div class="rowbtns"><button class="abtn go" id="briefSave">儲存 brief</button></div>`;
+  const g=$('#pushGo');if(g)g.onclick=async()=>{if(!confirm('Push 上 GitHub?\n'+(pp.project||'')+' → '+(pp.branch||'')))return;try{await api('/api/runs/'+r.id+'/push',{method:'POST',body:JSON.stringify({confirm:true})});toast('⬆️ Push 緊…');}catch(e){toast(e.message,true);}};
+  const n=$('#pushNo');if(n)n.onclick=async()=>{try{await api('/api/runs/'+r.id+'/push/decline',{method:'POST',body:'{}'});toast('✋ 已取消 push');await loadRun(r.id);renderCtx();}catch(e){toast(e.message,true);}};
+  bindProposalCard(r);
+  $('#cpRounds').onclick=async()=>{const v=prompt('對話式跟進剩幾多輪?(0-5)',String(cp.roundsLeft!=null?cp.roundsLeft:3));if(v===null)return;try{await api('/api/workbench/runs/'+r.id+'/autopilot',{method:'POST',body:JSON.stringify({copilotRounds:Number(v)})});await loadRun(r.id);renderCtx();toast('🤝 較咗輪數');}catch(e){toast(e.message,true);}};
+  $('#apBtn').onclick=async()=>{const on=!(ap&&ap.enabled);let mr=3;if(on){const v=prompt('autopilot 上限幾多輪?(1-3)','3');if(v===null)return;mr=Number(v)||3;}try{await api('/api/workbench/runs/'+r.id+'/autopilot',{method:'POST',body:JSON.stringify({enabled:on,maxRounds:mr})});await loadRun(r.id);renderCtx();toast(on?'🤖 autopilot 開':'🤖 autopilot 關');}catch(e){toast(e.message,true);}};
+  $('#briefSave').onclick=async()=>{try{await api('/api/runs/'+r.id+'/settings',{method:'PATCH',body:JSON.stringify({taskBrief:$('#briefEd').value})});toast('✅ brief 已更新');}catch(e){toast(e.message,true);}};
+}
+function proposalCardHTML(r){const pr=r.followupProposal;return `<div class="card" style="border-color:color-mix(in srgb,var(--gold) 60%,transparent)"><div class="ct">🤝 Copilot 跟進提案 <span class="chip gold">剩 ${pr.roundsLeft} 輪</span></div>
+  <div class="cd" style="white-space:pre-wrap">${esc(pr.draft)}</div>
+  <div class="rowbtns"><button class="abtn green" data-prop="go">✅ 照做</button><button class="abtn" data-prop="talk">✍️ 傾過先</button><button class="abtn red" data-prop="no">🛑 唔要</button></div></div>`;}
+function bindProposalCard(r){
+  const go=$('#ctxBody [data-prop="go"]');if(!go)return;
+  go.onclick=async()=>{try{const out=await api('/api/workbench/runs/'+r.id+'/proposal/confirm',{method:'POST',body:'{}'});toast('🔁 跟進 #'+(out.followupSeq||'')+' 開波（剩 '+out.roundsLeft+' 輪）');await loadRun(r.id);renderCtx();}catch(e){toast(e.message,true);}};
+  $('#ctxBody [data-prop="talk"]').onclick=()=>{state.scope='global';syncScopeSeg();renderChat();cinput.value='關於你個跟進提案「'+(r.followupProposal.title||'')+'」：\n'+r.followupProposal.draft+'\n\n我想調整：';cinput.focus();cinput.dispatchEvent(new Event('input'));};
+  $('#ctxBody [data-prop="no"]').onclick=async()=>{try{await api('/api/workbench/runs/'+r.id+'/proposal/dismiss',{method:'POST',body:'{}'});toast('🛑 唔要呢個提案');await loadRun(r.id);renderCtx();}catch(e){toast(e.message,true);}};
+}
+/* 報告 tab */
+function renderTabReport(r,box){
+  const arts=(r.artifacts||[]);
+  const types=[...new Set(arts.map(a=>a.type))];
+  const f=state.reportFilter;
+  const list=f==='all'?arts:arts.filter(a=>a.type===f);
+  if(state.editArtifactId){
+    const a=arts.find(x=>x.id===state.editArtifactId);
+    if(a){box.innerHTML=`<div class="card"><div class="ct">✏️ 編輯：${esc(a.title||a.type)}</div></div>
+      <input id="edTitle" value="${esc(a.title||'')}" style="width:100%;background:var(--panel-2);border:1px solid var(--line);border-radius:9px;color:var(--text);padding:8px;font-size:12.5px;margin-bottom:8px">
+      <textarea class="ed" id="edBody">${esc(a.content||'')}</textarea>
+      <div class="rowbtns"><button class="abtn go" id="edSave">💾 儲存</button><button class="abtn" id="edPrev">👁 預覽</button><button class="abtn" id="edX">取消</button></div>
+      <div id="edPreview" style="display:none;margin-top:9px" class="logbox"></div>`;
+      $('#edSave').onclick=async()=>{try{const out=await api('/api/workbench/runs/'+r.id+'/artifacts/'+a.id,{method:'PATCH',body:JSON.stringify({title:$('#edTitle').value,content:$('#edBody').value})});Object.assign(a,out.artifact);state.editArtifactId=null;toast('💾 已儲存（舊版留咗底）');renderCtx();}catch(e){toast(e.message,true);}};
+      $('#edPrev').onclick=()=>{const pv=$('#edPreview');pv.style.display=pv.style.display==='none'?'block':'none';pv.innerHTML=mdLite($('#edBody').value);};
+      $('#edX').onclick=()=>{state.editArtifactId=null;renderCtx();};
+      return;}
+    state.editArtifactId=null;
+  }
+  box.innerHTML=`<div class="mchips"><span class="mchip ${f==='all'?'on':''}" data-rf="all">全部 ${arts.length}</span>${types.map(t=>`<span class="mchip ${f===t?'on':''}" data-rf="${esc(t)}">${esc(t)}</span>`).join('')}</div>`+
+    (list.map(a=>`<div class="card"><div class="ct">${esc(a.title||a.type)} ${a.editedAt?'<span class="chip gold">手改過</span>':''}</div>
+      <div class="cd" style="max-height:150px;overflow:hidden">${mdLite(String(a.content||'').slice(0,600))}</div>
+      <div class="rowbtns"><button class="abtn" data-view="${a.id}">👁 全文</button><button class="abtn" data-edit="${a.id}">✏️ 編輯</button>${(a.revisions||[]).length?`<button class="abtn" data-revs="${a.id}">🕓 舊版 ${(a.revisions||[]).length}</button>`:''}</div></div>`).join('')||'<div class="empty">冇 artifact</div>')+
+    `<div class="hint">議會 Plan</div><div class="rowbtns"><button class="abtn" id="planView">📜 睇最新 plan</button><button class="abtn go" id="planEdit">✏️ 改 plan</button></div><div id="planBox"></div>`;
+  box.querySelectorAll('[data-rf]').forEach(n=>n.onclick=()=>{state.reportFilter=n.dataset.rf;renderCtx();});
+  box.querySelectorAll('[data-edit]').forEach(n=>n.onclick=()=>{state.editArtifactId=n.dataset.edit;renderCtx();});
+  box.querySelectorAll('[data-view]').forEach(n=>n.onclick=()=>{const a=arts.find(x=>x.id===n.dataset.view);openSheet(a.title||a.type,'<div class="logbox" style="max-height:60vh;overflow-y:auto">'+mdLite(a.content||'')+'</div>');});
+  box.querySelectorAll('[data-revs]').forEach(n=>n.onclick=()=>{const a=arts.find(x=>x.id===n.dataset.revs);openSheet('🕓 舊版 · '+(a.title||''),(a.revisions||[]).slice().reverse().map((v,i)=>`<div class="card"><div class="ct">v-${i+1} · ${esc(v.editedAt||'')}</div><div class="logbox" style="max-height:180px;overflow-y:auto">${mdLite(v.content||'')}</div></div>`).join(''));});
+  $('#planView').onclick=async()=>{try{const rr=await api('/api/runs/'+r.id+'/council/reviews');const files=(rr.files||[]).filter(x=>/^plan\.v\d+\.md$/.test(x.name||x)).map(x=>x.name||x);if(!files.length){toast('未有 plan',true);return;}const latest=files.sort((a,b)=>Number(b.match(/\d+/)[0])-Number(a.match(/\d+/)[0]))[0];const c=await api('/api/runs/'+r.id+'/council/reviews/'+latest);openSheet('📜 '+latest,'<div class="logbox" style="max-height:60vh;overflow-y:auto">'+mdLite(c.content||c.md||String(c))+'</div>');}catch(e){toast(e.message,true);}};
+  $('#planEdit').onclick=async()=>{try{const rr=await api('/api/runs/'+r.id+'/council/reviews');const files=(rr.files||[]).filter(x=>/^plan\.v\d+\.md$/.test(x.name||x)).map(x=>x.name||x);let cur='';if(files.length){const latest=files.sort((a,b)=>Number(b.match(/\d+/)[0])-Number(a.match(/\d+/)[0]))[0];const c=await api('/api/runs/'+r.id+'/council/reviews/'+latest);cur=c.content||c.md||'';}
+    openSheet('✏️ 手改議會 plan',`<textarea id="planMd" style="min-height:280px">${esc(cur)}</textarea><input id="planNote" placeholder="改咗乜（可留空）" style="width:100%;margin-top:8px;background:var(--panel-2);border:1px solid var(--line);border-radius:9px;color:var(--text);padding:8px;font-size:12px"><div class="rowbtns"><button class="abtn" onclick="closeSheet()">取消</button><button class="abtn go" id="planGo">💾 存做新版本</button></div>`);
+    setTimeout(()=>{$('#planGo').onclick=async()=>{try{const out=await api('/api/workbench/runs/'+r.id+'/council-plan',{method:'POST',body:JSON.stringify({md:$('#planMd').value,note:$('#planNote').value})});toast('📜 已存做 plan v'+out.version);closeSheet();await loadRun(r.id);renderCtx();}catch(e){toast(e.message,true);}};},0);}catch(e){toast(e.message,true);}};
+}
+/* diff tab */
+function colorDiff(patch){return String(patch||'').split('\n').map(l=>{const e=esc(l);if(l.startsWith('+++')||l.startsWith('---')||l.startsWith('diff '))return '<span class="fhead">'+e+'</span>';if(l.startsWith('@@'))return '<span class="hunk">'+e+'</span>';if(l.startsWith('+'))return '<span class="add">'+e+'</span>';if(l.startsWith('-'))return '<span class="del">'+e+'</span>';return e;}).join('\n');}
+async function renderTabDiff(r,box){
+  box.innerHTML='<div class="thinking">攞緊 change reports…</div>';
+  try{
+    const d=await api('/api/runs/'+r.id+'/changes');
+    const reps=d.reports||[];
+    box.innerHTML=`<div class="card"><div class="ct">📝 合共 ${d.totals.reports} 個 stage,${d.totals.files} 個 file（+${d.totals.adds}/−${d.totals.dels}）</div></div>`+
+      (reps.map((rep,i)=>`<div class="card"><div class="ct">${esc(rep.stageTitle||rep.stageKey||'stage')}${rep.followupSeq?' · 跟進#'+rep.followupSeq:''}</div>
+        <div class="cd">${(rep.filesChanged||[]).length} file · +${rep.totalAdds||0}/−${rep.totalDels||0}${rep.error?' · ⚠'+esc(rep.error):''}</div>
+        <div class="logbox" style="margin-top:6px;max-height:120px;overflow-y:auto">${esc((rep.filesChanged||[]).map(f=>`${f.status||'M'} ${f.path}${(f.adds!=null||f.dels!=null)?` +${f.adds||0}/−${f.dels||0}`:''}`).join('\n'))}</div>
+        ${rep.patch?`<div class="rowbtns"><button class="abtn" data-patch="${i}">👁 睇 diff</button></div>`:''}</div>`).join('')||'<div class="empty">冇 change report（唔係 git repo 或者冇改到 file）</div>');
+    box.querySelectorAll('[data-patch]').forEach(n=>n.onclick=()=>{const rep=reps[Number(n.dataset.patch)];openSheet('diff · '+(rep.stageTitle||''),'<div class="logbox diff" style="max-height:64vh;overflow-y:auto">'+colorDiff(rep.patch)+'</div>');});
+  }catch(e){box.innerHTML='<div class="empty">⚠ '+esc(e.message)+'</div>';}
+}
+/* 下一步 tab */
+async function renderTabNext(r,box){
+  box.innerHTML=((r.followupProposal&&r.followupProposal.status==='pending')?proposalCardHTML(r):'')+'<div class="thinking">⏱ 攞緊下一步收斂…</div>';
+  bindProposalCard(r);
+  try{
+    const d=await api('/api/runs/'+r.id+'/next-steps');
+    let h=(r.followupProposal&&r.followupProposal.status==='pending')?proposalCardHTML(r):'';
+    h+=`<div class="mchips"><span class="chip complete">✓ ${d.verdict.pass}</span>${d.verdict.fail?`<span class="chip failed">✕ ${d.verdict.fail}</span>`:''}${d.verdict.openDisputes?`<span class="chip gold">⚖ ${d.verdict.openDisputes}</span>`:''}<span class="mchip" id="nsRefresh">↻ 重新收斂</span></div>`;
+    const item=(it,isGap)=>`<div class="card">${isGap?(it.severity==='fail'?'<span class="chip failed">FAIL</span> ':'<span class="chip gold">風險</span> '):''}<div class="ct">${esc(it.title)}</div>
+      <div class="cd">${esc(isGap?(it.detail||''):(it.rationale||''))}</div>
+      <div class="rowbtns"><button class="abtn" data-ns-talk="${esc(it.discussSeed||it.title||'')}">💬 傾</button>${it.action&&it.action.type!=='none'?`<button class="abtn go" data-ns-do="${esc(it.action.type)}" data-arg="${esc(it.action.arg||'')}">▶ 做</button>`:''}</div></div>`;
+    if((d.gaps||[]).length)h+='<div class="hint">⚠️ 要補 / 風險</div>'+d.gaps.map(g=>item(g,true)).join('');
+    if((d.suggestions||[]).length)h+='<div class="hint">💡 建議下一步</div>'+d.suggestions.map(s=>item(s,false)).join('');
+    if(!(d.gaps||[]).length&&!(d.suggestions||[]).length)h+='<div class="empty">冇特別下一步,收得幾齊 👍</div>';
+    box.innerHTML=h;
+    bindProposalCard(r);
+    const rf=$('#nsRefresh');if(rf)rf.onclick=async()=>{box.innerHTML='<div class="thinking">重新收斂緊…</div>';try{await api('/api/runs/'+r.id+'/next-steps?refresh=1');renderCtx();}catch(e){toast(e.message,true);}};
+    box.querySelectorAll('[data-ns-talk]').forEach(n=>n.onclick=()=>{state.scope='global';syncScopeSeg();renderChat();cinput.value=n.dataset.nsTalk;cinput.focus();});
+    box.querySelectorAll('[data-ns-do]').forEach(n=>n.onclick=()=>runOverseerAction(n.dataset.nsDo,n.dataset.arg||''));
+  }catch(e){
+    // 收斂失敗都要保留 Copilot 提案卡（提案唔靠 next-steps endpoint）
+    box.innerHTML=((r.followupProposal&&r.followupProposal.status==='pending')?proposalCardHTML(r):'')+'<div class="empty">⚠ '+esc(e.message)+'</div>';
+    bindProposalCard(r);
+  }
+}
+/* 檔案 tab */
+function renderTabFiles(r,box){
+  const tf=(state.thread&&state.thread.files)||[];
+  const rf=(r&&r.workbenchFiles)||[];
+  const row=(f,src)=>{const img=/^image\//.test(f.mime||'');return `<div class="card" style="display:flex;gap:10px;align-items:center">
+    ${img?`<img class="thumb" src="/api/workbench/file?path=${encodeURIComponent(f.path)}">`:`<div class="thumb" style="display:grid;place-items:center;font-size:22px">📄</div>`}
+    <div style="flex:1;min-width:0"><div class="ct" style="margin:0">${esc(f.name)}</div><div class="cd">${kb(f.size)} · ${src} · ${fmtAgo(f.ts)}</div>
+    <div class="rowbtns" style="margin-top:5px"><button class="abtn" data-cp="${esc(f.path)}" style="padding:3px 8px;font-size:11px">複製路徑</button><button class="abtn" data-ins="${esc(f.path)}|${esc(f.name)}|${f.size}" style="padding:3px 8px;font-size:11px">插入對話</button></div></div></div>`;};
+  box.innerHTML=(tf.length?'<div class="hint">💬 對話檔案</div>'+tf.map(f=>row(f,'thread')).join(''):'')+(rf.length?'<div class="hint">🚀 Run 檔案</div>'+rf.map(f=>row(f,'run')).join(''):'')||'<div class="empty">未有檔案 — 撳 📎 或者直接 drop / paste</div>';
+  box.querySelectorAll('[data-cp]').forEach(n=>n.onclick=()=>{navigator.clipboard.writeText(n.dataset.cp).then(()=>toast('📋 已複製路徑'));});
+  box.querySelectorAll('[data-ins]').forEach(n=>n.onclick=()=>{const[p,name,size]=n.dataset.ins.split('|');state.pendingFiles.push({path:p,name,size:Number(size)||0});renderFchips();toast('已加入對話附件');});
+}
+
+/* ───────── socket ───────── */
+socket.on('connect',()=>$('#conn').classList.remove('off'));
+socket.on('disconnect',()=>$('#conn').classList.add('off'));
+socket.on('run-updated',(run)=>ingestRun(run));
+socket.on('state-snapshot',(run)=>{if(run&&run.id)ingestRun(run);});
+socket.on('swarm-start',(run)=>{if(run&&run.id)ingestRun(run);});
+socket.on('artifact-added',(d)=>{const r=state.byId[d.runId];if(r&&d.artifact){r.artifacts=r.artifacts||[];r.artifacts.unshift(d.artifact);if(state.focusRunId===d.runId&&['report','run'].includes(state.tab))renderCtx();}});
+socket.on('artifact-updated',(d)=>{const r=state.byId[d.runId];if(r){const i=(r.artifacts||[]).findIndex(a=>a.id===d.artifact.id);if(i>=0)r.artifacts[i]=d.artifact;if(state.focusRunId===d.runId&&state.tab==='report')renderCtx();}});
+socket.on('change-report',(d)=>{if(state.focusRunId===d.runId&&state.tab==='diff')renderCtx();});
+socket.on('push-gate',(d)=>{const r=state.byId[d.runId];if(r){r.pendingPush=d.pendingPush;if(state.focusRunId===d.runId&&state.tab==='run')renderCtx();}});
+socket.on('chat-message',(d)=>{const r=state.byId[d.runId];if(r){r.chatThread=r.chatThread||[];r.chatThread.push(d.message||d);r.chatBusy=false;if(state.scope==='run'&&state.focusRunId===d.runId)renderChat();}});
+socket.on('chat-thinking',(d)=>{const r=state.byId[d.runId];if(r){r.chatBusy=true;if(state.scope==='run'&&state.focusRunId===d.runId)renderChat();}});
+socket.on('followup-proposal',(d)=>{const r=state.byId[d.runId];if(r){r.followupProposal=d.proposal;}const s=state.runs.find(x=>x.id===d.runId);if(s)s.followupProposal=d.proposal&&d.proposal.status==='pending'?{title:d.proposal.title}:null;if(d.proposal&&d.proposal.status==='pending')toast('🤝 Copilot 有新跟進提案');renderRail();if(state.focusRunId===d.runId)renderCtx();});
+socket.on('autopilot-status',(d)=>{const r=state.byId[d.runId];if(r)r.autopilot=d.autopilot;renderRail();if(state.focusRunId===d.runId&&state.tab==='run')renderCtx();});
+socket.on('workbench-file-added',(d)=>{if(d.threadId&&state.thread&&state.thread.id===d.threadId){state.thread.files=state.thread.files||[];if(!state.thread.files.some(f=>f.path===d.file.path))state.thread.files.push(d.file);}if(d.runId&&state.byId[d.runId]){const r=state.byId[d.runId];r.workbenchFiles=r.workbenchFiles||[];if(!r.workbenchFiles.some(f=>f.path===d.file.path))r.workbenchFiles.push(d.file);}if(state.tab==='files')renderCtx();});
+
+boot();
+</script>
+</body>
+</html>
