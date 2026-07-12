@@ -60,6 +60,7 @@ const HELP = [
   '`/revise [id尾段] <指示>` — 御准閘度叫議會就你意見再收斂一 round',
   '`/approve [id尾段]` — 批准御准閘',
   '`/execute [id尾段]` — 將議會終稿落實（揀 build model）',
+  '`/followup [id尾段] <指示>` — 喺完成咗嘅 mission 上直接跟進（同一 project/context 繼續）；直接 *reply* 完成通知打字都得',
   '`/stop` — 中途停止當前 run（殺晒 running agent）',
   '`/resume` — 由上次未完成 stage 重跑（修咗 code 後用嚟重試 verifier）',
   '',
@@ -89,6 +90,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
   function blankState() {
     return { pendingMission: null, pendingCouncil: null, pendingRefine: null, awaitingRefineNote: false,
       pendingPush: null, awaitingPushBranch: false,
+      pendingFollowup: null, awaitingFollowupNote: false,
       pendingOverseerRevise: null, selectedProjectPath: null, selectedIntentPackKey: null, selectedDomainModuleKeys: null,
       overseerHistory: [], overseerModel: 'opus', overseerMode: 'auto' };
   }
@@ -98,11 +100,13 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
   let replyChatId = OWNER, currentRole = 'owner';
   let pendingMission, pendingCouncil, pendingRefine, awaitingRefineNote, pendingOverseerRevise, overseerHistory, overseerModel, overseerMode;
   let pendingPush, awaitingPushBranch, selectedProjectPath, selectedIntentPackKey, selectedDomainModuleKeys;
+  let pendingFollowup, awaitingFollowupNote;
   function loadState(key) {
     const s = stateFor(key);
     pendingMission = s.pendingMission; pendingCouncil = s.pendingCouncil; pendingRefine = s.pendingRefine;
     awaitingRefineNote = s.awaitingRefineNote; pendingOverseerRevise = s.pendingOverseerRevise;
     pendingPush = s.pendingPush; awaitingPushBranch = s.awaitingPushBranch;
+    pendingFollowup = s.pendingFollowup; awaitingFollowupNote = s.awaitingFollowupNote;
     selectedProjectPath = s.selectedProjectPath || null;
     selectedIntentPackKey = s.selectedIntentPackKey || null;
     selectedDomainModuleKeys = Array.isArray(s.selectedDomainModuleKeys) ? s.selectedDomainModuleKeys : null;
@@ -114,6 +118,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     s.pendingMission = pendingMission; s.pendingCouncil = pendingCouncil; s.pendingRefine = pendingRefine;
     s.awaitingRefineNote = awaitingRefineNote; s.pendingOverseerRevise = pendingOverseerRevise;
     s.pendingPush = pendingPush; s.awaitingPushBranch = awaitingPushBranch;
+    s.pendingFollowup = pendingFollowup; s.awaitingFollowupNote = awaitingFollowupNote;
     s.selectedProjectPath = selectedProjectPath || null;
     s.selectedIntentPackKey = selectedIntentPackKey || null;
     s.selectedDomainModuleKeys = Array.isArray(selectedDomainModuleKeys) ? selectedDomainModuleKeys : null;
@@ -485,6 +490,23 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     else await say(`⚠️ resume 失敗：${(r.json && r.json.error) || r.status}`);
   }
 
+  // 跟進:tail 冇俾 → 揀最近完成嘅 run。同一 run/project/context 上開 followup pipeline。
+  async function doFollowup(tail, instruction) {
+    let run = tail ? await findRunByTail(tail) : null;
+    if (!run) {
+      const r = await api('GET', '/api/runs');
+      const arr = Array.isArray(r.json) ? r.json : (r.json && r.json.runs) || [];
+      run = arr.find((x) => ['done', 'complete', 'needs_attention'].includes(String(x.status))) || null;
+    }
+    if (!run) { await say('搵唔到可以跟進嘅 run（要係完成咗嘅 code mission）。'); return; }
+    const r = await api('POST', `/api/runs/${run.id}/followup`, { instruction }, 60000);
+    if (r.json && r.json.ok) {
+      await say(`🔁 跟進 #${r.json.followupSeq} 開波${r.json.queued ? `（同 project 排隊 #${r.json.position || ''}）` : ''}：\`${String(run.id).slice(-8)}\`\n「${tgline(instruction.slice(0, 120))}」\n完成會 ping 你（連改咗乜清單）。`);
+    } else {
+      await say(`⚠️ 跟進失敗：${(r.json && r.json.error) || r.status}`);
+    }
+  }
+
   async function doExecute(cli, model, tail) {
     const run = await resolveRunFromTailOrCurrent(tail);
     if (!run) { await say('冇 run 可落實。'); return; }
@@ -566,7 +588,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     await handleOverseer(msg, 'deep'); // 圖一定要 vision + 深入
   }
 
-  async function handleCommand(text) {
+  async function handleCommand(text, replyTo) {
     const trimmed = text.trim();
 
     // 迭代完善：等緊改善意見、又唔係新指令 → 當作 refine note 處理。
@@ -589,6 +611,22 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       return;
     }
     if (awaitingPushBranch) awaitingPushBranch = false; // 打咗新指令 → 放棄等 branch
+
+    // 跟進:等緊跟進指示、又唔係新指令 → 直接對目標 run 開 followup。
+    if (awaitingFollowupNote && pendingFollowup && !trimmed.startsWith('/')) {
+      awaitingFollowupNote = false;
+      const tail = pendingFollowup.runTail || null; pendingFollowup = null;
+      await doFollowup(tail, trimmed);
+      return;
+    }
+    if (awaitingFollowupNote) { awaitingFollowupNote = false; pendingFollowup = null; } // 打咗新指令 → 放棄
+
+    // Reply 住「落實完成」通知直接打字 = 對嗰個 run 嘅跟進指示（owner 先有權）。
+    if (trimmed && !trimmed.startsWith('/') && currentRole === 'owner'
+        && replyTo && typeof replyTo.text === 'string' && /落實完成/.test(replyTo.text)) {
+      const rm = replyTo.text.match(/Run[:：]\s*`?([A-Za-z0-9_-]{6,12})`?/);
+      if (rm) { await doFollowup(rm[1], trimmed); return; }
+    }
 
     // 唔係指令（冇 /）→ 同總管 AI 傾偈。
     if (trimmed && !trimmed.startsWith('/')) { await handleOverseer(trimmed); return; }
@@ -690,6 +728,23 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       const r = await api('POST', `/api/runs/${run.id}/council/revise`, { note });
       if (r.json && r.json.ok) await say(`✍️ 已要求再改，重跑第 ${r.json.round} round 共識…`);
       else await say(`⚠️ 再改失敗：${(r.json && r.json.error) || r.status}`);
+      return;
+    }
+
+    if (c === '/followup') {
+      if (!ownerOnly()) { await denyGuest(); return; }
+      if (!arg) {
+        pendingFollowup = { runTail: null }; awaitingFollowupNote = true;
+        await say('✍️ 直接打你嘅跟進指示（會喺最近完成嗰個 mission 同一 project/context 上繼續）：');
+        return;
+      }
+      const fm = arg.match(/^([A-Za-z0-9_-]{4,16})\s+([\s\S]+)$/);
+      let fuTail = null; let fuNote = arg;
+      if (fm) {
+        const hit = await findRunByTail(fm[1]);
+        if (hit) { fuTail = fm[1]; fuNote = fm[2].trim(); }
+      }
+      await doFollowup(fuTail, fuNote);
       return;
     }
 
@@ -883,6 +938,15 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
     }
     if (dataStr.startsWith('mm:')) { const p = dataStr.split(':'); await doMission(p[1], p[2]); return; }
 
+    // 跟進:fu:<runTail> → 等用戶打指示,然後喺同一 run 上開 followup pipeline
+    if (dataStr.startsWith('fu:')) {
+      if (!ownerOnly()) { await denyGuest(); return; }
+      pendingFollowup = { runTail: dataStr.split(':')[1] || null };
+      awaitingFollowupNote = true;
+      await say('✍️ 直接打你嘅跟進指示（會喺同一個 mission/project/context 上繼續做）：');
+      return;
+    }
+
     // 改咗乜（全清單）:cr:<runTail> → server 記錄嘅 change reports,plain 分段送
     if (dataStr.startsWith('cr:')) {
       const tail = dataStr.split(':')[1];
@@ -981,7 +1045,7 @@ function startBot({ apiBase, chatId, ownerUsers = [], allowedUsers = [], log = (
       const id = identify(u.message.from, u.message.chat);
       if (!id.role) { log(`ignored message from ${id.key || u.message.chat.id}`); return; }
       replyChatId = id.chatId; currentRole = id.role; loadState(id.key);
-      try { await handleCommand(u.message.text); } finally { saveState(id.key); }
+      try { await handleCommand(u.message.text, u.message.reply_to_message || null); } finally { saveState(id.key); }
     } else if (u.callback_query) {
       const cb = u.callback_query;
       recordUser(cb.from, cb.message && cb.message.chat);

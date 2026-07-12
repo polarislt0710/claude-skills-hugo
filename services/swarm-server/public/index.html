@@ -471,6 +471,7 @@ canvas#office{display:block;width:100%;height:480px;image-rendering:pixelated}
           <button class="btn ghost sm" id="councilReviseBtn" style="display:none" title="加指示,叫議會再收斂多一 round">✍️ 再改</button>
           <button class="btn go sm" id="councilExecuteBtn" style="display:none" title="將議會終稿 plan 交 code pipeline 真正喺 project 實作">▶ 落實 plan</button>
           <button class="btn go sm" id="nextStepsBtn" style="display:none" title="run 完成後:睇收斂建議 / 未補嘅 gap,一鍵傾 or 做下一步">✨ 下一步</button>
+          <button class="btn ghost sm" id="followupBtn" style="display:none" title="喺呢個完成咗嘅 mission 上追加指示 — 同 project/context 繼續,帶埋之前改咗乜">🔁 跟進</button>
           <span id="pushGate" style="display:none;align-items:center;gap:6px">
             <span class="pill" id="pushGateLabel" style="border-color:var(--gold);color:var(--gold)">⬆️ 待 push</span>
             <button class="btn go sm" id="pushConfirmBtn" title="push 上 GitHub">⬆️ Confirm Push</button>
@@ -666,6 +667,7 @@ function renderPipeStrip(run){
   if(db)db.style.display=reviewPaused?'':'none';
   const xb=$('#councilExecuteBtn');const planReady=!!(p&&p.mode==='council'&&p.councilPlanVersion>0&&!paused&&!reviewPaused);if(xb)xb.style.display=planReady?'':'none';
   const nsb=$('#nextStepsBtn');if(nsb)nsb.style.display=dIsDone(run)?'':'none';
+  const fub=$('#followupBtn');if(fub)fub.style.display=(dIsDone(run)&&p&&p.mode==='code'&&!paused&&!reviewPaused)?'':'none';
   const pp=run&&run.pendingPush;const pgEl=$('#pushGate');if(pgEl){const onGate=!!(pp&&['awaiting','pushing','failed'].includes(pp.status));pgEl.style.display=onGate?'inline-flex':'none';if(onGate){const lbl=$('#pushGateLabel');if(lbl)lbl.textContent=pp.status==='pushing'?'⬆️ Pushing…':(pp.status==='failed'?('⚠️ Push 失敗: '+(pp.branch||'')):('⬆️ 待 push: '+(pp.branch||'')));const cf=$('#pushConfirmBtn');if(cf){cf.disabled=pp.status==='pushing';cf.textContent=pp.status==='failed'?'🔁 再試':'⬆️ Confirm Push';}}}
   if(!p||!p.stages){ps.style.display='none';if(rb)rb.style.display='none';return;}
   ps.style.display='';
@@ -969,8 +971,19 @@ async function doNextStepDesktop(type,arg){
   if(type==='approve'){closeNextSteps();approveCouncil();return;}
   if(type==='debate'){closeNextSteps();startDebate();return;}
   if(type==='revise'){if(!confirm('叫議會就呢點再收斂一 round?\n\n'+arg))return;try{await api('/api/runs/'+r.id+'/council/revise',{method:'POST',body:JSON.stringify({note:arg})});toast('✍️ 議會再收斂');closeNextSteps();}catch(e){toast(e.message,true);}return;}
-  if(type==='mission'){spawnMissionDesktop(arg);return;}
+  if(type==='mission'){
+    if(r&&dIsDone(r)&&r.pipeline&&r.pipeline.mode==='code'&&confirm('用「🔁 跟進」模式喺呢個 run 繼續（同 project/context,帶埋之前改動）?\n\n'+arg+'\n\n取消 = 開一個全新 mission')){followupDesktop(arg);return;}
+    spawnMissionDesktop(arg);return;
+  }
   if(type==='council'){spawnCouncilDesktop(arg);return;}
+}
+function followupDesktop(prefill){
+  const r=focusedRun();if(!r){toast('未揀 plan',true);return;}
+  const note=prompt('🔁 跟進指示（同一 mission/project/context 上繼續做,會帶埋之前改咗乜）:',prefill||'');
+  if(note===null||!note.trim())return;
+  api('/api/runs/'+r.id+'/followup',{method:'POST',body:JSON.stringify({instruction:note.trim()})}).then(rr=>{
+    toast(rr.queued?('⏳ 跟進已排隊 #'+(rr.position||'')):('🔁 跟進 #'+(rr.followupSeq||'')+' 開波'));closeNextSteps();
+  }).catch(e=>toast(e.message,true));
 }
 function spawnMissionDesktop(brief){
   const r=focusedRun();const proj=(r&&r.projectPath)||state.defaultProject||(state.projects[0]&&(state.projects[0].path||state.projects[0]))||'';
@@ -1146,6 +1159,7 @@ $('#councilReviseBtn').onclick=()=>reviseCouncil();
 $('#councilDebateBtn').onclick=()=>startDebate();
 $('#councilExecuteBtn').onclick=()=>executePlan();
 $('#nextStepsBtn').onclick=()=>openNextStepsDesktop();
+$('#followupBtn').onclick=()=>followupDesktop();
 $('#pushConfirmBtn').onclick=()=>pushConfirm();
 $('#pushBranchBtn').onclick=()=>pushBranch();
 $('#pushProjectBtn').onclick=()=>pushProject();

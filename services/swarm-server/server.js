@@ -4174,6 +4174,7 @@ function startPipeline(run, options = {}) {
     councilReviewPaused: false,  // 第一輪 Council review 後嘅「開始拗」閘
     councilDebateStarted: false,
   };
+  run.pipelineSeq = (run.pipelineSeq || 0) + 1; // 同一 run 第 N 條 pipeline（followup 用;入埋通知 dedup key）
   if (options.taskBrief) run.taskBrief = truncate(options.taskBrief, MAX_CONTEXT_CHARS);
   // Council:把初始 brief 寫去 brief.md,令 readLatestPlan 有乾淨 v0 baseline(唔受之後 taskBrief 改寫影響)。
   if (mode === 'council') {
@@ -5104,6 +5105,93 @@ app.get('/api/runs/:id/changes', (req, res) => {
     dels: acc.dels + (r.totalDels || 0),
   }), { reports: 0, files: 0, adds: 0, dels: 0 });
   res.json({ ok: true, totals, reports });
+});
+
+// ─── Warm followup:喺完成咗嘅 code run 上直接追加指示（同 project/context 繼續）───
+// 對治「一 run 一世」:唔使開新凍身 run — 原 brief、change reports、handoffs、verify
+// 結果全部帶入,喺同一個 run 起一條 followup-build → verify 嘅 mini-pipeline。
+function buildFollowupBrief(run, instruction) {
+  return truncate([
+    '## 跟進指示(最高優先,今次淨係做呢樣)',
+    instruction,
+    '',
+    '## 原任務 brief(背景,唔使重做)',
+    run.followupBaseBrief || run.taskBrief || run.topic || '',
+    '',
+    '## 之前改咗乜(change reports 摘要,server git 記錄)',
+    summarizeChangeReportsText(run, 6000) || '(冇記錄)',
+    '',
+    '## 上次驗證結果',
+    `verify=${run.verifyVerdict || '-'} · completion=${run.completionVerdict || '-'}`,
+  ].join('\n'), MAX_CONTEXT_CHARS);
+}
+
+app.post('/api/runs/:id/followup', (req, res) => {
+  const run = findRunOr404(req.params.id, res);
+  if (!run) return;
+  if (!lockRun(run.id)) return res.status(409).json({ error: '呢個 run 啱啱有動作處理緊,等一兩秒先再試' });
+  const body = req.body || {};
+  const instruction = String(body.instruction || '').trim().slice(0, 4000);
+  if (!instruction) return res.status(400).json({ error: '要俾跟進指示 (instruction)' });
+  const p = run.pipeline;
+  if (!p || String(p.mode) !== 'code') {
+    return res.status(400).json({ error: '呢個 run 未落實過 code(council run 要先「落實」先可以跟進)' });
+  }
+  if (isCodePipelineActive(run)) return res.status(409).json({ error: 'run 仲行緊 — 等佢完先跟進' });
+  if (run.pendingPush && run.pendingPush.status === 'pushing') {
+    return res.status(409).json({ error: 'push 進行緊,完咗先再跟進' });
+  }
+  try {
+    // 未 push 嘅 gate 由跟進蓋過:跟進完成會重新入 gate,一次過 push。
+    if (run.pendingPush && ['awaiting', 'failed'].includes(run.pendingPush.status)) {
+      run.pendingPush.status = 'superseded';
+      run.pendingPush.decidedAt = new Date().toISOString();
+      addArtifact(run, { type: 'note', title: '⏭ Push gate 由跟進蓋過', content: '跟進完成後會重新入 push gate,一次過 push。' });
+      io.emit('push-gate', { runId: run.id, pendingPush: run.pendingPush });
+    }
+    if (!run.followupBaseBrief) run.followupBaseBrief = run.taskBrief || '';
+    const seq = (run.followups || []).length + 1;
+    run.followups.push({
+      id: id('fu'), seq, instruction,
+      at: new Date().toISOString(),
+      cli: body.cli || p.cli || 'claude',
+      model: body.model || p.model || '',
+      review: !!body.review,
+    });
+    const followupAgent = {
+      key: 'followup',
+      name: `Followup #${seq}: ${instruction.slice(0, 40)}`,
+      layer: 'delivery',
+      role: '跟進修改',
+      skill: 'targeted follow-up implementation',
+      scope: '用戶睇完上一輪結果之後嘅跟進指示。只做指示範圍內嘅嘢,唔好重做已完成嘅部分,唔好 revert 之前 agent 嘅改動。',
+      deliveryMode: 'code',
+    };
+    const stages = [
+      { key: `followup-${seq}`, title: `跟進 Followup #${seq}`, kind: 'code', deliveryMode: 'code', dynamicAgents: [followupAgent] },
+      ...(body.review ? [
+        { key: 'review', title: '覆核 Review', kind: 'review', deliveryMode: 'code', agentKeys: ['reviewer'], gate: true },
+        { key: 'fix', title: '修正 Fix', kind: 'code', deliveryMode: 'code', agentKeys: ['fixer'], isFix: true },
+      ] : []),
+      verifyStage(),
+    ];
+    const startOptions = {
+      staged: true,
+      deliveryMode: 'code',
+      model: body.model || p.model,
+      cli: body.cli || p.cli,
+      perAgentModels: p.perAgentModels || {},
+      stages,
+      taskBrief: buildFollowupBrief(run, instruction),
+      continueOnFail: !!p.continueOnFail,
+    };
+    addArtifact(run, { type: 'note', title: `🔁 跟進 #${seq} 開波`, content: instruction });
+    const queued = maybeQueueRunStart(run, startOptions);
+    if (queued) return res.json({ ok: true, followupSeq: seq, ...queued });
+    startRunFromOptions(run, startOptions);
+    io.emit('run-updated', publicRun(run));
+    res.json({ ok: true, followupSeq: seq });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 
 // ─── Swarm Council 御准閘 endpoints ───
