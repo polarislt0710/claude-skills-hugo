@@ -5565,8 +5565,12 @@ io.on('connection', (socket) => {
   socket.on('disconnect', () => console.log(`[ws] client disconnected (${io.engine.clientsCount} total)`));
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Swarm V3 dashboard server on http://0.0.0.0:${PORT}`);
+// SWARM_BIND=127.0.0.1 on the VPS: nginx fronts the dashboard (HTTPS + gate) and
+// itself binds the public IP:3010 for the legacy-bookmark 301 — node must stay
+// off the public interface or the two listeners collide (EADDRINUSE crash-loop).
+const BIND_HOST = process.env.SWARM_BIND || '0.0.0.0';
+server.listen(PORT, BIND_HOST, () => {
+  console.log(`Swarm V3 dashboard server on http://${BIND_HOST}:${PORT}`);
   console.log(`[store] ${store.runs.length} saved runs; current=${store.currentRunId || 'none'}`);
   if (telegram.tgEnabled()) {
     require('./lib/telegram-bot').startBot({
