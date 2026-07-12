@@ -47,13 +47,32 @@ Run shell commands on VPS via `ssh orca '<cmd>'`. Interactive bash needed for NV
 | Service | Port | Process manager | URL | Source code |
 |---|---|---|---|---|
 | **CloudCLI** (browser UI for Claude/Codex) | 3001 | PM2 | http://187.127.115.235:3001 | npm `@cloudcli-ai/cloudcli@0.40.1` |
-| **Swarm Dashboard** (Agent Swarm V3) | 3010 | PM2 | http://187.127.115.235:3010 | `~/.claude/local-marketplace/services/swarm-server/` |
-| **MiroFish** (群體智能引擎) | 3010/mirofish/ | PM2 (backend: 5001 localhost) | http://187.127.115.235:3010/mirofish/ | `~/services/mirofish-web/` |
+| **Swarm Dashboard** (Agent Swarm V3) | 3010（bind `127.0.0.1`） | PM2 | https://swarm.orcagrade.com （nginx HTTPS+gate；舊 `:3010` 已 301 過去；gate key 睇 `/etc/nginx/sites-enabled/orca`） | `~/.claude/local-marketplace/services/swarm-server/` |
+| **swarm-mission-v4**（獨立 V4 實驗） | 3011 | PM2 | https://swarm-v4.187-127-115-235.sslip.io | VPS only（唔喺 marketplace repo；同 swarm-server 無關，唔好誤 restart / 覆蓋） |
+| **MiroFish** (群體智能引擎) | 3010/mirofish/ | PM2 (backend: 5001 localhost) | https://swarm.orcagrade.com/mirofish/ | `~/services/mirofish-web/` |
 | **Cronicle** (cron + web UI) | 3012 | systemd | http://187.127.115.235:3012 | `/opt/cronicle/` |
 | **ORCA backend** (FastAPI, when running) | 8000 | nohup uvicorn | local only | `~/orca-platform-mvp/apps/mvp-web/backend/` |
 | **ORCA frontend** (Next.js MVP) | 8003 | PM2 direct Next.js binary | https://mvp.187-127-115-235.sslip.io | `~/orca-platform-mvp/apps/mvp-web/frontend/` |
 
 PM2 daemon itself runs under systemd unit `pm2-hugo-orca.service` (auto-resurrect on reboot). UFW firewall: ports 22 / 80 / 443 / 3001 / 3010 / 3012 / 8000 / 8003 open. Fail2Ban active.
+
+**⚠️ swarm-server bind 規則（2026-07-13）**：nginx 而家霸住 public IP `:3010`（做舊 bookmark 301 → HTTPS dashboard），node 一定要 bind `127.0.0.1` — PM2 env 有 `SWARM_BIND=127.0.0.1`（喺 dump.pm2 persist 咗）。如果 `pm2 restart swarm-server --update-env` 時漏咗呢個 env，server 會 EADDRINUSE crash-loop（7 月初就係咁死咗幾日）。
+
+## 🧭 工具分工 — 幾時用邊個（2026-07-13 Swarm Mission review 結論）
+
+**Heuristic：出 brief 嗰陣寫唔寫得出「點驗收」？寫得出 → Swarm Mission；寫唔出 → Claude Code。**
+
+| 工具 | 定位 | 適合 | 唔好用嚟 |
+|---|---|---|---|
+| **Claude Code / Codex CLI** | Pair programmer（軚盤） | 探索、debug、需求未清、要「睇完結果先知下一步」嘅緊密迭代 | 通宵長跑、大批量並行 |
+| **Swarm Mission**（code pipeline） | 判頭團隊（發射台） | brief 清楚 + 驗收清單明確；通宵 / 背景 / 並行；Telegram 遙控 | 互動式研發、未諗清楚嘅 idea |
+| **Swarm Council**（三模議會） | 決策評審 | plan review、方案拗贏拗輸、風險評估 | 直接落 code（要經 execute） |
+
+Mission 兩個結構補強（2026-07-13 落 live）：
+- **Change reports**：server 自己 capture 每個 code stage 嘅 git diff（唔靠 agent 自報）— 完成通知列改咗乜、dashboard / m.html 有「📝 改咗乜」panel、`GET /api/runs/:id/changes`；autoReview / next-steps / fixer / verifier 都食真 diff
+- **🔁 跟進 followup**：完成咗嘅 run 直接追加指示（`POST /api/runs/:id/followup`、TG `/followup` 或 **reply 完成通知直接打字**、兩個 UI 都有掣）— 同 run/project/context 繼續，帶埋原 brief + 之前改動 + 驗證結果；未 push 嘅 gate 會被 supersede，跟進完重新入 gate 一次過 push
+- Brief refine 要求【驗收清單】（逐條可執行指令），verifier 對住真 diff 逐條真行；`SWARM_FOLLOWUP_RESUME=1`（VPS 已開）followup agent 用 `claude -p --resume` 接返上手 CLI session
+- Mission 代碼註：root `mission.js` 係死代碼（冇人 require）；`routes/mission.js` + `lib/mission-orchestrator.js` 係 disabled v2（`MISSION_ORCHESTRATOR_ENABLED` 冇開）— 兩個都唔好當 live pipeline 改
 
 ### ORCA MVP frontend deployment guard
 
@@ -311,4 +330,4 @@ What's been built so far:
 
 ## 🐾 Last updated
 
-2026-07-12 (skills consolidation). If knowledge here drifts from reality, **edit this file** and propagate to user-level + GitHub canonical (see `Update CLAUDE.md` section above).
+2026-07-13 (Swarm Mission review：工具分工 matrix + change reports + followup + SWARM_BIND 規則 + swarm HTTPS URL)。If knowledge here drifts from reality, **edit this file** and propagate to user-level + GitHub canonical (see `Update CLAUDE.md` section above).
