@@ -47,7 +47,8 @@ Run shell commands on VPS via `ssh orca '<cmd>'`. Interactive bash needed for NV
 | Service | Port | Process manager | URL | Source code |
 |---|---|---|---|---|
 | **CloudCLI** (browser UI for Claude/Codex) | 3001 | PM2 | http://187.127.115.235:3001 | npm `@cloudcli-ai/cloudcli@0.40.1` |
-| **Swarm Dashboard** (Agent Swarm V3) | 3010（bind `127.0.0.1`） | PM2 | https://swarm.orcagrade.com （nginx HTTPS+gate；舊 `:3010` 已 301 過去；gate key 睇 `/etc/nginx/sites-enabled/orca`） | `~/.claude/local-marketplace/services/swarm-server/` |
+| **Swarm Dashboard** (Agent Swarm V3) | 3010（bind `127.0.0.1`） | PM2 | https://swarm.orcagrade.com （nginx HTTPS+gate；登入頁 `/login` 打密碼即可；舊 `:3010` 已 301 過去；key 睇 `/etc/nginx/sites-enabled/orca`） | `~/.claude/local-marketplace/services/swarm-server/` |
+| **Swarm Workbench**（溝通工作台） | 同上 | 同上 | https://swarm.orcagrade.com/w.html | `public/w.html` + `routes/workbench.js`（threads/上載/URL抓取/report編輯/Copilot） |
 | **swarm-mission-v4**（獨立 V4 實驗） | 3011 | PM2 | https://swarm-v4.187-127-115-235.sslip.io | VPS only（唔喺 marketplace repo；同 swarm-server 無關，唔好誤 restart / 覆蓋） |
 | **MiroFish** (群體智能引擎) | 3010/mirofish/ | PM2 (backend: 5001 localhost) | https://swarm.orcagrade.com/mirofish/ | `~/services/mirofish-web/` |
 | **Cronicle** (cron + web UI) | 3012 | systemd | http://187.127.115.235:3012 | `/opt/cronicle/` |
@@ -67,6 +68,8 @@ PM2 daemon itself runs under systemd unit `pm2-hugo-orca.service` (auto-resurrec
 | **Claude Code / Codex CLI** | Pair programmer（軚盤） | 探索、debug、需求未清、要「睇完結果先知下一步」嘅緊密迭代 | 通宵長跑、大批量並行 |
 | **Swarm Mission**（code pipeline） | 判頭團隊（發射台） | brief 清楚 + 驗收清單明確；通宵 / 背景 / 並行；Telegram 遙控 | 互動式研發、未諗清楚嘅 idea |
 | **Swarm Council**（三模議會） | 決策評審 | plan review、方案拗贏拗輸、風險評估 | 直接落 code（要經 execute） |
+
+**Swarm Workbench（2026-07-13 落 live）**：`/w.html` 三欄溝通工作台 — 左欄 threads+runs、中欄總管⇄Run對話（ACTION confirm chips 直接開 mission/followup/議會）、右欄 5 tabs（Run詳情+push gate / 報告可編輯連舊版 / 改咗乜 diff viewer / 下一步 / 檔案）。檔案輸入行「存 disk → agent 自己 Read」pattern（Excel/圖/PDF drag-drop/paste + 🔗 URL 抓取連 SSRF guard）。**Followup Copilot**：run 完 AI 自動提跟進提案（右欄卡 ✅照做/✍️傾過先/🛑，預設 3 輪可較）；另有 per-run autopilot（≤3 輪全自動，只限 followup 類，council/execute/push 永遠人手）。新 API 全部喺 `/api/workbench/*`。
 
 Mission 兩個結構補強（2026-07-13 落 live）：
 - **Change reports**：server 自己 capture 每個 code stage 嘅 git diff（唔靠 agent 自報）— 完成通知列改咗乜、dashboard / m.html 有「📝 改咗乜」panel、`GET /api/runs/:id/changes`；autoReview / next-steps / fixer / verifier 都食真 diff
@@ -330,4 +333,4 @@ What's been built so far:
 
 ## 🐾 Last updated
 
-2026-07-13 (Swarm Mission review：工具分工 matrix + change reports + followup + SWARM_BIND 規則 + swarm HTTPS URL)。If knowledge here drifts from reality, **edit this file** and propagate to user-level + GitHub canonical (see `Update CLAUDE.md` section above).
+2026-07-13 (Swarm Mission review + Workbench：工具分工 matrix、change reports、followup、SWARM_BIND 規則、swarm HTTPS URL、/w.html 工作台、/login 密碼頁、Followup Copilot)。If knowledge here drifts from reality, **edit this file** and propagate to user-level + GitHub canonical (see `Update CLAUDE.md` section above).
