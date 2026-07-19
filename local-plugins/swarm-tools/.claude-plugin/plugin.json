@@ -1,6 +1,6 @@
 {
   "name": "swarm-tools",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Multi-agent orchestration tools - real-time stakeholder jam with WebSocket dashboard + swarm agent execution discipline",
   "skills": [
     "./skills/multi-persona-jam",
