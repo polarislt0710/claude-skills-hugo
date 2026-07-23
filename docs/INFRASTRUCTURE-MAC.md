@@ -14,8 +14,8 @@ This folder is the **conversation / staging dir**，2026-07-12 已整理成八�
 
 | What | Where |
 |---|---|
-| Plugin marketplace source-of-truth (Mac) | `~/.claude/local-marketplace/` |
-| Plugin marketplace source-of-truth (GitHub, public) | https://github.com/polarislt0710/claude-skills-hugo |
+| Plugin marketplace source-of-truth (Mac) | `~/.claude/local-marketplace/`（2026-07-18 一度唔見咗；**2026-07-19 已由 GitHub re-clone 返，8 個 plugin 亦已重新 install**）；VPS live code 已行前過 GitHub |
+| Plugin marketplace source-of-truth (GitHub, public) | https://github.com/polarislt0710/claude-skills-hugo （最後 commit 2026-07-12；⚠️ **public** repo，考慮轉 private） |
 | User-level Mac CLAUDE.md (also auto-loaded) | `~/.claude/CLAUDE.md` (hidden dotfile) |
 | User-level VPS CLAUDE.md | `ssh orca` then `~/.claude/CLAUDE.md` |
 | ORCA project | `~/orca-platform-mvp/` (on VPS only) |
@@ -36,7 +36,7 @@ This folder is the **conversation / staging dir**，2026-07-12 已整理成八�
 | User | `hugo-orca` (sudo NOPASSWD) |
 | Hostname | `srv1644941` (Ubuntu 24.04 LTS) |
 | Region | Hostinger Kuala Lumpur, KVM 2 / 8 GB / 100 GB NVMe |
-| Auto-renew | **disabled** (30-day trial, expires 2026-06-05) |
+| 訂閱狀態 | **已續費**（2026-07-18 Hugo 確認；原 30 日試用已過渡到正式訂閱。下次扣費日 / auto-renew 設定待 hPanel 核實） |
 
 Run shell commands on VPS via `ssh orca '<cmd>'`. Interactive bash needed for NVM-loaded tools (`bash -ic "<cmd>"`).
 
@@ -145,7 +145,8 @@ CloudCLI 係第三方 npm 套件，透過外掛 CSS/JS 檔案客制化：
 |---|---|---|
 | Claude Code | OAuth via `claude auth login --claudeai` | ✅ Max subscription, Opus 4.7 |
 | Codex CLI | OAuth via `--device-auth` | ✅ ChatGPT Plus, gpt-5.5 |
-| GLM | shell wrapper function `glm()` in `~/.bashrc` | 🟡 placeholder (BigModel API key TBD) |
+| GLM | shell wrapper `glm()` in `~/.bashrc`；BigModel key 實際已存在（喺 CloudCLI PM2 env） | ⚠️ **2026-07-18 決定：淘汰 GLM，用 Kimi 取代議會座位**。空咗兩個月，key 又喺 log 暴露過要 rotate |
+| Kimi (proxy) | ✅ 已接入（2026-07-23）：`https://fix.6kd.top/v1`，model `kimi-k3-thinking`，key 喺 `~/.kimi_secrets`（Mac+VPS，0600）+ VPS `~/.swarm_v5_secrets`（V5 config 認咗）；plugin `kimi-tools`（hugo-personal） | ⚠️ 非官方 proxy：慢／1M ctx／成日斷線（script 自動重駁）；**backend 自報 GLM-5.2 扮 Kimi**（Hugo 知情）；紀律＝斬件 one-shot，plan 完開新 session |
 | Telegram MCP | uvx wrapper + `~/.telegram_secrets` | ✅ chigwell/telegram-mcp via Telethon session string |
 | GitHub (`polarislt0710/orca-platform-hugo`) | Deploy key `~/.ssh/id_ed25519_github` | ✅ write access |
 
@@ -158,7 +159,12 @@ Sensitive files (`~/.telegram_secrets`, `~/.env.local`, `~/.claude/.credentials.
 
 - **Repo**: `git@github.com:polarislt0710/orca-platform-hugo.git` (PRIVATE)
 - **VPS path**: `/home/hugo-orca/orca-platform-mvp`
-- **Active branch**: `feature/mvp-sprint`
+- **Branch / 部署佈局（2026-07-24 大整理）**：
+  - **LIVE orcagrade.com = `Production`**，由 primary worktree `~/orca-platform-mvp` deploy（PM2 `orca-mvp-backend`:8000 + `orca-mvp-frontend`:8003 都喺呢個資料夾）。**唔好喺 `~/orca-platform-mvp` 亂改 —— 一 restart 就上 live。**
+  - **日常 test = `staging`**，喺**獨立 worktree `~/orca-staging`** 做，改極都唔會搞亂 live。⚠️ 開 Claude session 做嘢／test 要 `cd ~/orca-staging`。
+  - **升 live 流程**：喺 staging 改好 → merge/ff `staging` → `Production` → 喺 `~/orca-platform-mvp` restart（backend `pm2 restart orca-mvp-backend --update-env`；frontend 用 `scripts/restart-mvp-frontend.sh`）。
+  - GitHub **default = `staging`**（工作線）。GitHub 淨返兩條：`staging` + `Production`。舊 `ui-redesign` renamed → `staging`；`main`、3 條 Liston 線（`feature/concept-tree*`、`feature/mvp-sprint`）、8 條已併入舊 branch 全刪。
+  - 全 repo bundle 備份喺 VPS `~/orca-all-branches-backup-20260724.bundle`（35M / 80 ref）。⚠️ Liston 原靠 GitHub `feature/concept-tree*` 交收，已無，要改用 `staging`。
 - **Convention files**: `CLAUDE.md`, `PROJECT-MEMORY.md`, `SESSION-LOG.md`, `DECISIONS.md`, `BUILD-PLAN.md`
 - **Workflow**: hard-enforces **PAUL-loop** (Plan → Apply → Unify) per project CLAUDE.md § 3
 - **Resume trigger**: user types `Resume project. Read CLAUDE.md first.`
@@ -179,7 +185,20 @@ Marketplace: `hugo-personal` → `https://github.com/polarislt0710/claude-skills
 | `workflow-tools` | 1.0.0 | paul-loop / seed / brainstormers / everything-code / cli-anything / research-last30days / awesome-code-skills / gstack | ✅ | ✅ |
 | `media-tools` | 1.0.0 | cantonese-ai（連 scripts/）/ remotion（remotion-video + best-practices 合併） | ✅ | ✅ |
 | `data-tools` | 1.0.0 | duckdb-data | ✅ | ✅ |
+| `kimi-tools` | 1.0.0 | kimi-delegate（一次過任務交 Kimi proxy，自動重駁；key 喺 `~/.kimi_secrets` 唔入 repo） | ✅ | ✅ |
 | `mattpocock-skills` | — | tdd / grill-me / diagnose / triage / zoom-out / caveman / write-a-skill 等 | ❌ | ✅（cache 舊版；⚠️ upstream repo `smll-ai/mattpocock-skills` 已要 auth，update 唔到） |
+
+### 第二個 marketplace：`openai-codex`（2026-07-22 裝）
+
+Repo: https://github.com/openai/codex-plugin-cc （OpenAI 官方）
+
+| Plugin | Version | 指令 | Mac | VPS |
+|---|---|---|---|---|
+| `codex@openai-codex` | 1.0.6 | `/codex:review`（唯讀）/ `/codex:adversarial-review` / `/codex:rescue`（delegate coding）/ `/codex:transfer` / `/codex:status` / `/codex:result` / `/codex:cancel` | ✅ | ✅ |
+
+- **分工（2026-07-23 更新）**：coding → Codex（**難/重要 → `gpt-5.6-sol`＋high；容易/唔重要 → `gpt-5.6-terra`＋high**，經 codex plugin）；Opus 4.8 淨做 planning + review；Kimi = 研究/多角度/前端眼（一次一件斬細任務）
+- Mac Codex CLI 0.145.0（npm global 新裝），ChatGPT login 本身已有；default model `gpt-5.6-terra` high effort（`~/.codex/config.toml`）；`codex exec` smoke test 通
+- VPS Codex CLI 一早 auth 咗（gpt-5.5→已可用 5.6）；長 task 記得 `--background`
 
 ### Standalone skills (`~/.claude/skills/`)
 **無 — 2026-07-12 skills consolidation 已全部遷入 marketplace plugins**（brainstormers/taste/execution-discipline 等 12 個入咗上面嘅 plugin；persistent-mem/session-continuity/code-review/security-review/superpowers/openspace-agents/video-db/vibe-kanban 等因同 built-in 重複已淘汰）。兩部機嘅 `~/.claude/skills/` 都係空。
@@ -317,7 +336,7 @@ What's been built so far:
 3. **Claude Code (Max) auth** — `claude auth login --claudeai`, paste-back OAuth flow
 4. **Codex CLI (ChatGPT Plus) auth** — `--device-auth` flow
 5. **GLM 5.1 placeholder** — `glm()` shell function in `~/.bashrc`, awaiting BigModel API key
-6. **ORCA repo cloned** — `~/orca-platform-mvp/` on `feature/mvp-sprint` branch via deploy key
+6. **ORCA repo cloned** — `~/orca-platform-mvp/` = LIVE，on `Production` branch（原 `feature/mvp-sprint`）；test 區喺獨立 worktree `~/orca-staging`（`staging` branch）。詳見上面 § ORCA project「Branch / 部署佈局」
 7. **Cronicle installed** — `/opt/cronicle/`, systemd, port 3012, admin password Hugo set
 8. **CloudCLI installed** — npm pkg `@cloudcli-ai/cloudcli@0.40.1`, PM2-managed, port 3001
 9. **Telegram MCP** — chigwell/telegram-mcp via uvx wrapper, Telethon session string in `~/.telegram_secrets`

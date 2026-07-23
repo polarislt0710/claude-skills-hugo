@@ -41,8 +41,8 @@ You are running on **Hugo's Hostinger VPS**:
 
 ## 📂 ORCA project
 
-- **Path**: `~/orca-platform-mvp/`
-- **Branch**: `feature/mvp-sprint`
+- **Path**: `~/orca-platform-mvp/` = **LIVE**（primary worktree，餵 orcagrade.com）
+- **Branch / 部署**（2026-07-24 大整理）：**LIVE = `Production`**（`~/orca-platform-mvp`，PM2 backend:8000 + frontend:8003，唔好喺度亂改一 restart 就上 live）；**test = `staging`** 喺獨立 worktree **`~/orca-staging`**（開 session 做嘢／test 去呢度）。升 live：`staging` → `Production` → 喺 `~/orca-platform-mvp` restart。GitHub default=`staging`，淨返 `staging`+`Production`（舊 ui-redesign→staging；main／3條Liston線／8條舊branch 全刪；bundle 備份 `~/orca-all-branches-backup-20260724.bundle`）
 - **Remote**: `git@github.com:polarislt0710/orca-platform-hugo.git`
 - **Convention files**: `CLAUDE.md`, `PROJECT-MEMORY.md`, `SESSION-LOG.md`, `DECISIONS.md`, `BUILD-PLAN.md`
 - **Workflow**: hard-enforces **PAUL-loop** per project CLAUDE.md § 3
