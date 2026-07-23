@@ -10,73 +10,140 @@
     {
       "name": "mattpocock-skills",
       "description": "Matt Pocock's engineering & productivity skills",
-      "author": {"name": "Matt Pocock"},
+      "author": {
+        "name": "Matt Pocock"
+      },
       "category": "engineering",
-      "source": {"source": "url", "url": "https://github.com/smll-ai/mattpocock-skills.git"}
+      "source": {
+        "source": "url",
+        "url": "https://github.com/smll-ai/mattpocock-skills.git"
+      }
     },
     {
       "name": "super-personas",
       "version": "1.0.1",
       "description": "6 cognitive engineering personas",
-      "author": {"name": "Hugo Chan"},
+      "author": {
+        "name": "Hugo Chan"
+      },
       "category": "engineering",
-      "source": {"source": "git-subdir", "url": "https://github.com/polarislt0710/claude-skills-hugo.git", "path": "local-plugins/super-personas"}
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
+        "path": "local-plugins/super-personas"
+      }
     },
     {
       "name": "ai-prompts",
       "version": "1.0.1",
       "description": "AI generation prompt builders",
-      "author": {"name": "Hugo Chan"},
+      "author": {
+        "name": "Hugo Chan"
+      },
       "category": "creative",
-      "source": {"source": "git-subdir", "url": "https://github.com/polarislt0710/claude-skills-hugo.git", "path": "local-plugins/ai-prompts"}
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
+        "path": "local-plugins/ai-prompts"
+      }
     },
     {
       "name": "marketing",
       "version": "1.0.1",
       "description": "Marketing skills",
-      "author": {"name": "Hugo Chan"},
+      "author": {
+        "name": "Hugo Chan"
+      },
       "category": "productivity",
-      "source": {"source": "git-subdir", "url": "https://github.com/polarislt0710/claude-skills-hugo.git", "path": "local-plugins/marketing"}
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
+        "path": "local-plugins/marketing"
+      }
     },
     {
       "name": "design",
       "version": "1.1.0",
       "description": "Professional design system - 20 rules + web motion + aesthetic references",
-      "author": {"name": "Hugo Chan"},
+      "author": {
+        "name": "Hugo Chan"
+      },
       "category": "design",
-      "source": {"source": "git-subdir", "url": "https://github.com/polarislt0710/claude-skills-hugo.git", "path": "local-plugins/design"}
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
+        "path": "local-plugins/design"
+      }
     },
     {
       "name": "swarm-tools",
       "version": "1.1.0",
       "description": "Multi-agent stakeholder jam with real-time WebSocket dashboard + swarm execution discipline",
-      "author": {"name": "Hugo Chan"},
+      "author": {
+        "name": "Hugo Chan"
+      },
       "category": "productivity",
-      "source": {"source": "git-subdir", "url": "https://github.com/polarislt0710/claude-skills-hugo.git", "path": "local-plugins/swarm-tools"}
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
+        "path": "local-plugins/swarm-tools"
+      }
     },
     {
       "name": "workflow-tools",
       "version": "1.0.0",
       "description": "Dev workflow & meta toolkit - PAUL loop, seed incubator, brainstormers, research, CLI automation, gstack, CLAUDE.md config, ecosystem directory",
-      "author": {"name": "Hugo Chan"},
+      "author": {
+        "name": "Hugo Chan"
+      },
       "category": "productivity",
-      "source": {"source": "git-subdir", "url": "https://github.com/polarislt0710/claude-skills-hugo.git", "path": "local-plugins/workflow-tools"}
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
+        "path": "local-plugins/workflow-tools"
+      }
     },
     {
       "name": "media-tools",
       "version": "1.0.0",
       "description": "Programmatic media generation - Cantonese.ai TTS + Remotion code-driven video",
-      "author": {"name": "Hugo Chan"},
+      "author": {
+        "name": "Hugo Chan"
+      },
       "category": "creative",
-      "source": {"source": "git-subdir", "url": "https://github.com/polarislt0710/claude-skills-hugo.git", "path": "local-plugins/media-tools"}
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
+        "path": "local-plugins/media-tools"
+      }
     },
     {
       "name": "data-tools",
       "version": "1.0.0",
       "description": "Data analysis tools - DuckDB in-process SQL analytics",
-      "author": {"name": "Hugo Chan"},
+      "author": {
+        "name": "Hugo Chan"
+      },
       "category": "productivity",
-      "source": {"source": "git-subdir", "url": "https://github.com/polarislt0710/claude-skills-hugo.git", "path": "local-plugins/data-tools"}
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
+        "path": "local-plugins/data-tools"
+      }
+    },
+    {
+      "name": "kimi-tools",
+      "version": "1.0.0",
+      "description": "Kimi k3-thinking (proxy) one-shot delegation - chopped tasks, research/frontend perspective, auto-reconnect",
+      "author": {
+        "name": "Hugo Chan"
+      },
+      "category": "ai",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
+        "path": "local-plugins/kimi-tools"
+      }
     }
   ]
 }
