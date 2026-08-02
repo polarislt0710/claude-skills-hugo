@@ -59,6 +59,23 @@ PM2 daemon itself runs under systemd unit `pm2-hugo-orca.service` (auto-resurrec
 
 **⚠️ swarm-server bind 規則（2026-07-13）**：nginx 而家霸住 public IP `:3010`（做舊 bookmark 301 → HTTPS dashboard），node 一定要 bind `127.0.0.1` — PM2 env 有 `SWARM_BIND=127.0.0.1`（喺 dump.pm2 persist 咗）。如果 `pm2 restart swarm-server --update-env` 時漏咗呢個 env，server 會 EADDRINUSE crash-loop（7 月初就係咁死咗幾日）。
 
+## 🥇 預設 coding flow — Matt Pocock skills（2026-08-03 起，行先）
+
+**Hugo 已定：所有 coding 工作預設用 `mattpocock-skills` plugin（官方 https://github.com/mattpocock/skills ，marketplace `mattpocock`，Mac+VPS 都裝咗）嘅 flow 行先**，除非 Hugo 明講唔使。個 flow：
+
+1. **問清需求** → `grilling` / `grill-me`（連環追問到需求無含糊位先郁手）
+2. **寫規格** → `to-spec`
+3. **拆 tickets** → `to-tickets`（每張 ticket 細到一個 session 做得完）
+4. **小步實作＋測試** → `implement`（配合 `tdd`）
+5. **Code review** → `code-review`（mattpocock 版；built-in /code-review 可以做加固）
+6. **交接** → `handoff`（session 尾寫低狀態俾下一手）
+
+補充：
+- 超大件、一個 session 裝唔落嘅工作 → 先用 `wayfinder` 開 decision-ticket 地圖，逐個決定拆完先入上面 flow
+- 快手試 idea → `prototype`；追 bug → `diagnosing-bugs`；砌 domain model → `domain-modeling`
+- 呢個 flow 同下面 Codex 分工並行唔衝突：flow 定「做嘢次序」，Codex 分工定「邊個落手寫」——implement 階段照可以交 Codex，但 spec/tickets/review/handoff 紀律照跟
+- 好細嘅一兩行 trivial fix 唔使全套，但凡有新 feature / 多檔改動 / 需求未清，一律行全 flow
+
 ## 🧭 工具分工 — 幾時用邊個（2026-07-13 Swarm Mission review 結論）
 
 **Heuristic：出 brief 嗰陣寫唔寫得出「點驗收」？寫得出 → Swarm Mission；寫唔出 → Claude Code。**
@@ -186,7 +203,7 @@ Marketplace: `hugo-personal` → `https://github.com/polarislt0710/claude-skills
 | `media-tools` | 1.0.0 | cantonese-ai（連 scripts/）/ remotion（remotion-video + best-practices 合併） | ✅ | ✅ |
 | `data-tools` | 1.0.0 | duckdb-data | ✅ | ✅ |
 | `kimi-tools` | 1.0.0 | kimi-delegate（一次過任務交 Kimi proxy，自動重駁；key 喺 `~/.kimi_secrets` 唔入 repo） | ✅ | ✅ |
-| `mattpocock-skills` | — | tdd / grill-me / diagnose / triage / zoom-out / caveman / write-a-skill 等 | ❌ | ✅（cache 舊版；⚠️ upstream repo `smll-ai/mattpocock-skills` 已要 auth，update 唔到） |
+| ~~`mattpocock-skills`~~ (舊 smll-ai 版) | — | — | ❌ | ❌（2026-08-03 已 uninstall，改用下面官方 `mattpocock` marketplace 版） |
 
 ### 第二個 marketplace：`openai-codex`（2026-07-22 裝）
 
@@ -196,9 +213,26 @@ Repo: https://github.com/openai/codex-plugin-cc （OpenAI 官方）
 |---|---|---|---|---|
 | `codex@openai-codex` | 1.0.6 | `/codex:review`（唯讀）/ `/codex:adversarial-review` / `/codex:rescue`（delegate coding）/ `/codex:transfer` / `/codex:status` / `/codex:result` / `/codex:cancel` | ✅ | ✅ |
 
-- **分工（2026-07-23 更新）**：coding → Codex（**難/重要 → `gpt-5.6-sol`＋high；容易/唔重要 → `gpt-5.6-terra`＋high**，經 codex plugin）；Opus 4.8 淨做 planning + review；Kimi = 研究/多角度/前端眼（一次一件斬細任務）
+- **分工（2026-07-30 更新）**：Claude／Opus 係協調者、決策者、狀態持有人同最後 reviewer；Codex 負責調查、planning、寫 code、修 bug 同測試。難或重要任務用 `gpt-5.6-sol`＋high；容易又唔重要用 `gpt-5.6-terra`＋high。
+- **Codex 係 one-shot**：每個 Codex call 只回覆一輪，完結後唔會自動記得之前內容。`--background` 只代表背景執行，唔代表保留 session 或對話記憶。
+- **同一個 section 接力**：每次開新 Codex call，Claude 都要附上完整但精簡嘅 context packet：目標、section／檔案路徑、相關原文或行號、限制、已接受決定、上一輪結果、未解問題，以及今輪唯一任務。唔好只寫「繼續上次工作」。
+- **Plan → Implement**：複雜任務第一個 call 叫 Codex 調查及出 plan；Claude review、回答問題及作必要決定後，要立即開新 call，連同原 context packet、Codex plan 同 Claude 答案，明確叫 Codex 實作及測試。除非缺少只有主人先知道嘅資料，否則唔好停低等額外批准。
+- **Codex 問 Opus**：叫 Codex 用 `BLOCKED_QUESTION` 回傳問題、證據、建議答案同影響。Claude／Opus 自行處理可判斷嘅問題，再將答案放入新 Codex call；真正需要主人提供資料先問主人。
+- **每輪交接**：要求 Codex 回覆尾段提供 `HANDOFF`，列出完成狀態、改動檔案、測試結果、未解問題同下一個 call 嘅唯一任務。Claude 保存並傳入下一輪，直至同一個 section 完成及通過驗收。
+- 第二對眼睇 code 用 `/codex:review`（唯讀）；挑戰設計決定用 `/codex:adversarial-review`。Claude 必須自行檢查 diff 同測試證據，唔好將 Codex 嘅自我聲稱當成驗收。
 - Mac Codex CLI 0.145.0（npm global 新裝），ChatGPT login 本身已有；default model `gpt-5.6-terra` high effort（`~/.codex/config.toml`）；`codex exec` smoke test 通
 - VPS Codex CLI 一早 auth 咗（gpt-5.5→已可用 5.6）；長 task 記得 `--background`
+
+### 第三個 marketplace：`mattpocock`（2026-08-03 裝，coding flow 行先）
+
+Repo: https://github.com/mattpocock/skills （Matt Pocock 官方；取代舊 smll-ai fork）
+
+| Plugin | Version | 重點 skills | Mac | VPS |
+|---|---|---|---|---|
+| `mattpocock-skills@mattpocock` | 1.2.0 | **flow 六步**：grilling/grill-me → to-spec → to-tickets → implement(+tdd) → code-review → handoff；另有 wayfinder（超大件工作 decision-ticket 地圖）/ prototype / diagnosing-bugs / domain-modeling / codebase-design / triage / research / resolving-merge-conflicts / teach / writing-great-skills | ✅ | ✅ |
+
+- **用法**：見上面 § 🥇 預設 coding flow — 所有 coding 預設行呢個 flow
+- 首次喺某 repo 用可以行 `/setup-matt-pocock-skills` 綁 issue tracker（冇 tracker 就 fallback local markdown tickets）
 
 ### Standalone skills (`~/.claude/skills/`)
 **無 — 2026-07-12 skills consolidation 已全部遷入 marketplace plugins**（brainstormers/taste/execution-discipline 等 12 個入咗上面嘅 plugin；persistent-mem/session-continuity/code-review/security-review/superpowers/openspace-agents/video-db/vibe-kanban 等因同 built-in 重複已淘汰）。兩部機嘅 `~/.claude/skills/` 都係空。
@@ -352,4 +386,4 @@ What's been built so far:
 
 ## 🐾 Last updated
 
-2026-07-13 (Swarm Mission review + Workbench：工具分工 matrix、change reports、followup、SWARM_BIND 規則、swarm HTTPS URL、/w.html 工作台、/login 密碼頁、Followup Copilot)。If knowledge here drifts from reality, **edit this file** and propagate to user-level + GitHub canonical (see `Update CLAUDE.md` section above).
+2026-08-03（裝官方 mattpocock/skills plugin 兩部機 + 新增 🥇 預設 coding flow 章節：問清需求→spec→tickets→小步實作測試→review→handoff；uninstall 舊 smll-ai 版）。上一次：2026-07-13 (Swarm Mission review + Workbench)。If knowledge here drifts from reality, **edit this file** and propagate to user-level + GitHub canonical (see `Update CLAUDE.md` section above).
