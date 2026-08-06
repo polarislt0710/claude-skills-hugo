@@ -144,6 +144,20 @@
         "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
         "path": "local-plugins/kimi-tools"
       }
+    },
+    {
+      "name": "codex-watchdog",
+      "version": "0.2.0",
+      "description": "Monitoring + recovery wrapper for the official openai-codex plugin: detects dead/stalled/timed-out Codex jobs, wakes Claude via background watch, reaps zombie state, flags sandbox denials, and offers a controlled bypass dispatch path",
+      "author": {
+        "name": "Hugo Chan"
+      },
+      "category": "engineering",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
+        "path": "local-plugins/codex-watchdog"
+      }
     }
   ]
 }

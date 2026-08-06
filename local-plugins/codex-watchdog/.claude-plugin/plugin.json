@@ -1,0 +1,8 @@
+{
+  "name": "codex-watchdog",
+  "version": "0.2.0",
+  "description": "Monitoring and recovery wrapper around the official openai-codex plugin: detects dead, stalled, and timed-out Codex background jobs, flags silent sandbox denials, offers a guarded full-access dispatch escape hatch, wakes Claude with structured events, and teaches a disciplined dispatch-watch-recover loop.",
+  "author": {
+    "name": "Hugo"
+  }
+}
