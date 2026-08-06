@@ -60,6 +60,24 @@ The watcher prints exactly one JSON event and exits. Act on `event`:
 | `watch-timeout` | The watcher hit `--max-wait-ms` with no state change. Run `check` once, then decide: still `running` → reopen the watcher; anything else → follow that row. |
 | `nothing-to-watch` | No active job existed. Do not assume success — run `check --all` and report the real state. |
 
+### `reap` can refuse — and that is good news
+
+`reap` re-checks each verdict against freshly read state immediately before it writes. If the job
+finished between the classification and the write, it is left untouched and reported as:
+
+```json
+{ "skipped": [{ "id": "task-…", "reason": "recovered", "classification": "completed" }] }
+```
+
+Treat `reason: "recovered"` as a `completed` / `failed` event: do **not** re-run reap, do not
+re-dispatch — fetch the result with the official plugin's `result` command and continue.
+
+`evidence` also carries pid-identity fields: `pidRawAlive` (what `kill(pid, 0)` said),
+`pidIdentityVerified`, and `pidReuseSuspected`. A job classified `dead` with
+`pidReuseSuspected: true` means the pid is alive but belongs to an unrelated process — the worker
+really is gone. `pidIdentityVerified: false` means the platform would not give us a process start
+time, so liveness rests on the pid alone; say so when you report.
+
 ### The sandbox rule: `sandboxDeny`
 
 `failed`, `stalled`, and `dead` events carry a `sandboxDeny` field, and every job in `check` carries

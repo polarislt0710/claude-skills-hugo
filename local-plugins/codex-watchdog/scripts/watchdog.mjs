@@ -26,15 +26,14 @@ import {
   readLogTail,
   readStateFile,
   resolveCodexStateDirs,
-  resolveJobFile,
-  resolveStateFile,
   scanJobForSandboxDeny
 } from "./lib/state-locator.mjs";
+import { reapJobs } from "./lib/reap.mjs";
 import {
   createBypassJob,
   runBypassWorker,
-  spawnDetachedBypassWorker,
-  updateBypassJob
+  setBypassJobPidIfQueued,
+  spawnDetachedBypassWorker
 } from "./lib/bypass-dispatch.mjs";
 
 const BOOLEAN_FLAGS = new Set(["json", "all", "dryRun", "help", "version", "bypass"]);
@@ -360,22 +359,6 @@ async function commandWatch(flags, positional) {
 
 /* ------------------------------------------------------------------- reap */
 
-const REAP_MARKER = "Reaped by codex-watchdog";
-
-function writeJsonFile(filePath, payload) {
-  fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-}
-
-function reapPatch(job, nowIso) {
-  return {
-    status: "failed",
-    phase: "failed",
-    pid: null,
-    completedAt: nowIso,
-    errorMessage: `${REAP_MARKER}: worker process ${job.pid ?? "unknown"} not alive.`
-  };
-}
-
 function commandReap(flags, positional) {
   const { config, workspaceRoot, stateDirs } = resolveContext(flags);
   const targetId = positional[0] ?? null;
@@ -383,63 +366,9 @@ function commandReap(flags, positional) {
   const all = classifyAll(stateDirs, config);
   const nowIso = new Date().toISOString();
 
-  const reaped = [];
-  const skipped = [];
-
-  for (const item of all) {
-    if (targetId && item.job.id !== targetId) continue;
-    if (!isDeadClassification(item.classification)) {
-      if (targetId) {
-        skipped.push({
-          id: item.job.id,
-          classification: item.classification,
-          reason: "not-dead",
-          evidence: item.evidence
-        });
-      }
-      continue;
-    }
-
-    const patch = reapPatch(item.job, nowIso);
-    const record = {
-      id: item.job.id,
-      stateDir: item.job.stateDir,
-      previousStatus: item.job.status ?? null,
-      previousPhase: item.job.phase ?? null,
-      pid: item.job.pid ?? null,
-      classification: item.classification,
-      patch,
-      filesUpdated: []
-    };
-
-    if (!dryRun) {
-      const stateDir = item.job.stateDir;
-      const stateFile = resolveStateFile(stateDir);
-      const state = readStateFile(stateDir);
-      const nextJobs = state.jobs.map((entry) =>
-        entry && entry.id === item.job.id ? { ...entry, ...patch, updatedAt: nowIso } : entry
-      );
-      writeJsonFile(stateFile, { ...state.raw, jobs: nextJobs });
-      record.filesUpdated.push(stateFile);
-
-      const jobFile = resolveJobFile(stateDir, item.job.id);
-      if (fs.existsSync(jobFile)) {
-        try {
-          const stored = JSON.parse(fs.readFileSync(jobFile, "utf8"));
-          writeJsonFile(jobFile, { ...stored, ...patch });
-          record.filesUpdated.push(jobFile);
-        } catch (error) {
-          record.jobFileError = error.message;
-        }
-      }
-    }
-
-    reaped.push(record);
-  }
-
-  if (targetId && reaped.length === 0 && skipped.length === 0) {
-    skipped.push({ id: targetId, reason: "job-not-found" });
-  }
+  // The write path re-verifies each verdict against freshly read bytes — see
+  // lib/reap.mjs. A job that finished in the meantime is skipped as "recovered".
+  const { reaped, skipped } = reapJobs({ items: all, config, targetId, dryRun, nowIso });
 
   writeJson({
     command: "reap",
@@ -456,7 +385,10 @@ function commandReap(flags, positional) {
     note(`[watchdog]   ${record.id} (pid ${record.pid ?? "?"}) ${record.previousStatus} → failed`);
   }
   for (const record of skipped) {
-    note(`[watchdog]   skipped ${record.id}: ${record.reason}`);
+    note(
+      `[watchdog]   skipped ${record.id}: ${record.reason}` +
+        (record.reason === "recovered" ? ` (now ${record.classification ?? "?"} — left untouched)` : "")
+    );
   }
   return 0;
 }
@@ -516,7 +448,11 @@ function commandDispatch(flags, positional) {
     cwd: job.request.cwd,
     env: process.env
   });
-  updateBypassJob(job.stateDir, job.id, { pid: child.pid ?? null });
+  // Compare-and-swap: the detached worker owns the record the moment it starts.
+  // A blind read-modify-write here can resurrect a job the worker already
+  // finished (status back to `queued`, plus an already-dead pid), which reap
+  // would then bury as failed.
+  setBypassJobPidIfQueued(job.stateDir, job.id, child.pid ?? null);
 
   writeJson({
     jobId: job.id,

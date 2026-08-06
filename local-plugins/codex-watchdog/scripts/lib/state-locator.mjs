@@ -11,6 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { isTerminalStatus, parseTimestampMs } from "./classify.mjs";
 import { scanForSandboxDeny } from "./deny-scan.mjs";
 
 export const SUPPORTED_STATE_VERSION = 1;
@@ -193,20 +194,79 @@ export function readJobFile(stateDir, jobId) {
 }
 
 /**
- * Merge state.json entries with their per-job files.
- * Job files carry `request` (effort tier); state.json entries carry the
- * freshest status/summary — so the state entry wins on conflicts.
+ * Fields that describe *where the job is now*. Everything else (request,
+ * workspaceRoot, logFile, …) is immutable-ish and can come from either side.
+ */
+const STATUS_FIELDS = Object.freeze([
+  "status",
+  "phase",
+  "pid",
+  "startedAt",
+  "completedAt",
+  "updatedAt",
+  "errorMessage",
+  "summary",
+  "threadId",
+  "turnId",
+  "result"
+]);
+
+function recencyMs(record) {
+  const candidates = [record?.completedAt, record?.updatedAt, record?.startedAt, record?.createdAt]
+    .map(parseTimestampMs)
+    .filter((value) => value !== null);
+  return candidates.length ? Math.max(...candidates) : null;
+}
+
+/**
+ * Merge a state.json entry with its jobs/<id>.json file.
+ *
+ * `state.json` and `jobs/<id>.json` are two independent reads, and the official
+ * worker writes the job file FIRST and state.json second (tracked-jobs.mjs
+ * `runTrackedJob`). So a naive `{...jobFile, ...entry}` lets a stale state entry
+ * (status running, pid 1234) beat a job file that already says `completed` —
+ * and a completed job then gets classified `dead` and reaped as failed.
+ *
+ * Rule: a terminal record beats an active one; between two records of the same
+ * finality the newer timestamp wins; ties keep the state entry (previous
+ * behaviour). `statusSource` records which side won, for evidence.
+ */
+export function mergeJobRecord(entry, jobFile, stateDir) {
+  const merged = { ...(jobFile ?? {}), ...(entry ?? {}), stateDir };
+
+  if (!entry) return { ...merged, statusSource: jobFile ? "jobFile" : "none" };
+  if (!jobFile) return { ...merged, statusSource: "state" };
+
+  const entryTerminal = isTerminalStatus(entry.status);
+  const fileTerminal = isTerminalStatus(jobFile.status);
+
+  let winner = "state";
+  if (fileTerminal && !entryTerminal) {
+    winner = "jobFile";
+  } else if (!entryTerminal || fileTerminal) {
+    const entryMs = recencyMs(entry);
+    const fileMs = recencyMs(jobFile);
+    if (fileMs !== null && (entryMs === null || fileMs > entryMs)) winner = "jobFile";
+  }
+
+  if (winner === "jobFile") {
+    for (const field of STATUS_FIELDS) {
+      if (field in jobFile) merged[field] = jobFile[field];
+    }
+  }
+
+  merged.statusSource = winner;
+  return merged;
+}
+
+/**
+ * Merge state.json entries with their per-job files (see mergeJobRecord).
  */
 export function loadJobs(stateDir) {
   const state = readStateFile(stateDir);
-  return state.jobs.map((entry) => {
-    const jobFile = entry && entry.id ? readJobFile(stateDir, entry.id) : null;
-    return {
-      ...(jobFile ?? {}),
-      ...entry,
-      stateDir
-    };
-  });
+  return state.jobs.map((entry) =>
+    mergeJobRecord(entry, entry && entry.id ? readJobFile(stateDir, entry.id) : null, stateDir)
+  );
 }
 
 export function loadJobsFromStateDirs(stateDirs) {
@@ -233,6 +293,77 @@ export function isPidAlive(pid) {
   }
 }
 
+/**
+ * A pid on its own proves nothing: the OS recycles pids, so a dead worker's
+ * 1234 can belong to some unrelated long-lived process and `kill(pid, 0)` will
+ * happily report "alive" forever.
+ *
+ * Cheap extra identity check: a process cannot have started before the job it
+ * is supposedly running. If the process start time is older than the job start
+ * time (minus a generous tolerance) it is definitely a different process.
+ *
+ * The tolerance is deliberately large. A false "alive" only delays recovery;
+ * a false "dead" makes reap mark a *running* job as failed, which is far worse.
+ * Real pid recycling victims are long-lived daemons, so 5 minutes still catches
+ * them while leaving normal dispatch latency (worker starts, then writes
+ * startedAt seconds later) untouched.
+ */
+export const PID_START_TOLERANCE_MS = 5 * 60_000;
+
+// Short-lived cache so one CLI invocation (or one watch poll) does not fork
+// `ps` once per job. The TTL keeps a long-running `watch` from trusting a start
+// time for a pid that has since been recycled.
+const processStartCache = new Map();
+export const PID_START_CACHE_TTL_MS = 30_000;
+
+/**
+ * Process start time in epoch ms, or null when the platform will not tell us
+ * (Windows, `ps` missing, unparseable output) — callers must degrade to the
+ * plain liveness check in that case.
+ */
+export function readProcessStartMs(pid, { cache = processStartCache, nowMs = Date.now() } = {}) {
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  const cached = cache?.get(pid);
+  if (cached && nowMs - cached.readAtMs < PID_START_CACHE_TTL_MS) return cached.value;
+
+  let value = null;
+  try {
+    const output = execFileSync("ps", ["-p", String(pid), "-o", "lstart="], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 3000
+    }).trim();
+    if (output) {
+      const parsed = Date.parse(output);
+      if (!Number.isNaN(parsed)) value = parsed;
+    }
+  } catch {
+    value = null;
+  }
+
+  cache?.set(pid, { value, readAtMs: nowMs });
+  return value;
+}
+
+/**
+ * @returns {{pidIdentityVerified: boolean, processStartMs: number|null, pidReuseSuspected: boolean}}
+ */
+export function verifyPidIdentity(pid, jobStartMs, options = {}) {
+  const {
+    processStartMs = readProcessStartMs(pid),
+    toleranceMs = PID_START_TOLERANCE_MS
+  } = options;
+
+  if (processStartMs === null || !Number.isFinite(jobStartMs)) {
+    return { pidIdentityVerified: false, processStartMs: processStartMs ?? null, pidReuseSuspected: false };
+  }
+  return {
+    pidIdentityVerified: true,
+    processStartMs,
+    pidReuseSuspected: processStartMs < jobStartMs - toleranceMs
+  };
+}
+
 export function readLogMtimeMs(logFile) {
   if (!logFile || typeof logFile !== "string") return null;
   try {
@@ -247,8 +378,17 @@ export function readLogMtimeMs(logFile) {
  */
 export function probeJob(job) {
   const pid = Number.isInteger(job?.pid) ? job.pid : null;
+  const pidAlive = pid === null ? false : isPidAlive(pid);
+
+  let identity = { pidIdentityVerified: false, processStartMs: null, pidReuseSuspected: false };
+  if (pidAlive && pid !== null) {
+    const jobStartMs = parseTimestampMs(job?.startedAt) ?? parseTimestampMs(job?.createdAt);
+    if (jobStartMs !== null) identity = verifyPidIdentity(pid, jobStartMs);
+  }
+
   return {
-    pidAlive: pid === null ? false : isPidAlive(pid),
+    pidAlive,
+    ...identity,
     logMtimeMs: readLogMtimeMs(job?.logFile)
   };
 }

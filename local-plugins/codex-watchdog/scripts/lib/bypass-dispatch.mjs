@@ -26,9 +26,12 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
+import { isTerminalStatus } from "./classify.mjs";
+import { readJsonFileOrNull, updateJsonFileAtomic, writeJsonFileAtomic } from "./json-store.mjs";
 import {
   SUPPORTED_STATE_VERSION,
   computeStateDirName,
+  mergeJobRecord,
   readStateFile,
   resolveJobFile,
   resolveJobsDir,
@@ -67,16 +70,17 @@ export function resolveBypassStateDir(workspaceRoot, { homeDir = os.homedir() } 
   );
 }
 
-function writeJsonFile(filePath, payload) {
-  fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-}
-
-function readStateRaw(stateDir) {
+/** Make sure state.json exists so the CAS helpers always have bytes to compare. */
+function ensureStateFile(stateDir) {
   const stateFile = resolveStateFile(stateDir);
   if (!fs.existsSync(stateFile)) {
-    return { version: SUPPORTED_STATE_VERSION, config: {}, jobs: [] };
+    fs.mkdirSync(stateDir, { recursive: true });
+    writeJsonFileAtomic(stateFile, { version: SUPPORTED_STATE_VERSION, config: {}, jobs: [] });
+  } else {
+    // Fail loud on an unknown on-disk format, exactly like the read path does.
+    readStateFile(stateDir);
   }
-  return readStateFile(stateDir).raw;
+  return stateFile;
 }
 
 export function appendLogLine(logFile, message) {
@@ -85,31 +89,90 @@ export function appendLogLine(logFile, message) {
   fs.appendFileSync(logFile, `[${nowIso()}] ${normalized}\n`, "utf8");
 }
 
-/** Merge a patch into both state.json and jobs/<id>.json. */
-export function updateBypassJob(stateDir, jobId, patch) {
-  const state = readStateRaw(stateDir);
-  const jobs = Array.isArray(state.jobs) ? state.jobs : [];
-  const index = jobs.findIndex((entry) => entry && entry.id === jobId);
+/**
+ * Merge a patch into both state.json and jobs/<id>.json.
+ *
+ * Job file first, then state.json — the same ordering the official worker uses,
+ * so a concurrent reader that catches us mid-update sees the job file as the
+ * fresher side (which mergeJobRecord already prefers for terminal states).
+ * Both writes are atomic; the state.json write is a compare-and-swap.
+ */
+export function updateBypassJob(stateDir, jobId, patch, options = {}) {
   const timestamp = nowIso();
-  if (index === -1) {
-    jobs.unshift({ id: jobId, createdAt: timestamp, updatedAt: timestamp, ...patch });
-  } else {
-    jobs[index] = { ...jobs[index], ...patch, updatedAt: timestamp };
-  }
-  writeJsonFile(resolveStateFile(stateDir), { ...state, version: SUPPORTED_STATE_VERSION, jobs });
 
   const jobFile = resolveJobFile(stateDir, jobId);
-  let stored = {};
-  if (fs.existsSync(jobFile)) {
-    try {
-      stored = JSON.parse(fs.readFileSync(jobFile, "utf8")) ?? {};
-    } catch {
-      stored = {};
-    }
-  }
+  const stored = readJsonFileOrNull(jobFile) ?? {};
   const record = { ...stored, ...patch, id: jobId, updatedAt: timestamp };
-  writeJsonFile(jobFile, record);
+  writeJsonFileAtomic(jobFile, record);
+
+  const stateFile = ensureStateFile(stateDir);
+  updateJsonFileAtomic(
+    stateFile,
+    (state) => {
+      const jobs = Array.isArray(state.jobs) ? [...state.jobs] : [];
+      const index = jobs.findIndex((entry) => entry && entry.id === jobId);
+      if (index === -1) {
+        jobs.unshift({ id: jobId, createdAt: timestamp, updatedAt: timestamp, ...patch });
+      } else {
+        jobs[index] = { ...jobs[index], ...patch, updatedAt: timestamp };
+      }
+      return { ...state, version: SUPPORTED_STATE_VERSION, jobs };
+    },
+    { onAfterRead: options.onAfterRead ?? null }
+  );
+
   return record;
+}
+
+/**
+ * Attach the spawned worker's pid — but ONLY while the job is still queued.
+ *
+ * The parent and the detached worker both write this record. `codex exec` can
+ * be fast enough that the worker has already written `completed` by the time
+ * the parent gets around to recording the pid; a blind read-modify-write then
+ * rolls the record back to `queued` with a pid that is already dead, and the
+ * next reap buries a successful job as failed.
+ *
+ * @returns {{applied: boolean, status: string|null, reason?: string}}
+ */
+export function setBypassJobPidIfQueued(stateDir, jobId, pid, options = {}) {
+  const jobFile = resolveJobFile(stateDir, jobId);
+  if (!fs.existsSync(jobFile) && !fs.existsSync(resolveStateFile(stateDir))) {
+    return { applied: false, status: null, reason: "job-not-found" };
+  }
+
+  const stateFile = ensureStateFile(stateDir);
+  let observedStatus = null;
+
+  const outcome = updateJsonFileAtomic(
+    stateFile,
+    (state) => {
+      const jobs = Array.isArray(state.jobs) ? state.jobs : [];
+      const entry = jobs.find((item) => item && item.id === jobId);
+      const merged = mergeJobRecord(entry, readJsonFileOrNull(jobFile), stateDir);
+      observedStatus = merged.status ?? null;
+      if (observedStatus !== "queued") {
+        return { abort: true, reason: isTerminalStatus(observedStatus) ? "already-terminal" : "not-queued" };
+      }
+      return {
+        ...state,
+        jobs: jobs.map((item) => (item && item.id === jobId ? { ...item, pid } : item))
+      };
+    },
+    { onAfterRead: options.onAfterRead ?? null }
+  );
+
+  if (!outcome.written) {
+    return { applied: false, status: observedStatus, reason: outcome.reason };
+  }
+
+  // Same guard on the job file: only stamp the pid while it still reads queued.
+  const stored = readJsonFileOrNull(jobFile);
+  if (stored && stored.status === "queued") {
+    writeJsonFileAtomic(jobFile, { ...stored, pid });
+  }
+
+  return { applied: true, status: "queued" };
 }
 
 /**

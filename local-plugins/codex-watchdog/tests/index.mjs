@@ -9,3 +9,4 @@ import "./reap.test.mjs";
 import "./watch.test.mjs";
 import "./deny-scan.test.mjs";
 import "./dispatch.test.mjs";
+import "./race.test.mjs";

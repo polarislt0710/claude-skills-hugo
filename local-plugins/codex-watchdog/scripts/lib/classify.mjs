@@ -60,7 +60,12 @@ export function classify(job, probe = {}, config, nowMs = Date.now()) {
 
   const status = typeof job?.status === "string" ? job.status : null;
   const pid = Number.isInteger(job?.pid) && job.pid > 0 ? job.pid : null;
-  const pidAlive = pid === null ? false : probe.pidAlive === true;
+  // `pidRawAlive` is what kill(pid, 0) said; `pidAlive` is what we believe once
+  // pid-reuse identity checking has had its say (see state-locator
+  // verifyPidIdentity). A recycled pid means the real worker is gone.
+  const pidRawAlive = pid === null ? false : probe.pidAlive === true;
+  const pidReuseSuspected = pidRawAlive && probe.pidReuseSuspected === true;
+  const pidAlive = pidRawAlive && !pidReuseSuspected;
 
   const createdAtMs = parseTimestampMs(job?.createdAt);
   const startedAtMs = parseTimestampMs(job?.startedAt);
@@ -81,6 +86,11 @@ export function classify(job, probe = {}, config, nowMs = Date.now()) {
     status,
     pid,
     pidAlive,
+    pidRawAlive,
+    pidReuseSuspected,
+    pidIdentityVerified: probe.pidIdentityVerified === true,
+    processStartMs: Number.isFinite(probe.processStartMs) ? probe.processStartMs : null,
+    statusSource: typeof job?.statusSource === "string" ? job.statusSource : null,
     logFile: typeof job?.logFile === "string" ? job.logFile : null,
     logMtimeMs,
     logAgeMs,
