@@ -132,20 +132,6 @@
       }
     },
     {
-      "name": "kimi-tools",
-      "version": "1.0.0",
-      "description": "Kimi k3-thinking (proxy) one-shot delegation - chopped tasks, research/frontend perspective, auto-reconnect",
-      "author": {
-        "name": "Hugo Chan"
-      },
-      "category": "ai",
-      "source": {
-        "source": "git-subdir",
-        "url": "https://github.com/polarislt0710/claude-skills-hugo.git",
-        "path": "local-plugins/kimi-tools"
-      }
-    },
-    {
       "name": "codex-watchdog",
       "version": "0.2.1",
       "description": "Monitoring + recovery wrapper for the official openai-codex plugin: detects dead/stalled/timed-out Codex jobs, wakes Claude via background watch, reaps zombie state, flags sandbox denials, and offers a controlled bypass dispatch path",

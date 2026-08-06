@@ -1,8 +1,0 @@
-{
-  "name": "kimi-tools",
-  "version": "1.0.0",
-  "description": "Kimi (k3-thinking via proxy) delegation - one-shot chopped tasks, research/frontend perspective, auto-reconnect",
-  "skills": [
-    "./skills/kimi-delegate"
-  ]
-}
