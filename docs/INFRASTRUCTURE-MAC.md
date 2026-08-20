@@ -73,6 +73,10 @@ PM2 daemon itself runs under systemd unit `pm2-hugo-orca.service` (auto-resurrec
 補充：
 - 超大件、一個 session 裝唔落嘅工作 → 先用 `wayfinder` 開 decision-ticket 地圖，逐個決定拆完先入上面 flow
 - 快手試 idea → `prototype`；追 bug → `diagnosing-bugs`；砌 domain model → `domain-modeling`
+- **落 flow 之前嘅兩個前置研究 skill（2026-08-20 由 `~/.codex/skills/` port 入 `workflow-tools` v1.1.0）**：
+  - `/workflow-tools:neuroarxiv` — 「有冇人做過？」真 HTTP 抓 arXiv、每篇論文一個**隔離 parallel Agent** 讀（唔俾互相見到，避免變行貨總結），score+cluster 後收斂成**一條**建議路，連 citation 同已知地雷。貴（N+4 個 agent call），只喺「揀錯架構要重做好耐」嗰啲決定先用；trivial CRUD / glue code 唔好用
+  - `/workflow-tools:advise-project-approach` — 「用咩砌、幾錢、點行」pre-build / mid-build / post-build 都用得：查真 comparable、官方 pricing 頁、stack + architecture 建議、prioritized 改善清單。硬規矩：唔准靠 star 數揀 stack、review repo 唔准擅自 run test/build/install、時間敏感 claim 要寫實際日期
+  - 建議次序：`neuroarxiv`（有冇人做過）→ `advise-project-approach`（用咩砌幾錢）→ 上面六步 flow
 - 呢個 flow 同下面 Codex 分工並行唔衝突：flow 定「做嘢次序」，Codex 分工定「邊個落手寫」——implement 階段照可以交 Codex，但 spec/tickets/review/handoff 紀律照跟
 - 好細嘅一兩行 trivial fix 唔使全套，但凡有新 feature / 多檔改動 / 需求未清，一律行全 flow
 
@@ -199,7 +203,7 @@ Marketplace: `hugo-personal` → `https://github.com/polarislt0710/claude-skills
 | `swarm-tools` | 1.1.0 | multi-persona-jam（5-phase，scripts/emit-event.sh + references/）/ **execution-discipline** | ✅ | ✅ |
 | `ai-prompts` | 1.0.1 | image / single-shot-video / multi-shot-video | ✅ | ✅ |
 | `marketing` | 1.0.1 | copywriting / content-templates / growth-strategies / conversion / seo | ✅ | ✅ |
-| `workflow-tools` | 1.0.0 | paul-loop / seed / brainstormers / everything-code / cli-anything / research-last30days / awesome-code-skills / gstack | ✅ | ✅ |
+| `workflow-tools` | 1.1.0 | paul-loop / seed / brainstormers / everything-code / cli-anything / research-last30days / awesome-code-skills / gstack / **advise-project-approach** / **neuroarxiv** | ✅ | ✅ |
 | `media-tools` | 1.0.0 | cantonese-ai（連 scripts/）/ remotion（remotion-video + best-practices 合併） | ✅ | ✅ |
 | `data-tools` | 1.0.0 | duckdb-data | ✅ | ✅ |
 | `kimi-tools` | 1.0.0 | kimi-delegate（一次過任務交 Kimi proxy，自動重駁；key 喺 `~/.kimi_secrets` 唔入 repo） | ✅ | ✅ |
@@ -386,4 +390,4 @@ What's been built so far:
 
 ## 🐾 Last updated
 
-2026-08-03（裝官方 mattpocock/skills plugin 兩部機 + 新增 🥇 預設 coding flow 章節：問清需求→spec→tickets→小步實作測試→review→handoff；uninstall 舊 smll-ai 版）。上一次：2026-07-13 (Swarm Mission review + Workbench)。If knowledge here drifts from reality, **edit this file** and propagate to user-level + GitHub canonical (see `Update CLAUDE.md` section above).
+2026-08-20（`workflow-tools` 升 1.1.0：由 `~/.codex/skills/` port `advise-project-approach` + `neuroarxiv` 入 Claude Code plugin 形式，Mac + VPS 都裝咗、舊 version cache dir 已 prune）。上一次：2026-08-03（裝官方 mattpocock/skills plugin 兩部機 + 新增 🥇 預設 coding flow 章節；uninstall 舊 smll-ai 版）、2026-07-13 (Swarm Mission review + Workbench)。If knowledge here drifts from reality, **edit this file** and propagate to user-level + GitHub canonical (see `Update CLAUDE.md` section above).
