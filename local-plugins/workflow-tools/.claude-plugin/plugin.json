@@ -1,7 +1,7 @@
 {
   "name": "workflow-tools",
-  "version": "1.0.0",
-  "description": "Dev workflow & meta toolkit - PAUL loop, project incubation, structured ideation, recency research, CLI automation, stack scaffolding, CLAUDE.md config, ecosystem directory",
+  "version": "1.1.0",
+  "description": "Dev workflow & meta toolkit - PAUL loop, project incubation, structured ideation, recency research, arXiv prior-art grounding, project-approach advisory, CLI automation, stack scaffolding, CLAUDE.md config, ecosystem directory",
   "skills": [
     "./skills/paul-loop",
     "./skills/seed",
@@ -10,6 +10,8 @@
     "./skills/cli-anything",
     "./skills/research-last30days",
     "./skills/awesome-code-skills",
-    "./skills/gstack"
+    "./skills/gstack",
+    "./skills/advise-project-approach",
+    "./skills/neuroarxiv"
   ]
 }
