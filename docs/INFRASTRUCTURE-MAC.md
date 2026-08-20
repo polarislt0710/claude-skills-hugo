@@ -218,8 +218,13 @@ Repo: https://github.com/openai/codex-plugin-cc （OpenAI 官方）
 | `codex@openai-codex` | 1.0.6 | `/codex:review`（唯讀）/ `/codex:adversarial-review` / `/codex:rescue`（delegate coding）/ `/codex:transfer` / `/codex:status` / `/codex:result` / `/codex:cancel` | ✅ | ✅ |
 
 - **分工（2026-07-30 更新）**：Claude／Opus 係協調者、決策者、狀態持有人同最後 reviewer；Codex 負責調查、planning、寫 code、修 bug 同測試。難或重要任務用 `gpt-5.6-sol`＋high；容易又唔重要用 `gpt-5.6-terra`＋high。
-- **Codex 係 one-shot**：每個 Codex call 只回覆一輪，完結後唔會自動記得之前內容。`--background` 只代表背景執行，唔代表保留 session 或對話記憶。
-- **同一個 section 接力**：每次開新 Codex call，Claude 都要附上完整但精簡嘅 context packet：目標、section／檔案路徑、相關原文或行號、限制、已接受決定、上一輪結果、未解問題，以及今輪唯一任務。唔好只寫「繼續上次工作」。
+- **Codex call 預設 one-shot，但 resume 係存在嘅**（2026-08-20 更正）：`codex exec resume`（收 session id 或 `--last`）可以接返上次對話，所以「每次由零開始」係一個選擇，唔係限制。`--background` 只代表背景執行，同記唔記得無關。
+- **幾時 resume、幾時 fresh**：
+  - 同一個 section、方向冇變 → **可以 resume，硬上限 3 輪**。頭三輪佢已經熟晒啲檔案，快啲又平啲；第 4 輪強制重出完整 context packet，因為再落去佢對話入面嘅死路同錯假設會多過有用資訊。
+  - 跨 section、轉方向、或者叫佢 review → **一定 fresh + 全份 packet**。`/codex:review` 同 `/codex:adversarial-review` **永遠唔准 resume**：記住自己寫過咩嘅 reviewer 唔係 reviewer，係辯護律師。
+  - Resume 嘅 call 唔使重貼成份 packet，但一定要重貼「唔准做乜」同「今輪唯一任務」—— 呢兩樣最易喺長對話入面被沖淡。
+- **Fresh call 嘅 context packet**：目標、section／檔案路徑、相關原文或行號、限制、已接受決定、上一輪結果、未解問題，以及今輪唯一任務。唔好只寫「繼續上次工作」。
+- **持久狀態寫落 repo**（例如 `docs/HANDOFF-<section>.md`），唔好淨係活喺對話入面 —— resume 有上限，檔案冇。
 - **Plan → Implement**：複雜任務第一個 call 叫 Codex 調查及出 plan；Claude review、回答問題及作必要決定後，要立即開新 call，連同原 context packet、Codex plan 同 Claude 答案，明確叫 Codex 實作及測試。除非缺少只有主人先知道嘅資料，否則唔好停低等額外批准。
 - **Codex 問 Opus**：叫 Codex 用 `BLOCKED_QUESTION` 回傳問題、證據、建議答案同影響。Claude／Opus 自行處理可判斷嘅問題，再將答案放入新 Codex call；真正需要主人提供資料先問主人。
 - **每輪交接**：要求 Codex 回覆尾段提供 `HANDOFF`，列出完成狀態、改動檔案、測試結果、未解問題同下一個 call 嘅唯一任務。Claude 保存並傳入下一輪，直至同一個 section 完成及通過驗收。
@@ -390,4 +395,4 @@ What's been built so far:
 
 ## 🐾 Last updated
 
-2026-08-20（`workflow-tools` 升 1.1.0：由 `~/.codex/skills/` port `advise-project-approach` + `neuroarxiv` 入 Claude Code plugin 形式，Mac + VPS 都裝咗、舊 version cache dir 已 prune）。上一次：2026-08-03（裝官方 mattpocock/skills plugin 兩部機 + 新增 🥇 預設 coding flow 章節；uninstall 舊 smll-ai 版）、2026-07-13 (Swarm Mission review + Workbench)。If knowledge here drifts from reality, **edit this file** and propagate to user-level + GitHub canonical (see `Update CLAUDE.md` section above).
+2026-08-20（① Codex 記憶規則更正：resume 存在，同一 section 上限 3 輪、review 永遠 fresh（見上面 Codex 分工）；② 新 output style `~/.claude/output-styles/dobby.md`（Dobby 廣東話 Coding 小貓，**未啟用**，現行仍係「五歲小朋友（廣東話）」）；③ `workflow-tools` 升 1.1.0：由 `~/.codex/skills/` port `advise-project-approach` + `neuroarxiv` 入 Claude Code plugin 形式，Mac + VPS 都裝咗、舊 version cache dir 已 prune）。上一次：2026-08-03（裝官方 mattpocock/skills plugin 兩部機 + 新增 🥇 預設 coding flow 章節；uninstall 舊 smll-ai 版）、2026-07-13 (Swarm Mission review + Workbench)。If knowledge here drifts from reality, **edit this file** and propagate to user-level + GitHub canonical (see `Update CLAUDE.md` section above).
